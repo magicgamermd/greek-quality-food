@@ -68,11 +68,15 @@ function AdjustStockModal({
     reason: "",
   });
 
+  // Reset the form whenever a new product is targeted. `productId` is the
+  // only field we actually branch on, so guarding by it (and not the full
+  // `data` object identity) matches the intent cleanly with no missing deps.
+  const productId = data?.productId;
   useEffect(() => {
-    if (data) {
+    if (productId != null) {
       setForm({ delta: "", reason: "" });
     }
-  }, [data?.productId]);
+  }, [productId]);
 
   const deltaNum = parseFloat(form.delta);
   const hasDelta =

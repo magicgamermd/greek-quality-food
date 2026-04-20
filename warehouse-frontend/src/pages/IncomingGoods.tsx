@@ -1,5 +1,10 @@
 import React, { useState, useRef, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useQueries,
+  useQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   Camera,
   Upload,
@@ -67,6 +72,44 @@ function toOptionalNumber(value: unknown): number | null {
   if (value == null || value === "") return null;
   const num = Number.parseFloat(String(value));
   return Number.isFinite(num) ? num : null;
+}
+
+// Local helper: return `value` only after it has stayed unchanged for `delay`
+// ms. Used to avoid spamming the product search endpoint on every keystroke.
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const handle = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(handle);
+  }, [value, delay]);
+  return debounced;
+}
+
+async function fetchManualProductOptions(
+  query: string,
+): Promise<ManualRowProductOption[]> {
+  const res = await api.get(
+    `/products?search=${encodeURIComponent(query)}&limit=10&catalog=true`,
+  );
+  const raw = res.data;
+  const rows = Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.data)
+      ? raw.data
+      : [];
+  return rows
+    .filter((row: any) => Number.isFinite(Number(row?.id)))
+    .map(
+      (row: any): ManualRowProductOption => ({
+        id: Number(row.id),
+        name_bg: row.name_bg ?? null,
+        name_en: row.name_en ?? null,
+        sku: row.sku ?? null,
+        unit: row.unit ?? null,
+        purchase_price: toOptionalNumber(row.purchase_price),
+        selling_price: toOptionalNumber(row.selling_price),
+      }),
+    );
 }
 
 function isMatchedForAutoLink(item: ScannedInvoiceItem): boolean {
@@ -216,14 +259,11 @@ export function IncomingGoods() {
       original_purchase_price: null,
     },
   ]);
-  const [manualSearchResults, setManualSearchResults] = useState<
-    Record<number, ManualRowProductOption[]>
-  >({});
-  const [manualSearchLoading, setManualSearchLoading] = useState<
+  // Rows the user has explicitly dismissed (Escape pressed, or picked a
+  // product) — suppresses the result dropdown even if the debounced query
+  // would otherwise return rows. Cleared whenever the user types again.
+  const [manualSearchDismissed, setManualSearchDismissed] = useState<
     Record<number, boolean>
-  >({});
-  const [manualSearchError, setManualSearchError] = useState<
-    Record<number, string>
   >({});
   const [manualSearchHighlight, setManualSearchHighlight] = useState<
     Record<number, number>
@@ -233,9 +273,6 @@ export function IncomingGoods() {
   const manualScrollRef = useRef<HTMLDivElement>(null);
   const invoiceNumberRef = useRef<HTMLInputElement>(null);
   const invoiceDateRef = useRef<HTMLInputElement>(null);
-  const manualSearchTimers = useRef<
-    Record<number, ReturnType<typeof setTimeout>>
-  >({});
   const rowInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const pendingFocusRef = useRef<string | null>(null);
 
@@ -353,8 +390,8 @@ export function IncomingGoods() {
     invoice_number: string;
     invoice_date: string;
   }>({ supplier_id: "", invoice_number: "", invoice_date: "" });
-  const [editSaving, setEditSaving] = useState(false);
-  const [editError, setEditError] = useState("");
+  // `editSaving` / `editError` are derived from the saveEditChangesMutation
+  // (isPending / error). See saveEditChangesMutation below.
   const [cancelReason, setCancelReason] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [rowSearchInput, setRowSearchInput] = useState<Record<number, string>>(
@@ -409,9 +446,8 @@ export function IncomingGoods() {
         original_purchase_price: null,
       },
     ]);
-    setManualSearchResults({});
-    setManualSearchLoading({});
-    setManualSearchError({});
+    setManualSearchDismissed({});
+    setManualSearchHighlight({});
     setManualError("");
   };
 
@@ -675,7 +711,8 @@ export function IncomingGoods() {
   const handleRowClick = async (doc: IncomingGoodsType) => {
     setDocDetails([]); // clear before open
     setEditItems([]);
-    setEditError("");
+    saveEditChangesMutation.reset();
+    cancelIncomingDelivery.reset();
     setShowCancelConfirm(false);
     setCancelReason("");
     setLoadingDetails(true); // spinner first — avoid "no details" flash
@@ -737,16 +774,16 @@ export function IncomingGoods() {
     setSelectedDoc(null);
     setDocDetails([]);
     setEditItems([]);
-    setEditError("");
+    saveEditChangesMutation.reset();
+    cancelIncomingDelivery.reset();
     setShowCancelConfirm(false);
     setCancelReason("");
   };
 
-  const saveEditChanges = async (): Promise<boolean> => {
-    if (!selectedDoc) return false;
-    setEditSaving(true);
-    setEditError("");
-    try {
+  const saveEditChangesMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedDoc) throw new Error("No doc selected");
+
       // Delete marked items
       const toDelete = editItems.filter((i) => i.toDelete && i.id);
       for (const item of toDelete) {
@@ -808,17 +845,24 @@ export function IncomingGoods() {
           ),
         );
       }
-
+    },
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["incoming"] });
       qc.invalidateQueries({ queryKey: ["products"] });
+    },
+  });
+
+  const editSaving = saveEditChangesMutation.isPending;
+
+  // Thin wrapper so callers keep the old `Promise<boolean>` contract while
+  // the actual work lives in the mutation above.
+  const saveEditChanges = async (): Promise<boolean> => {
+    if (!selectedDoc) return false;
+    try {
+      await saveEditChangesMutation.mutateAsync();
       return true;
-    } catch (error: any) {
-      setEditError(
-        getApiErrorMessage(error, "Неуспешно записване на промените."),
-      );
+    } catch {
       return false;
-    } finally {
-      setEditSaving(false);
     }
   };
 
@@ -833,16 +877,25 @@ export function IncomingGoods() {
       qc.invalidateQueries({ queryKey: ["incoming"] });
       closeDetailsModal();
     },
-    onError: (error) => {
-      setEditError(
-        getApiErrorMessage(error, "Неуспешно отказване на доставката."),
-      );
-    },
   });
+
+  // Surface whichever of the two detail-modal mutations most recently errored.
+  const editError = saveEditChangesMutation.error
+    ? getApiErrorMessage(
+        saveEditChangesMutation.error,
+        "Неуспешно записване на промените.",
+      )
+    : cancelIncomingDelivery.error
+      ? getApiErrorMessage(
+          cancelIncomingDelivery.error,
+          "Неуспешно отказване на доставката.",
+        )
+      : "";
 
   const confirmFromDetailsModal = async () => {
     if (!selectedDoc) return;
-    setEditError("");
+    saveEditChangesMutation.reset();
+    cancelIncomingDelivery.reset();
     const hasPendingChanges = editItems.some((i) => i.dirty || i.toDelete);
     if (hasPendingChanges) {
       const ok = await saveEditChanges();
@@ -1022,13 +1075,13 @@ export function IncomingGoods() {
         supplier_id: Number(confirmData.supplier_id) || undefined,
         supplier_name: scanned?.supplier_name ?? undefined,
         supplier_eik: scanned?.supplier_eik ?? undefined,
-        supplier_vat: (scanned as any)?.supplier_vat ?? undefined,
-        supplier_address: (scanned as any)?.supplier_address ?? undefined,
-        supplier_phone: (scanned as any)?.supplier_phone ?? undefined,
-        supplier_email: (scanned as any)?.supplier_email ?? undefined,
-        supplier_contact: (scanned as any)?.supplier_contact ?? undefined,
+        supplier_vat: scanned?.supplier_vat ?? undefined,
+        supplier_address: scanned?.supplier_address ?? undefined,
+        supplier_phone: scanned?.supplier_phone ?? undefined,
+        supplier_email: scanned?.supplier_email ?? undefined,
+        supplier_contact: scanned?.supplier_contact ?? undefined,
         document_type: "invoice",
-        scanned_file_path: (scanned as any)?.scanned_file_path ?? undefined,
+        scanned_file_path: scanned?.scanned_file_path ?? undefined,
         items: (scanned?.items ?? []).map((item, i) => {
           const matched = isMatchedForAutoLink(item);
           return {
@@ -1074,102 +1127,66 @@ export function IncomingGoods() {
     },
   });
 
-  const fetchManualProducts = async (rowIndex: number) => {
-    const query = (manualItems[rowIndex]?.product_name || "").trim();
-    if (query.length < 2) {
-      setManualSearchResults((current) => ({ ...current, [rowIndex]: [] }));
-      return;
-    }
+  // Debounced snapshot of the editable query per manual row. Drives the
+  // useQueries below — typing settles before we fire a network request.
+  const manualQueryStrings = manualItems.map((item) =>
+    item.product_id ? "" : item.product_name.trim(),
+  );
+  const debouncedManualQueryKey = useDebouncedValue(
+    manualQueryStrings.join("§"),
+    250,
+  );
+  const debouncedManualQueries = React.useMemo(
+    () => debouncedManualQueryKey.split("§"),
+    [debouncedManualQueryKey],
+  );
 
-    setManualSearchError((current) => ({ ...current, [rowIndex]: "" }));
-    setManualSearchLoading((current) => ({ ...current, [rowIndex]: true }));
-    try {
-      const res = await api.get(
-        `/products?search=${encodeURIComponent(query)}&limit=10&catalog=true`,
-      );
-      const raw = res.data;
-      const rows = Array.isArray(raw)
-        ? raw
-        : Array.isArray(raw?.data)
-          ? raw.data
-          : [];
-      const products: ManualRowProductOption[] = rows
-        .filter((row: any) => Number.isFinite(Number(row?.id)))
-        .map((row: any) => ({
-          id: Number(row.id),
-          name_bg: row.name_bg ?? null,
-          name_en: row.name_en ?? null,
-          sku: row.sku ?? null,
-          unit: row.unit ?? null,
-          purchase_price: toOptionalNumber(row.purchase_price),
-          selling_price: toOptionalNumber(row.selling_price),
-        }));
+  const manualSearchQueries = useQueries({
+    queries: manualItems.map((_item, index) => {
+      const query = debouncedManualQueries[index] ?? "";
+      return {
+        queryKey: ["manual-product-search", query],
+        queryFn: () => fetchManualProductOptions(query),
+        enabled: query.length >= 2,
+        staleTime: 30_000,
+      };
+    }),
+  });
 
-      setManualSearchResults((current) => ({
-        ...current,
-        [rowIndex]: products,
-      }));
-      setManualSearchHighlight((current) => ({ ...current, [rowIndex]: 0 }));
-      if (products.length === 0) {
-        setManualSearchError((current) => ({
-          ...current,
-          [rowIndex]: "Няма намерени продукти.",
-        }));
-      }
-    } catch (error: any) {
-      const message =
-        error?.response?.data?.message ||
-        error?.response?.data?.error ||
-        "Грешка при търсене на продукти.";
-      setManualSearchResults((current) => ({ ...current, [rowIndex]: [] }));
-      setManualSearchError((current) => ({ ...current, [rowIndex]: message }));
-    } finally {
-      setManualSearchLoading((current) => ({ ...current, [rowIndex]: false }));
-    }
+  const getManualSearchResults = (
+    rowIndex: number,
+  ): ManualRowProductOption[] => {
+    if (manualSearchDismissed[rowIndex]) return [];
+    if (manualItems[rowIndex]?.product_id) return [];
+    return manualSearchQueries[rowIndex]?.data ?? [];
   };
 
-  // Auto-search with debounce per row
-  useEffect(() => {
-    manualItems.forEach((item, index) => {
-      const query = item.product_name.trim();
+  const getManualSearchLoading = (rowIndex: number): boolean => {
+    if (manualSearchDismissed[rowIndex]) return false;
+    if (manualItems[rowIndex]?.product_id) return false;
+    const q = manualSearchQueries[rowIndex];
+    return Boolean(q?.isFetching);
+  };
 
-      if (manualSearchTimers.current[index]) {
-        clearTimeout(manualSearchTimers.current[index]);
-        delete manualSearchTimers.current[index];
-      }
-
-      // Already picked a product — skip searching
-      if (item.product_id) return;
-
-      if (query.length < 2) {
-        setManualSearchResults((current) => {
-          if (!(index in current)) return current;
-          const next = { ...current };
-          delete next[index];
-          return next;
-        });
-        setManualSearchError((current) => {
-          if (!current[index]) return current;
-          const next = { ...current };
-          delete next[index];
-          return next;
-        });
-        return;
-      }
-
-      manualSearchTimers.current[index] = setTimeout(() => {
-        void fetchManualProducts(index);
-      }, 300);
-    });
-
-    return () => {
-      Object.values(manualSearchTimers.current).forEach(clearTimeout);
-      manualSearchTimers.current = {};
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    manualItems.map((i) => `${i.product_id ?? ""}|${i.product_name}`).join("§"),
-  ]);
+  const getManualSearchError = (rowIndex: number): string => {
+    if (manualSearchDismissed[rowIndex]) return "";
+    if (manualItems[rowIndex]?.product_id) return "";
+    const q = manualSearchQueries[rowIndex];
+    if (!q) return "";
+    if (q.isError) {
+      const err = q.error as any;
+      return (
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        "Грешка при търсене на продукти."
+      );
+    }
+    if (q.isSuccess && (q.data?.length ?? 0) === 0) {
+      const query = debouncedManualQueries[rowIndex] ?? "";
+      if (query.length >= 2) return "Няма намерени продукти.";
+    }
+    return "";
+  };
 
   const selectManualProduct = (
     rowIndex: number,
@@ -1203,8 +1220,7 @@ export function IncomingGoods() {
         };
       }),
     );
-    setManualSearchResults((current) => ({ ...current, [rowIndex]: [] }));
-    setManualSearchError((current) => ({ ...current, [rowIndex]: "" }));
+    setManualSearchDismissed((current) => ({ ...current, [rowIndex]: true }));
     // Focus the quantity field after picking a product
     setTimeout(() => focusRowField(rowIndex, "quantity"), 0);
   };
@@ -1234,7 +1250,7 @@ export function IncomingGoods() {
   ) => {
     // Product field has richer keyboard handling (↑ ↓ Enter)
     if (field === "product") {
-      const results = manualSearchResults[index] ?? [];
+      const results = getManualSearchResults(index);
       const highlighted = manualSearchHighlight[index] ?? 0;
 
       if (e.key === "ArrowDown" && results.length > 0) {
@@ -1255,7 +1271,7 @@ export function IncomingGoods() {
       }
       if (e.key === "Escape" && results.length > 0) {
         e.preventDefault();
-        setManualSearchResults((current) => ({ ...current, [index]: [] }));
+        setManualSearchDismissed((current) => ({ ...current, [index]: true }));
         return;
       }
       if (e.key === "Enter") {
@@ -2165,7 +2181,7 @@ export function IncomingGoods() {
                               rowInputRefs.current[`${index}:product`] = el;
                             }}
                             value={item.product_name}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               setManualItems((current) =>
                                 current.map((entry, entryIndex) =>
                                   entryIndex === index
@@ -2176,30 +2192,37 @@ export function IncomingGoods() {
                                       }
                                     : entry,
                                 ),
-                              )
-                            }
+                              );
+                              // Typing re-opens the dropdown after Escape.
+                              setManualSearchDismissed((current) => {
+                                if (!current[index]) return current;
+                                const next = { ...current };
+                                delete next[index];
+                                return next;
+                              });
+                            }}
                             onKeyDown={(e) =>
                               handleRowFieldEnter(e, index, "product")
                             }
                             placeholder="Търси продукт по име или SKU..."
                             className="h-12 text-base pr-10"
                           />
-                          {manualSearchLoading[index] ? (
+                          {getManualSearchLoading(index) ? (
                             <div className="absolute right-3 top-1/2 -translate-y-1/2">
                               <Spinner size="sm" />
                             </div>
                           ) : null}
                         </div>
-                        {manualSearchError[index] &&
-                        !manualSearchLoading[index] &&
+                        {getManualSearchError(index) &&
+                        !getManualSearchLoading(index) &&
                         !item.product_id ? (
                           <p className="text-xs text-red-600">
-                            {manualSearchError[index]}
+                            {getManualSearchError(index)}
                           </p>
                         ) : null}
-                        {(manualSearchResults[index] ?? []).length > 0 ? (
+                        {getManualSearchResults(index).length > 0 ? (
                           <div className="border rounded-md divide-y bg-white max-h-72 overflow-y-auto shadow-sm">
-                            {(manualSearchResults[index] ?? []).map(
+                            {getManualSearchResults(index).map(
                               (product, productIdx) => {
                                 const productLabel =
                                   product.name_bg ||
