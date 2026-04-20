@@ -80,6 +80,12 @@ function isLatin(text: string): boolean {
   return /[a-zA-Z]/.test(text);
 }
 
+// MERT-M sells durable goods (Hendi, Bartscher, KitchenAid, Liebherr), so
+// order items are NOT linked to batches. The legacy `batch_id`, `batch_number`,
+// and `expiry_date` fields are gone from the input schema; FEFO allocation and
+// the `resolveBatchIdForItem()` helper have been deleted. Stock is deducted
+// per-product via a direct `UPDATE inventory` on the partial-unique row
+// (product_id, warehouse_id) WHERE batch_id IS NULL — see migration 045.
 const orderItemSchema = z.object({
   product_id: z.number().int(),
   quantity: z.number().positive(),
@@ -87,55 +93,7 @@ const orderItemSchema = z.object({
   // Per-line отстъпка % (0–100). Прилага се при запис на total_price.
   // Default 0 → backward-compatible за стари callers които не подават.
   discount_percent: z.number().min(0).max(100).optional().default(0),
-  batch_id: z.number().int().positive().nullish(),
-  // Optional: manually specify batch_number / expiry_date — server will
-  // find an existing matching batch for this product or create a new one.
-  batch_number: z.string().nullish(),
-  expiry_date: z.string().nullish(),
 });
-
-/**
- * Resolve batch_id for an order item. If item.batch_id is set, uses it.
- * Otherwise if batch_number or expiry_date is provided, finds or creates
- * a matching batch for the given product and returns its id.
- */
-async function resolveBatchIdForItem(
-  client: { query: (sql: string, params?: any[]) => Promise<any> },
-  item: {
-    product_id: number;
-    batch_id?: number | null;
-    batch_number?: string | null;
-    expiry_date?: string | null;
-  },
-): Promise<number | null> {
-  if (item.batch_id) return item.batch_id;
-  const batchNumber = item.batch_number?.trim() || null;
-  const expiryDate = item.expiry_date?.trim() || null;
-  if (!batchNumber && !expiryDate) return null;
-
-  // Try to find existing batch for this product matching the provided values
-  if (batchNumber) {
-    const { rows } = await client.query(
-      `SELECT id FROM batches
-       WHERE product_id = $1 AND batch_number = $2
-       ${expiryDate ? "AND expiry_date = $3::date" : ""}
-       LIMIT 1`,
-      expiryDate
-        ? [item.product_id, batchNumber, expiryDate]
-        : [item.product_id, batchNumber],
-    );
-    if (rows[0]?.id) return rows[0].id;
-  }
-
-  // Create a new batch
-  const { rows } = await client.query(
-    `INSERT INTO batches (product_id, batch_number, expiry_date, received_date)
-     VALUES ($1, $2, $3::date, CURRENT_DATE)
-     RETURNING id`,
-    [item.product_id, batchNumber, expiryDate],
-  );
-  return rows[0]?.id ?? null;
-}
 
 const createOrderSchema = z.object({
   partner_id: z.number().int(),
@@ -377,37 +335,7 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const { rows } = await query(sql, params);
 
-      // Enrich products with available batch info (partida + expiry)
-      if (rows.length > 0) {
-        const productIds = rows.map((r: any) => r.id);
-        const { rows: batchRows } = await query(
-          `SELECT b.id, b.product_id, b.batch_number, b.expiry_date,
-                  COALESCE(SUM(inv.quantity), b.quantity)::numeric AS batch_stock
-           FROM batches b
-           LEFT JOIN inventory inv ON inv.batch_id = b.id AND inv.quantity > 0
-           WHERE b.product_id = ANY($1)
-             AND (COALESCE(inv.quantity, b.quantity) > 0)
-           GROUP BY b.id
-           ORDER BY b.expiry_date ASC NULLS LAST`,
-          [productIds],
-        );
-
-        // Group batches by product_id
-        const batchMap: Record<number, any[]> = {};
-        for (const b of batchRows) {
-          if (!batchMap[b.product_id]) batchMap[b.product_id] = [];
-          batchMap[b.product_id].push({
-            id: b.id,
-            batch_number: b.batch_number,
-            expiry_date: b.expiry_date,
-            stock: parseFloat(b.batch_stock),
-          });
-        }
-
-        for (const row of rows) {
-          (row as any).batches = batchMap[row.id] || [];
-        }
-      }
+      // MERT-M: no per-batch enrichment. Stock is tracked per product only.
 
       return { data: rows };
     },
@@ -616,23 +544,14 @@ export default async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Order not found" });
     }
 
+    // MERT-M: no batches — order items carry only product metadata.
     const { rows: items } = await query(
       `SELECT oi.*,
               COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
               COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand,
-              COALESCE(b.batch_number, fb.batch_number) AS batch_number,
-              COALESCE(b.expiry_date, fb.expiry_date) AS expiry_date
+              pr.sku, pr.unit, pr.brand
        FROM order_items oi
        LEFT JOIN products pr ON pr.id = oi.product_id
-       LEFT JOIN batches b ON b.id = oi.batch_id
-       LEFT JOIN LATERAL (
-         SELECT batch_number, expiry_date
-         FROM batches
-         WHERE product_id = oi.product_id
-         ORDER BY created_at DESC
-         LIMIT 1
-       ) fb ON oi.batch_id IS NULL
        WHERE oi.order_id = $1
        ORDER BY oi.id`,
       [id],
@@ -760,13 +679,11 @@ export default async function orderRoutes(app: FastifyInstance) {
         );
         totalAmount += totalPrice;
 
-        const batchId = await resolveBatchIdForItem(client, item);
-
         const {
           rows: [orderItem],
         } = await client.query(
-          `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, batch_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+          `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
           [
             order.id,
             item.product_id,
@@ -774,7 +691,6 @@ export default async function orderRoutes(app: FastifyInstance) {
             unitPrice,
             discountPct,
             totalPrice,
-            batchId,
           ],
         );
         items.push(orderItem);
@@ -1122,28 +1038,23 @@ export default async function orderRoutes(app: FastifyInstance) {
           );
           totalAmount += totalPrice;
 
-          let batchId: number | null = null;
+          // MERT-M: COGS is captured from products.purchase_price at the
+          // moment the order is (re)committed to stock. Batch-sourced COGS
+          // (cost_source_batch_id) is obsolete — left NULL in the DB.
           let costUnitPrice: number | null = null;
           if (mustReconcileStock) {
-            // Prefer manually-specified batch if provided
-            const manualBatchId = await resolveBatchIdForItem(client, item);
-            const alloc = await allocateInventoryForOrderItem(
+            costUnitPrice = await deductProductStock(
               client,
               item.product_id,
               item.quantity,
-              manualBatchId,
             );
-            batchId = alloc.batchId;
-            costUnitPrice = alloc.costUnitPrice;
-          } else {
-            batchId = await resolveBatchIdForItem(client, item);
           }
 
           const {
             rows: [orderItem],
           } = await client.query(
-            `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, batch_id, cost_unit_price, cost_source_batch_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+            `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
             [
               id,
               item.product_id,
@@ -1151,9 +1062,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               unitPrice,
               discountPct,
               totalPrice,
-              batchId,
               costUnitPrice,
-              batchId,
             ],
           );
           items.push(orderItem);
@@ -1203,105 +1112,9 @@ export default async function orderRoutes(app: FastifyInstance) {
     return result;
   });
 
-  // PATCH /orders/:id/items/:itemId — update batch/expiry of a single line item (pending only)
-  app.patch(
-    "/:id/items/:itemId",
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (request.user.role === "accountant") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
-      const { id, itemId } = request.params as { id: string; itemId: string };
-      const schema = z.object({
-        batch_number: z.string().nullish(),
-        expiry_date: z.string().nullish(),
-      });
-      const body = schema.parse(request.body);
-
-      return await transaction(async (client) => {
-        const {
-          rows: [order],
-        } = await client.query(
-          "SELECT id, status, invoice_id FROM orders WHERE id = $1 FOR UPDATE",
-          [id],
-        );
-        if (!order) return reply.status(404).send({ error: "Not found" });
-        // Allow batch/expiry edits until the invoice is issued.
-        // Once there's an invoice (status = 'invoiced' or invoice_id set),
-        // the document is finalized and edits would desync the records.
-        if (
-          order.status === "cancelled" ||
-          order.status === "invoiced" ||
-          order.invoice_id
-        ) {
-          return reply.status(400).send({
-            error:
-              "Партида/срок могат да се редактират преди издаване на фактура.",
-          });
-        }
-
-        const {
-          rows: [item],
-        } = await client.query(
-          "SELECT id, product_id, batch_id FROM order_items WHERE order_id = $1 AND id = $2",
-          [id, itemId],
-        );
-        if (!item) return reply.status(404).send({ error: "Item not found" });
-
-        const batchNumber = body.batch_number?.trim() || null;
-        const expiryDate = body.expiry_date?.trim() || null;
-
-        if (!batchNumber && !expiryDate) {
-          // Clear the binding
-          await client.query(
-            "UPDATE order_items SET batch_id = NULL WHERE id = $1",
-            [item.id],
-          );
-          return { ok: true, batch_id: null };
-        }
-
-        // Try to find an existing batch for this product matching the given values
-        let existingBatchId: number | null = null;
-        if (batchNumber) {
-          const {
-            rows: [found],
-          } = await client.query(
-            `SELECT id FROM batches
-             WHERE product_id = $1 AND batch_number = $2
-             ${expiryDate ? "AND expiry_date = $3::date" : ""}
-             LIMIT 1`,
-            expiryDate
-              ? [item.product_id, batchNumber, expiryDate]
-              : [item.product_id, batchNumber],
-          );
-          existingBatchId = found?.id ?? null;
-        }
-
-        let batchId: number;
-        if (existingBatchId) {
-          batchId = existingBatchId;
-        } else {
-          const {
-            rows: [created],
-          } = await client.query(
-            `INSERT INTO batches (product_id, batch_number, expiry_date, received_date)
-             VALUES ($1, $2, $3::date, CURRENT_DATE)
-             RETURNING id`,
-            [item.product_id, batchNumber, expiryDate],
-          );
-          batchId = created.id;
-        }
-
-        await client.query(
-          "UPDATE order_items SET batch_id = $1 WHERE id = $2",
-          [batchId, item.id],
-        );
-
-        return { ok: true, batch_id: batchId };
-      });
-    },
-  );
+  // MERT-M: removed PATCH /orders/:id/items/:itemId — it only edited
+  // batch_number / expiry_date on an order line, which no longer exists
+  // for durable goods.
 
   // PUT /orders/:id/status — change order status.
   // If transitioning to 'cancelled' from a stock-committed state (fulfilled),
@@ -1352,7 +1165,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /orders/:id/fulfill — deduct from stock using FEFO
+  // POST /orders/:id/fulfill — deduct per-product stock and snapshot COGS
   app.post(
     "/:id/fulfill",
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -1392,23 +1205,21 @@ export default async function orderRoutes(app: FastifyInstance) {
           [id],
         );
 
-        // Respect manually selected batch when present, otherwise FEFO.
-        // Capture COGS (cost_unit_price + source batch) for profit analytics.
+        // MERT-M: simple per-product deduction. COGS snapshot comes from
+        // products.purchase_price; batch-sourced COGS (cost_source_batch_id)
+        // stays NULL since there are no batches for durable goods.
         for (const item of items) {
-          const alloc = await allocateInventoryForOrderItem(
+          const costUnitPrice = await deductProductStock(
             client,
             item.product_id,
             parseFloat(item.quantity),
-            item.batch_id ?? null,
           );
 
           await client.query(
             `UPDATE order_items
-             SET batch_id = COALESCE(batch_id, $1),
-                 cost_unit_price = $2,
-                 cost_source_batch_id = $3
-             WHERE id = $4`,
-            [alloc.batchId, alloc.costUnitPrice, alloc.batchId, item.id],
+             SET cost_unit_price = $1
+             WHERE id = $2`,
+            [costUnitPrice, item.id],
           );
         }
 
@@ -1498,53 +1309,27 @@ export default async function orderRoutes(app: FastifyInstance) {
           id,
         ]);
 
-        // Get order items with batch info
+        // Return each item's quantity to inventory. MERT-M: no batches,
+        // so we upsert on the partial unique index
+        // inventory_product_warehouse_nobatch_uidx (product_id, warehouse_id)
+        // WHERE batch_id IS NULL (added in migration 045).
         const { rows: items } = await client.query(
-          "SELECT * FROM order_items WHERE order_id = $1",
+          "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
           [id],
         );
 
-        // Return each item's quantity to inventory
         for (const item of items) {
           const qty = parseFloat(item.quantity);
           if (qty <= 0) continue;
 
-          if (item.batch_id) {
-            // Return to the specific batch inventory record
-            await client.query(
-              `UPDATE inventory SET quantity = quantity + $1, updated_at = NOW()
-               WHERE product_id = $2 AND batch_id = $3 AND warehouse_id = 1`,
-              [qty, item.product_id, item.batch_id],
-            );
-
-            // Also update batch quantity
-            await client.query(
-              "UPDATE batches SET quantity = quantity + $1 WHERE id = $2",
-              [qty, item.batch_id],
-            );
-          } else {
-            // No batch — return to default inventory record
-            const { rows: invRows } = await client.query(
-              `SELECT id FROM inventory
-               WHERE product_id = $1 AND warehouse_id = 1
-               ORDER BY batch_id ASC NULLS FIRST LIMIT 1`,
-              [item.product_id],
-            );
-
-            if (invRows.length > 0) {
-              await client.query(
-                "UPDATE inventory SET quantity = quantity + $1, updated_at = NOW() WHERE id = $2",
-                [qty, invRows[0].id],
-              );
-            } else {
-              // Create new inventory record if none exists
-              await client.query(
-                `INSERT INTO inventory (product_id, warehouse_id, quantity, updated_at)
-                 VALUES ($1, 1, $2, NOW())`,
-                [item.product_id, qty],
-              );
-            }
-          }
+          await client.query(
+            `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+             VALUES ($1, 1, $2, NULL)
+             ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
+             DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                           updated_at = NOW()`,
+            [item.product_id, qty],
+          );
         }
 
         // Cancel the order
@@ -1619,29 +1404,16 @@ export default async function orderRoutes(app: FastifyInstance) {
     items: Array<{
       product_id: number;
       quantity: number;
-      batch_id?: number | null;
     }>,
     productMap: Map<number, any>,
   ) {
     const requestedByProduct = new Map<number, number>();
-    const requestedByBatch = new Map<
-      number,
-      { productId: number; quantity: number }
-    >();
 
     for (const item of items) {
       requestedByProduct.set(
         item.product_id,
         (requestedByProduct.get(item.product_id) || 0) + item.quantity,
       );
-
-      if (item.batch_id) {
-        const existingBatch = requestedByBatch.get(item.batch_id);
-        requestedByBatch.set(item.batch_id, {
-          productId: item.product_id,
-          quantity: (existingBatch?.quantity || 0) + item.quantity,
-        });
-      }
     }
 
     const stockErrors: string[] = [];
@@ -1668,160 +1440,54 @@ export default async function orderRoutes(app: FastifyInstance) {
         { statusCode: 400 },
       );
     }
-
-    for (const [batchId, request] of requestedByBatch.entries()) {
-      const {
-        rows: [batchRow],
-      } = await db.query(
-        `SELECT b.id,
-                b.product_id,
-                b.batch_number,
-                b.expiry_date,
-                COALESCE(SUM(inv.quantity), b.quantity, 0)::numeric AS total
-         FROM batches b
-         LEFT JOIN inventory inv ON inv.batch_id = b.id AND inv.quantity > 0
-         WHERE b.id = $1
-         GROUP BY b.id`,
-        [batchId],
-      );
-
-      if (!batchRow) {
-        throw Object.assign(new Error(`Selected batch #${batchId} not found`), {
-          statusCode: 400,
-        });
-      }
-
-      if (Number(batchRow.product_id) !== request.productId) {
-        throw Object.assign(
-          new Error(
-            `Selected batch ${batchRow.batch_number || `#${batchId}`} does not belong to product #${request.productId}`,
-          ),
-          { statusCode: 400 },
-        );
-      }
-
-      const available = parseFloat(batchRow.total);
-      if (available + EPSILON < request.quantity) {
-        const productName =
-          productMap.get(request.productId)?.name_bg ||
-          `Продукт #${request.productId}`;
-        const batchLabel = batchRow.batch_number || `#${batchId}`;
-        stockErrors.push(
-          `${productName} · партида ${batchLabel}: налични ${available}, поръчани ${request.quantity}`,
-        );
-      }
-    }
-
-    if (stockErrors.length > 0) {
-      throw Object.assign(
-        new Error(`Недостатъчна наличност:\n${stockErrors.join("\n")}`),
-        { statusCode: 400 },
-      );
-    }
   }
 
   /**
-   * FEFO allocation result. When an item is split across multiple batches
-   * (e.g. need 10 units, batch A has 3 + batch B has 7), costUnitPrice is
-   * the quantity-weighted average and batchId is the FIRST batch touched.
+   * MERT-M per-product stock deduction. Replaces the old FEFO allocator
+   * (which chose batches by expiry date). For durable goods there is a
+   * single inventory row per (product_id, warehouse_id) with batch_id
+   * NULL, enforced by the partial unique index
+   * inventory_product_warehouse_nobatch_uidx (migration 045).
+   *
+   * Uses a single atomic UPDATE with a quantity guard — if the row does
+   * not exist or lacks stock, no row is returned and we raise
+   * `insufficient_stock`. Returns the COGS unit price snapshotted from
+   * products.purchase_price for later profit reporting.
    */
-  type AllocationResult = {
-    batchId: number | null;
-    costUnitPrice: number | null;
-  };
-
-  async function allocateInventoryForOrderItem(
+  async function deductProductStock(
     db: DbExecutor,
     productId: number,
     quantity: number,
-    preferredBatchId: number | null = null,
-  ): Promise<AllocationResult> {
-    let remaining = quantity;
-    let assignedBatchId: number | null = preferredBatchId;
-    let costSumWeighted = 0; // Σ (deduct × purchase_price) over consumed batches
-    let costQuantityTotal = 0;
-
-    const { rows: stocks } = await db.query(
-      `SELECT inv.id, inv.batch_id, inv.quantity,
-              b.expiry_date, b.batch_number, b.purchase_price
-       FROM inventory inv
-       LEFT JOIN batches b ON b.id = inv.batch_id
-       WHERE inv.product_id = $1
-         AND inv.quantity > 0
-         AND ($2::int IS NULL OR inv.batch_id = $2)
-       ORDER BY b.expiry_date ASC NULLS LAST, inv.id ASC
-       FOR UPDATE OF inv SKIP LOCKED`,
-      [productId, preferredBatchId],
+  ): Promise<number | null> {
+    const { rowCount } = await db.query(
+      `UPDATE inventory
+         SET quantity = quantity - $1,
+             updated_at = NOW()
+       WHERE product_id = $2
+         AND warehouse_id = 1
+         AND batch_id IS NULL
+         AND quantity >= $1
+       RETURNING quantity`,
+      [quantity, productId],
     );
 
-    for (const stock of stocks) {
-      if (remaining <= EPSILON) break;
-
-      const available = parseFloat(stock.quantity);
-      const deduct = Math.min(remaining, available);
-      if (deduct <= 0) continue;
-
-      await db.query(
-        "UPDATE inventory SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2",
-        [deduct, stock.id],
-      );
-
-      if (stock.batch_id) {
-        if (!assignedBatchId) assignedBatchId = stock.batch_id;
-        await db.query(
-          "UPDATE batches SET quantity = quantity - $1 WHERE id = $2",
-          [deduct, stock.batch_id],
-        );
-      }
-
-      // Accumulate quantity-weighted cost for COGS calculation.
-      const batchCost = parseFloat(stock.purchase_price ?? "0");
-      if (Number.isFinite(batchCost) && batchCost > 0) {
-        costSumWeighted += deduct * batchCost;
-        costQuantityTotal += deduct;
-      }
-
-      remaining -= deduct;
-    }
-
-    if (remaining > EPSILON) {
-      const batchMessage = preferredBatchId
-        ? ` in selected batch #${preferredBatchId}`
-        : "";
+    if (!rowCount) {
       throw Object.assign(
         new Error(
-          `Insufficient stock for product #${productId}${batchMessage}: need ${remaining.toFixed(3)} more`,
+          `insufficient_stock: product #${productId} requires ${quantity} unit(s) on hand`,
         ),
         { statusCode: 400 },
       );
     }
 
-    if (!assignedBatchId) {
-      const { rows: fallbackBatch } = await db.query(
-        `SELECT id FROM batches
-         WHERE product_id = $1
-         ORDER BY created_at DESC LIMIT 1`,
-        [productId],
-      );
-      if (fallbackBatch.length > 0) {
-        assignedBatchId = fallbackBatch[0].id;
-      }
-    }
-
-    // Fallback: no batch-level purchase_price captured → use products.purchase_price
-    let costUnitPrice: number | null = null;
-    if (costQuantityTotal > EPSILON) {
-      costUnitPrice = costSumWeighted / costQuantityTotal;
-    } else {
-      const { rows } = await db.query(
-        "SELECT purchase_price FROM products WHERE id = $1",
-        [productId],
-      );
-      const fallbackCost = parseFloat(rows[0]?.purchase_price ?? "0");
-      costUnitPrice = Number.isFinite(fallbackCost) ? fallbackCost : null;
-    }
-
-    return { batchId: assignedBatchId, costUnitPrice };
+    const { rows: productRows } = await db.query(
+      "SELECT purchase_price FROM products WHERE id = $1",
+      [productId],
+    );
+    const fallbackCost = parseFloat(productRows[0]?.purchase_price ?? "0");
+    return Number.isFinite(fallbackCost) && fallbackCost > 0
+      ? fallbackCost
+      : null;
   }
 
   async function regenerateActiveInvoiceForOrder(
@@ -2044,7 +1710,12 @@ export default async function orderRoutes(app: FastifyInstance) {
     };
   }
 
-  // ── Helper: load order with items + batch info ──
+  // ── Helper: load order with items (MERT-M: no batch info) ──
+  //
+  // The name is preserved for backward compatibility with the PDF helpers
+  // that still expect `batch_number` and `expiry_date` fields in the item
+  // shape. These fields are now emitted as NULL so the existing PDF
+  // templates render "-" without further changes.
   async function loadOrderWithBatches(
     orderId: number,
     db: DbExecutor = { query },
@@ -2063,26 +1734,15 @@ export default async function orderRoutes(app: FastifyInstance) {
     );
     if (!order) return null;
 
-    // Fetch items with batch info.
-    // If order_item has batch_id → use it directly.
-    // If not → fallback to the latest batch for that product (by expiry_date).
     const { rows: items } = await db.query(
       `SELECT oi.*,
               COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
               COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
               pr.sku, pr.unit, pr.brand,
-              COALESCE(b.batch_number, fb.batch_number) AS batch_number,
-              COALESCE(b.expiry_date, fb.expiry_date) AS expiry_date
+              NULL::text AS batch_number,
+              NULL::date AS expiry_date
        FROM order_items oi
        LEFT JOIN products pr ON pr.id = oi.product_id
-       LEFT JOIN batches b ON b.id = oi.batch_id
-       LEFT JOIN LATERAL (
-         SELECT batch_number, expiry_date
-         FROM batches
-         WHERE product_id = oi.product_id
-         ORDER BY created_at DESC
-         LIMIT 1
-       ) fb ON oi.batch_id IS NULL
        WHERE oi.order_id = $1
        ORDER BY oi.id`,
       [orderId],

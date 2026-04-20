@@ -119,7 +119,9 @@ describe("incoming unresolved row auto-create", () => {
       }),
     };
 
-    mockTransaction.mockImplementation(async (callback: any) => callback(txClient as any));
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback(txClient as any),
+    );
 
     const app = await buildApp();
     try {
@@ -142,7 +144,9 @@ describe("incoming unresolved row auto-create", () => {
         ],
       });
 
-      const productInsert = txQueries.find(({ sql }) => sql.includes("INSERT INTO products"));
+      const productInsert = txQueries.find(({ sql }) =>
+        sql.includes("INSERT INTO products"),
+      );
       expect(productInsert).toBeDefined();
       expect(productInsert?.params).toEqual([
         "НОВ ДЕЛИКАТЕС 250Г",
@@ -158,111 +162,26 @@ describe("incoming unresolved row auto-create", () => {
       const incomingItemInsert = txQueries.find(({ sql }) =>
         sql.includes("INSERT INTO incoming_items"),
       );
-      expect(incomingItemInsert?.params).toEqual([601, 912, null, 3, 7.8, 23.4, 12.4]);
+      // MERT-M: no batch_id column on the insert any more.
+      expect(incomingItemInsert?.params).toEqual([
+        601, 912, 3, 7.8, 23.4, 12.4,
+      ]);
 
-      const aliasInsert = txQueries.find(({ sql }) => sql.includes("INSERT INTO product_aliases"));
-      expect(aliasInsert?.params).toEqual(["НОВ ДЕЛИКАТЕС 250Г", "нов деликатес 250г", 912, null]);
-    } finally {
-      await app.close();
-    }
-  });
-
-  it("creates pending batches with zero quantity so confirm is the only stock-affecting step", async () => {
-    mockQuery.mockResolvedValue(resultRows([]));
-
-    const txQueries: Array<{ sql: string; params?: any[] }> = [];
-    const txClient = {
-      query: vi.fn(async (sql: string, params?: any[]) => {
-        txQueries.push({ sql: String(sql), params });
-
-        if (sql.includes("INSERT INTO incoming_goods")) {
-          return resultRows([
-            {
-              id: 602,
-              supplier_id: null,
-              invoice_number: null,
-              invoice_date: "2026-04-14",
-              document_type: "invoice",
-              scanned_file_path: null,
-              status: "pending",
-            },
-          ]);
-        }
-        if (sql.includes("SELECT sku FROM products")) {
-          return resultRows([{ sku: "10041" }]);
-        }
-        if (sql.includes("INSERT INTO products")) {
-          return resultRows([{ id: 913 }]);
-        }
-        if (sql.includes("SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2")) {
-          return resultRows([]);
-        }
-        if (sql.includes("INSERT INTO batches")) {
-          return resultRows([{ id: 801 }]);
-        }
-        if (sql.includes("INSERT INTO incoming_items")) {
-          return resultRows([
-            {
-              id: 7002,
-              incoming_goods_id: 602,
-              product_id: 913,
-              batch_id: 801,
-              quantity: 3,
-              unit_price: 7.8,
-              total_price: 23.4,
-            },
-          ]);
-        }
-        if (sql.includes("SELECT id FROM product_aliases")) {
-          return resultRows([]);
-        }
-        if (sql.includes("INSERT INTO product_aliases")) {
-          return resultRows([]);
-        }
-        if (sql.includes("UPDATE incoming_goods SET total_amount")) {
-          return resultRows([]);
-        }
-        return resultRows([]);
-      }),
-    };
-
-    mockTransaction.mockImplementation(async (callback: any) => callback(txClient as any));
-
-    const app = await buildApp();
-    try {
-      const payload = createPayload() as typeof createPayload extends () => infer T
-        ? T & {
-            items: Array<
-              T extends { items: Array<infer Item> }
-                ? Item & { batch_number?: string; expiry_date?: string }
-                : never
-            >;
-          }
-        : never;
-      payload.items[0].batch_number = "LOT-NEW-01";
-      payload.items[0].expiry_date = "2026-12-31";
-
-      const res = await app.inject({
-        method: "POST",
-        url: "/incoming",
-        payload,
-      });
-
-      expect(res.statusCode).toBe(201);
-
-      const batchInsert = txQueries.find(({ sql }) => sql.includes("INSERT INTO batches"));
-      expect(batchInsert).toBeDefined();
-      expect(batchInsert?.params).toEqual([
-        913,
-        "LOT-NEW-01",
-        "2026-12-31",
-        0,
-        7.8,
-        602,
-        "2026-04-14",
+      const aliasInsert = txQueries.find(({ sql }) =>
+        sql.includes("INSERT INTO product_aliases"),
+      );
+      expect(aliasInsert?.params).toEqual([
+        "НОВ ДЕЛИКАТЕС 250Г",
+        "нов деликатес 250г",
+        912,
+        null,
       ]);
     } finally {
       await app.close();
     }
   });
+
+  // MERT-M: the "creates pending batches with zero quantity" test was
+  // removed — the incoming route no longer creates batches; any
+  // batch_number / expiry_date keys are stripped by the Zod schema.
 });

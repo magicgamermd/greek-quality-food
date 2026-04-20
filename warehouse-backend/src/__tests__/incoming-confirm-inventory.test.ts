@@ -38,20 +38,25 @@ describe("incoming confirm inventory propagation", () => {
     mockTransaction.mockReset();
   });
 
-  it("propagates confirmed incoming quantities into inventory while preserving batch linkage", async () => {
+  it("propagates confirmed incoming quantities into inventory (batch-free)", async () => {
+    // MERT-M: no batch logic. Inventory upsert uses the partial unique
+    // index `inventory_product_warehouse_nobatch_uidx` keyed on
+    // (product_id, warehouse_id) WHERE batch_id IS NULL. No
+    // `UPDATE batches` step any more, and incoming_items.batch_id is
+    // always NULL.
     const clientQuery = vi
       .fn()
-      // Call 0: atomic UPDATE incoming_goods SET status='confirmed' RETURNING *
+      // 0: atomic UPDATE incoming_goods SET status='confirmed' RETURNING *
       .mockResolvedValueOnce(
         resultRows([{ id: 88, status: "pending", invoice_number: "INV-88" }]),
       )
-      // Call 1: SELECT * FROM incoming_items
+      // 1: SELECT * FROM incoming_items
       .mockResolvedValueOnce(
         resultRows([
           {
             id: 1,
             product_id: 501,
-            batch_id: 701,
+            batch_id: null,
             quantity: 5,
             unit_price: 8.5,
             selling_price: 11.4,
@@ -65,9 +70,8 @@ describe("incoming confirm inventory propagation", () => {
           },
         ]),
       )
-      // Calls 2..7: per-item upserts + UPDATE batches + UPDATE products,
-      // then final INSERT notifications.
-      .mockResolvedValueOnce(resultRows([]))
+      // 2..6: per-item INSERT inventory + UPDATE products, then the
+      // final INSERT notifications.
       .mockResolvedValueOnce(resultRows([]))
       .mockResolvedValueOnce(resultRows([]))
       .mockResolvedValueOnce(resultRows([]))
@@ -91,20 +95,14 @@ describe("incoming confirm inventory propagation", () => {
         items_count: 2,
       });
 
-      // NEW flow (post-refactor): a single atomic UPDATE ... RETURNING *
-      // replaces the old SELECT-status + final UPDATE pair. There is no
-      // separate body-schema default for update_selling_price here (request
-      // sends no body), so selling_price UPDATE is skipped.
-      //
       //   0: UPDATE incoming_goods SET status='confirmed' ... RETURNING *
       //   1: SELECT * FROM incoming_items WHERE incoming_goods_id = $1
-      //   2: INSERT INTO inventory (product 501, batch 701, qty 5) — ON CONFLICT upsert
-      //   3: UPDATE batches SET quantity = quantity + 5 WHERE id = 701
-      //   4: UPDATE products SET purchase_price = 8.5 WHERE id = 501
-      //   5: INSERT INTO inventory (product 902, batch null, qty 2)
-      //   6: UPDATE products SET purchase_price = 12.2 WHERE id = 902
-      //   7: INSERT INTO notifications
-      expect(clientQuery).toHaveBeenCalledTimes(8);
+      //   2: INSERT INTO inventory (product 501, qty 5) — partial-index upsert
+      //   3: UPDATE products SET purchase_price = 8.5 WHERE id = 501
+      //   4: INSERT INTO inventory (product 902, qty 2)
+      //   5: UPDATE products SET purchase_price = 12.2 WHERE id = 902
+      //   6: INSERT INTO notifications
+      expect(clientQuery).toHaveBeenCalledTimes(7);
 
       expect(String(clientQuery.mock.calls[0][0])).toContain(
         "UPDATE incoming_goods",
@@ -118,44 +116,44 @@ describe("incoming confirm inventory propagation", () => {
         "FROM incoming_items",
       );
 
-      // Item 1 → product 501, batch 701
-      expect(String(clientQuery.mock.calls[2][0])).toContain(
-        "INSERT INTO inventory",
-      );
-      expect(String(clientQuery.mock.calls[2][0])).toContain("ON CONFLICT");
-      // Args: [product_id, batch_id, warehouse_id=1, quantity]
-      expect(clientQuery.mock.calls[2][1]).toEqual([501, 701, 1, 5]);
+      // Item 1 → product 501, partial-index conflict target
+      const invSql1 = String(clientQuery.mock.calls[2][0]);
+      expect(invSql1).toContain("INSERT INTO inventory");
+      expect(invSql1).toContain("ON CONFLICT (product_id, warehouse_id)");
+      expect(invSql1).toContain("WHERE batch_id IS NULL");
+      // Args: [product_id, warehouse_id=1, quantity] — no batch_id param.
+      expect(clientQuery.mock.calls[2][1]).toEqual([501, 1, 5]);
 
-      // Batch quantity is bumped via a dedicated UPDATE (not implicitly by
-      // the inventory upsert). This guards against accidental double-decrement
-      // regressions if the ON CONFLICT branch is ever changed.
+      // No UPDATE batches between inventory and products — the next call
+      // is the product-price update.
       expect(String(clientQuery.mock.calls[3][0])).toContain(
-        "UPDATE batches SET quantity = quantity + $1",
-      );
-      expect(clientQuery.mock.calls[3][1]).toEqual([5, 701]);
-
-      expect(String(clientQuery.mock.calls[4][0])).toContain(
         "UPDATE products SET purchase_price = $1",
       );
-      expect(clientQuery.mock.calls[4][1]).toEqual([8.5, 501]);
+      expect(clientQuery.mock.calls[3][1]).toEqual([8.5, 501]);
 
-      // Item 2 → product 902, batch_id null → NO UPDATE batches call
-      expect(String(clientQuery.mock.calls[5][0])).toContain(
+      // Item 2 → product 902 — same pattern, no batch step.
+      expect(String(clientQuery.mock.calls[4][0])).toContain(
         "INSERT INTO inventory",
       );
-      expect(clientQuery.mock.calls[5][1]).toEqual([902, null, 1, 2]);
+      expect(clientQuery.mock.calls[4][1]).toEqual([902, 1, 2]);
+
+      expect(String(clientQuery.mock.calls[5][0])).toContain(
+        "UPDATE products SET purchase_price = $1",
+      );
+      expect(clientQuery.mock.calls[5][1]).toEqual([12.2, 902]);
 
       expect(String(clientQuery.mock.calls[6][0])).toContain(
-        "UPDATE products SET purchase_price = $1",
-      );
-      expect(clientQuery.mock.calls[6][1]).toEqual([12.2, 902]);
-
-      expect(String(clientQuery.mock.calls[7][0])).toContain(
         "INSERT INTO notifications",
       );
-      expect(clientQuery.mock.calls[7][1]).toEqual([
+      expect(clientQuery.mock.calls[6][1]).toEqual([
         "Incoming goods #88 confirmed. 2 items added to stock.",
       ]);
+
+      // Also guard: no UPDATE batches anywhere in the confirm flow.
+      const batchUpdates = clientQuery.mock.calls.filter((call: any[]) =>
+        String(call[0]).includes("UPDATE batches"),
+      );
+      expect(batchUpdates).toHaveLength(0);
     } finally {
       await app.close();
     }
@@ -192,7 +190,9 @@ describe("incoming confirm inventory propagation", () => {
     }
   });
 
-  it("returns batch and expiry metadata on confirmed delivery details", async () => {
+  it("returns confirmed delivery details without batch/expiry metadata", async () => {
+    // MERT-M: no batches JOIN in GET /incoming/:id. The response carries
+    // product + incoming_item columns only.
     mockQuery
       .mockResolvedValueOnce(
         resultRows([
@@ -213,9 +213,6 @@ describe("incoming confirm inventory propagation", () => {
             product_id: 501,
             quantity: 5,
             unit_price: 8.5,
-            batch_id: 701,
-            batch_number: "LOT-701",
-            expiry_date: "2026-12-01",
           },
         ]),
       );
@@ -228,18 +225,20 @@ describe("incoming confirm inventory propagation", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({
+      const body = res.json();
+      expect(body).toMatchObject({
         id: 90,
         status: "confirmed",
-        items: [
-          {
-            id: 11,
-            batch_id: 701,
-            batch_number: "LOT-701",
-            expiry_date: "2026-12-01",
-          },
-        ],
+        items: [{ id: 11, product_id: 501, quantity: 5 }],
       });
+      expect(body.items[0]).not.toHaveProperty("batch_number");
+      expect(body.items[0]).not.toHaveProperty("expiry_date");
+
+      // And guard the SQL — no batches JOIN.
+      const itemsSql = String(mockQuery.mock.calls[1][0]);
+      expect(itemsSql).not.toMatch(/JOIN\s+batches\b/i);
+      expect(itemsSql).not.toMatch(/\bb\.batch_number\b/);
+      expect(itemsSql).not.toMatch(/\bb\.expiry_date\b/);
     } finally {
       await app.close();
     }

@@ -387,15 +387,8 @@ describe("incoming strict completeness gate", () => {
       const incomingItemInsert = txQueries.find(({ sql }) =>
         sql.includes("INSERT INTO incoming_items"),
       );
-      expect(incomingItemInsert?.params).toEqual([
-        777,
-        321,
-        null,
-        1,
-        10,
-        10,
-        19.99,
-      ]);
+      // MERT-M: no batch_id on the INSERT — six params, not seven.
+      expect(incomingItemInsert?.params).toEqual([777, 321, 1, 10, 10, 19.99]);
 
       const sellingPriceUpdate = txQueries.find(({ sql }) =>
         sql.includes("UPDATE products SET selling_price = $1"),

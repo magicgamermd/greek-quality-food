@@ -82,25 +82,35 @@ function buildStatefulTxClient() {
         const rawCandidates = (params?.[1] ?? []) as string[];
         const supplierId = (params?.[2] ?? null) as number | null;
         const match = aliases.find((alias) => {
-          const normalizedHit = normalizedCandidates.includes(alias.alias_name_normalized.toLowerCase());
-          const rawHit = rawCandidates.includes(alias.alias_name.trim().toLowerCase());
-          const supplierHit = supplierId == null || alias.supplier_id === supplierId || alias.supplier_id == null;
+          const normalizedHit = normalizedCandidates.includes(
+            alias.alias_name_normalized.toLowerCase(),
+          );
+          const rawHit = rawCandidates.includes(
+            alias.alias_name.trim().toLowerCase(),
+          );
+          const supplierHit =
+            supplierId == null ||
+            alias.supplier_id === supplierId ||
+            alias.supplier_id == null;
           return supplierHit && (normalizedHit || rawHit);
         });
         return resultRows(match ? [{ product_id: match.product_id }] : []);
       }
 
       if (sql.includes("INSERT INTO incoming_items")) {
+        // MERT-M: batch_id column removed from INSERT. Params now:
+        // [incoming_goods_id, product_id, quantity, unit_price,
+        //  total_price, selling_price].
         nextItemId += 1;
         return resultRows([
           {
             id: nextItemId,
             incoming_goods_id: params?.[0],
             product_id: params?.[1],
-            batch_id: params?.[2] ?? null,
-            quantity: params?.[3],
-            unit_price: params?.[4],
-            total_price: params?.[5],
+            quantity: params?.[2],
+            unit_price: params?.[3],
+            total_price: params?.[4],
+            selling_price: params?.[5] ?? null,
           },
         ]);
       }
@@ -110,7 +120,8 @@ function buildStatefulTxClient() {
         const supplierId = (params?.[1] ?? null) as number | null;
         const existing = aliases.find(
           (alias) =>
-            alias.alias_name_normalized.toLowerCase() === normalized && alias.supplier_id === supplierId,
+            alias.alias_name_normalized.toLowerCase() === normalized &&
+            alias.supplier_id === supplierId,
         );
         return resultRows(existing ? [{ id: existing.id }] : []);
       }
@@ -240,17 +251,29 @@ describe("incoming alias-learning second pass regression", () => {
         ({ sql, params }) =>
           sql.includes("SELECT pa.product_id") &&
           Array.isArray(params?.[0]) &&
-          (params?.[0] as string[]).includes(normalizeAliasName(secondPassRawName)),
+          (params?.[0] as string[]).includes(
+            normalizeAliasName(secondPassRawName),
+          ),
       );
       expect(aliasLookup).toBeDefined();
 
       const secondIncomingItemInsert = [...txClient.queries]
         .reverse()
         .find(({ sql }) => sql.includes("INSERT INTO incoming_items"));
-      expect(secondIncomingItemInsert?.params).toEqual([602, 321, null, 3, 4.5, 13.5, null]);
+      // MERT-M: no batch_id column on the insert any more.
+      expect(secondIncomingItemInsert?.params).toEqual([
+        602,
+        321,
+        3,
+        4.5,
+        13.5,
+        null,
+      ]);
 
       expect(
-        txClient.queries.some(({ sql }) => sql.includes("INSERT INTO products")),
+        txClient.queries.some(({ sql }) =>
+          sql.includes("INSERT INTO products"),
+        ),
       ).toBe(false);
     } finally {
       await app.close();

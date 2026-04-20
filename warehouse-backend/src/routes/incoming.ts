@@ -55,11 +55,10 @@ const createIncomingSchema = z.object({
       brand: z.string().nullish(), // null when brand not on invoice
       category_hint: z.string().nullish(), // beverages|pasta|olive_oil|sweets|meat|spices|legumes|coffee|wine|cheese|dairy
       unit: z.string().nullish(),
-      batch_number_raw: z.string().nullish(),
-      batch_number: z.string().nullish(),
-      expiry_date_raw: z.string().nullish(),
-      expiry_date: z.string().nullish(),
-      production_date: z.string().nullish(),
+      // MERT-M sells durable goods (commercial kitchen equipment) — no
+      // batch / expiry / production date tracking. Incoming payloads that
+      // still carry these keys (legacy OCR output, old frontends) are
+      // silently ignored by omitting them from the schema.
       notes_raw: z.string().nullish(),
       quantity: z.number().positive(),
       unit_price: z.number().min(0).default(0),
@@ -73,30 +72,6 @@ const cancelIncomingSchema = z.object({
 });
 
 type CompletenessStatus = "complete" | "suspicious" | "incomplete";
-
-// Auto-generate batch number from expiry date: batch = expiry - 2 months, format DDMMYYYY (no separators)
-// e.g. expiry 2026-06-16 → production 2026-04-16 → "16042026"
-function batchFromProdDate(prodDateStr: string): string {
-  try {
-    const d = new Date(prodDateStr);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    return `${dd}${mm}${d.getFullYear()}`;
-  } catch {
-    return "";
-  }
-}
-
-function autoBatchFromExpiry(expiryDateStr: string): string {
-  try {
-    const expiry = new Date(expiryDateStr);
-    const production = new Date(expiry);
-    production.setMonth(production.getMonth() - 2);
-    return batchFromProdDate(production.toISOString().split("T")[0]);
-  } catch {
-    return "";
-  }
-}
 
 // Shorten brand: "IOANNOU CONFECTIONERY S.M.P.C." → "IOANNOU"
 // TODO: revisit brand logic after supplier meeting — may need per-product override
@@ -788,15 +763,14 @@ export default async function incomingRoutes(app: FastifyInstance) {
     );
     if (!docs[0]) return reply.status(404).send({ error: "Not found" });
 
+    // MERT-M: batches table is deprecated — no JOIN / batch columns.
     const { rows: items } = await query(
       `SELECT ii.*, p.name_bg, p.name_en, p.unit,
               p.selling_price AS product_selling_price,
               p.purchase_price AS product_purchase_price,
-              p.sku AS product_sku,
-              b.batch_number, b.expiry_date
+              p.sku AS product_sku
        FROM incoming_items ii
        LEFT JOIN products p ON p.id = ii.product_id
-       LEFT JOIN batches b ON b.id = ii.batch_id
        WHERE ii.incoming_goods_id = $1
        ORDER BY ii.id ASC`,
       [id],
@@ -1467,44 +1441,11 @@ export default async function incomingRoutes(app: FastifyInstance) {
             productId = newProduct.id;
           }
 
-          // Create or find batch
-          let batchId = null;
-          // Batch: manual > from production_date > from expiry_date (DDMMYYYY format)
-          const effectiveBatchNumber =
-            item.batch_number ||
-            (item.production_date
-              ? batchFromProdDate(item.production_date)
-              : item.expiry_date
-                ? autoBatchFromExpiry(item.expiry_date)
-                : null);
-
-          if (effectiveBatchNumber) {
-            const { rows: existingBatch } = await client.query(
-              "SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2",
-              [productId, effectiveBatchNumber],
-            );
-
-            if (existingBatch.length > 0) {
-              batchId = existingBatch[0].id;
-            } else {
-              const {
-                rows: [newBatch],
-              } = await client.query(
-                `INSERT INTO batches (product_id, batch_number, expiry_date, quantity, purchase_price, delivery_id, received_date)
-               VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::date, CURRENT_DATE)) RETURNING id`,
-                [
-                  productId,
-                  effectiveBatchNumber,
-                  item.expiry_date || null,
-                  0,
-                  item.unit_price > 0 ? item.unit_price : null,
-                  incoming.id,
-                  incoming.invoice_date || null,
-                ],
-              );
-              batchId = newBatch.id;
-            }
-          }
+          // MERT-M: no batch/expiry tracking — durable goods.
+          // `batch_id` stays NULL on the incoming line; the confirm step
+          // does a direct inventory upsert keyed on (product_id,
+          // warehouse_id) via the partial unique index
+          // `inventory_product_warehouse_nobatch_uidx` (migration 045).
 
           const stagedSellingPrice =
             item.selling_price != null && item.selling_price > 0
@@ -1517,17 +1458,15 @@ export default async function incomingRoutes(app: FastifyInstance) {
             `INSERT INTO incoming_items (
              incoming_goods_id,
              product_id,
-             batch_id,
              quantity,
              unit_price,
              total_price,
              selling_price
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
             [
               incoming.id,
               productId,
-              batchId,
               item.quantity,
               item.unit_price,
               totalPrice,
@@ -2137,22 +2076,18 @@ export default async function incomingRoutes(app: FastifyInstance) {
         // Add each item to inventory
         const defaultWarehouseId = 1; // Default warehouse
         for (const item of items) {
-          // Upsert inventory
+          // MERT-M: batch-free upsert. The partial unique index
+          // `inventory_product_warehouse_nobatch_uidx` (migration 045) —
+          // UNIQUE (product_id, warehouse_id) WHERE batch_id IS NULL —
+          // gives us an ON CONFLICT target without needing batch_id in
+          // the row. Keeps the column nullable for migration compat.
           await client.query(
-            `INSERT INTO inventory (product_id, batch_id, warehouse_id, quantity, updated_at)
-           VALUES ($1, $2, $3, $4, NOW())
-           ON CONFLICT (product_id, batch_id, warehouse_id)
-           DO UPDATE SET quantity = inventory.quantity + $4, updated_at = NOW()`,
-            [item.product_id, item.batch_id, defaultWarehouseId, item.quantity],
+            `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id, updated_at)
+           VALUES ($1, $2, $3, NULL, NOW())
+           ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
+           DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity, updated_at = NOW()`,
+            [item.product_id, defaultWarehouseId, item.quantity],
           );
-
-          // Update batch quantity
-          if (item.batch_id) {
-            await client.query(
-              "UPDATE batches SET quantity = quantity + $1 WHERE id = $2",
-              [item.quantity, item.batch_id],
-            );
-          }
 
           // Update product's purchase_price to the latest unit_price
           if (item.unit_price && item.unit_price > 0) {
@@ -2193,114 +2128,10 @@ export default async function incomingRoutes(app: FastifyInstance) {
     },
   );
 
-  // PATCH /incoming/:id/batches — update batch_number / expiry_date after delivery is confirmed
-  app.patch(
-    "/:id/batches",
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (reply.statusCode >= 400) return;
-      if (request.user.role === "accountant") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
-      const { id } = request.params as { id: string };
-      const { items } = request.body as {
-        items: Array<{
-          incoming_item_id?: number | null;
-          product_id?: number | null;
-          batch_number?: string | null;
-          expiry_date?: string | null;
-          production_date?: string | null;
-        }>;
-      };
-
-      if (!Array.isArray(items) || items.length === 0) return { ok: true };
-
-      for (const item of items) {
-        // Save the explicitly provided batch_number BEFORE any auto-generation
-        const explicitBatchNumber = item.batch_number || null;
-
-        // Resolve effective batch for NEW batch creation only: explicit > production_date > expiry
-        const effectiveBatch =
-          explicitBatchNumber ||
-          (item.production_date
-            ? batchFromProdDate(item.production_date)
-            : item.expiry_date
-              ? autoBatchFromExpiry(item.expiry_date)
-              : null);
-        if (!effectiveBatch && !item.expiry_date) continue;
-
-        // Find the exact incoming line when possible; fallback by product for older clients.
-        const hasIncomingItemId =
-          item.incoming_item_id != null &&
-          Number.isInteger(Number(item.incoming_item_id));
-
-        const fallbackProductId =
-          item.product_id != null && Number.isInteger(Number(item.product_id))
-            ? Number(item.product_id)
-            : null;
-
-        if (!hasIncomingItemId && fallbackProductId == null) continue;
-
-        const selectSql = hasIncomingItemId
-          ? `SELECT ii.id, ii.batch_id, ii.product_id, ig.invoice_date
-             FROM incoming_items ii
-             JOIN incoming_goods ig ON ig.id = ii.incoming_goods_id
-             WHERE ii.incoming_goods_id = $1 AND ii.id = $2 LIMIT 1`
-          : `SELECT ii.id, ii.batch_id, ii.product_id, ig.invoice_date
-             FROM incoming_items ii
-             JOIN incoming_goods ig ON ig.id = ii.incoming_goods_id
-             WHERE ii.incoming_goods_id = $1 AND ii.product_id = $2 LIMIT 1`;
-
-        const selectParams = hasIncomingItemId
-          ? [id, Number(item.incoming_item_id)]
-          : [id, fallbackProductId];
-
-        const { rows: iiRows } = await query(selectSql, selectParams);
-        if (iiRows.length === 0) continue;
-        const ii = iiRows[0];
-
-        if (ii.batch_id) {
-          // Update existing batch — only change batch_number if user explicitly provided one.
-          // Never auto-generate batch_number when one already exists in the DB.
-          await query(
-            `UPDATE batches
-           SET batch_number = COALESCE($1, batch_number),
-               expiry_date  = COALESCE($2::date, expiry_date)
-           WHERE id = $3`,
-            [explicitBatchNumber, item.expiry_date || null, ii.batch_id],
-          );
-        } else {
-          // Create new batch and wire it up
-          const { rows: bRows } = await query(
-            `INSERT INTO batches (product_id, batch_number, expiry_date, delivery_id, received_date)
-           VALUES ($1, $2, $3::date, $4, COALESCE($5::date, CURRENT_DATE)) RETURNING id`,
-            [
-              ii.product_id,
-              effectiveBatch,
-              item.expiry_date || null,
-              parseInt(id),
-              ii.invoice_date || null,
-            ],
-          );
-          const batchId = bRows[0].id;
-          // Link to incoming_item
-          await query(`UPDATE incoming_items SET batch_id = $1 WHERE id = $2`, [
-            batchId,
-            ii.id,
-          ]);
-          // Link to inventory row that has no batch yet
-          await query(
-            `UPDATE inventory SET batch_id = $1
-           WHERE id = (SELECT id FROM inventory WHERE product_id = $2 AND batch_id IS NULL ORDER BY id LIMIT 1)`,
-            [batchId, ii.product_id],
-          );
-        }
-      }
-
-      return { ok: true };
-    },
-  );
+  // MERT-M: PATCH /incoming/:id/batches removed — no batch/expiry
+  // tracking for durable goods. Any frontend that still calls this
+  // endpoint gets a 404, which matches the (now intentional) absence
+  // of the feature.
 
   // PATCH /incoming/:id — update header (invoice_number, invoice_date, supplier_id) while pending
   app.patch("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
@@ -2370,14 +2201,15 @@ export default async function incomingRoutes(app: FastifyInstance) {
       }
 
       const { id } = request.params as { id: string };
+      // MERT-M: batch_number / expiry_date intentionally omitted — no
+      // batch tracking. Legacy clients that still send them will have
+      // the extra keys stripped by Zod.
       const schema = z.object({
         items: z.array(
           z.object({
             id: z.number().int(),
             quantity: z.number().positive().optional(),
             unit_price: z.number().min(0).optional(),
-            batch_number: z.string().nullish(),
-            expiry_date: z.string().nullish(),
           }),
         ),
       });
@@ -2416,49 +2248,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
               vals,
             );
           }
-
-          // Handle batch/expiry via existing batch row if linked
-          if (
-            item.batch_number !== undefined ||
-            item.expiry_date !== undefined
-          ) {
-            const { rows: iiRows } = await client.query(
-              `SELECT id, batch_id, product_id FROM incoming_items WHERE incoming_goods_id = $1 AND id = $2`,
-              [id, item.id],
-            );
-            if (iiRows[0]) {
-              const ii = iiRows[0];
-              if (ii.batch_id) {
-                await client.query(
-                  `UPDATE batches
-                   SET batch_number = COALESCE($1, batch_number),
-                       expiry_date = COALESCE($2::date, expiry_date)
-                   WHERE id = $3`,
-                  [
-                    item.batch_number ?? null,
-                    item.expiry_date ?? null,
-                    ii.batch_id,
-                  ],
-                );
-              } else if (item.batch_number || item.expiry_date) {
-                const { rows: bRows } = await client.query(
-                  `INSERT INTO batches (product_id, batch_number, expiry_date, delivery_id, received_date)
-                   VALUES ($1, $2, $3::date, $4, CURRENT_DATE)
-                   RETURNING id`,
-                  [
-                    ii.product_id,
-                    item.batch_number || null,
-                    item.expiry_date || null,
-                    parseInt(id),
-                  ],
-                );
-                await client.query(
-                  `UPDATE incoming_items SET batch_id = $1 WHERE id = $2`,
-                  [bRows[0].id, ii.id],
-                );
-              }
-            }
-          }
+          // MERT-M: no batch/expiry side-effects here any more.
         }
 
         return { ok: true };
