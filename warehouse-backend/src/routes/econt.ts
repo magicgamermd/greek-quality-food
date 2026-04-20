@@ -113,9 +113,92 @@ export default async function econtRoutes(app: FastifyInstance) {
     return reply.send({ data: offices });
   });
 
-  // Routes /calculate, /create-shipment, /update-shipment, /label-pdf,
-  // /track, /label-pdf-download land in later tasks.
-  // Suppress unused-import warning: query + getSender consumed later.
+  // POST /econt/calculate
+  app.post(
+    "/calculate",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+      const {
+        receiverCity,
+        receiverPostCode,
+        receiverOfficeCode,
+        receiverStreet,
+        receiverNum,
+        weight,
+        codAmount,
+      } = request.body as {
+        receiverCity: string;
+        receiverPostCode?: string;
+        receiverOfficeCode?: string;
+        receiverStreet?: string;
+        receiverNum?: string;
+        weight: number;
+        codAmount?: number;
+        shippingPayer?: string;
+      };
+
+      if (!receiverCity || !weight) {
+        return reply
+          .status(400)
+          .send({ error: "receiverCity and weight are required" });
+      }
+
+      const shipmentType =
+        weight > 500 ? "pallet" : weight > 50 ? "cargo" : "pack";
+
+      const label: any = {
+        ...getSender(),
+        receiverClient: { name: "Калкулация", phones: ["0000000000"] },
+        shipmentType,
+        weight,
+        packCount: 1,
+      };
+
+      if (receiverOfficeCode) {
+        label.receiverOfficeCode = receiverOfficeCode;
+      } else {
+        label.receiverAddress = {
+          city: { name: receiverCity, postCode: receiverPostCode || "" },
+          street: receiverStreet || "Тест",
+          num: receiverNum || "1",
+        };
+      }
+
+      if (codAmount && codAmount > 0) {
+        label.services = {
+          cdAmount: Math.round(codAmount * 1.95583 * 100) / 100,
+          cdType: "get",
+          cdCurrency: "BGN",
+        };
+      }
+
+      const reqBody = request.body as any;
+      if (reqBody.shippingPayer === "receiver") {
+        label.payAfterAccept = true;
+        label.payAfterTest = false;
+      }
+
+      const result = await econtPost(
+        "Shipments/LabelService.createLabel.json",
+        {
+          mode: "calculate",
+          label,
+        },
+      );
+
+      const priceBGN = result.label?.totalPrice ?? result.totalPrice ?? 0;
+      const priceEUR = Math.round((priceBGN / 1.95583) * 100) / 100;
+      return reply.send({
+        price: priceEUR,
+        priceBGN,
+        currency: "EUR",
+      });
+    },
+  );
+
+  // Routes /create-shipment, /update-shipment, /label-pdf, /track,
+  // /label-pdf-download land in later tasks.
+  // Suppress unused-import warning: query consumed later.
   void query;
-  void getSender;
 }
