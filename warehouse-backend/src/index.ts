@@ -26,6 +26,7 @@ import exportRoutes from "./routes/export.js";
 import productAliasRoutes from "./routes/product-aliases.js";
 import fiscalRoutes from "./routes/fiscal.js";
 import econtRoutes from "./routes/econt.js";
+import chatRoutes from "./routes/chat.js";
 
 dotenv.config();
 
@@ -234,6 +235,7 @@ export async function build() {
   await app.register(productAliasRoutes, { prefix: "/product-aliases" });
   await app.register(fiscalRoutes, { prefix: "/fiscal" });
   await app.register(econtRoutes, { prefix: "/econt" });
+  await app.register(chatRoutes);
 
   return app;
 }

@@ -284,7 +284,6 @@ export default async function chatRoutes(app: FastifyInstance) {
       messages.push({
         role: "assistant",
         content: choice.content || "",
-        // @ts-expect-error — OpenRouter schema allows tool_calls on assistant msg
         tool_calls: requestedCalls,
       } as ChatMessage);
       for (const tc of requestedCalls) {
@@ -303,7 +302,6 @@ export default async function chatRoutes(app: FastifyInstance) {
         messages.push({
           role: "tool" as unknown as ChatMessage["role"],
           content: JSON.stringify(result),
-          // @ts-expect-error — tool_call_id is OpenRouter-specific
           tool_call_id: tc.id,
         } as ChatMessage);
       }
