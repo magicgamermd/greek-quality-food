@@ -197,8 +197,119 @@ export default async function econtRoutes(app: FastifyInstance) {
     },
   );
 
-  // Routes /create-shipment, /update-shipment, /label-pdf, /track,
-  // /label-pdf-download land in later tasks.
-  // Suppress unused-import warning: query consumed later.
-  void query;
+  // POST /econt/create-shipment
+  app.post(
+    "/create-shipment",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+
+      const body = request.body as {
+        order_id?: number;
+        receiverName: string;
+        receiverPhone: string;
+        receiverCity: string;
+        receiverPostCode?: string;
+        receiverOfficeCode?: string;
+        receiverStreet?: string;
+        receiverNum?: string;
+        weight: number;
+        codAmount?: number;
+        shipmentDescription?: string;
+      };
+
+      const weight = body.weight || 1;
+      const shipmentType =
+        weight > 500 ? "pallet" : weight > 50 ? "cargo" : "pack";
+
+      const label: any = {
+        ...getSender(),
+        receiverClient: {
+          name: body.receiverName,
+          phones: [body.receiverPhone],
+        },
+        shipmentType,
+        weight,
+        packCount: 1,
+        shipmentDescription: body.shipmentDescription || "Кухненско оборудване",
+      };
+
+      let officeCode = body.receiverOfficeCode?.trim();
+      if (!officeCode && body.receiverCity && !body.receiverStreet) {
+        try {
+          if (!officesCache) {
+            const oRes = await econtPost(
+              "Nomenclatures/NomenclaturesService.getOffices.json",
+              { countryCode: "BGR" },
+            );
+            officesCache = oRes.offices || [];
+          }
+          const cityLower = body.receiverCity.toLowerCase();
+          const shipType = shipmentType === "pallet" ? "pallet" : "courier";
+          const cityOffices = (officesCache || []).filter(
+            (o: any) =>
+              (o.address?.city?.name || "").toLowerCase() === cityLower &&
+              (o.shipmentTypes || []).includes(shipType),
+          );
+          if (cityOffices.length > 0) {
+            const main =
+              cityOffices.find((o: any) => o.name === body.receiverCity) ||
+              cityOffices[0];
+            officeCode = main.code;
+          }
+        } catch {
+          /* swallow — handled below */
+        }
+      }
+
+      if (officeCode && !body.receiverStreet) {
+        label.receiverOfficeCode = officeCode;
+      } else if (body.receiverStreet) {
+        label.receiverAddress = {
+          city: { name: body.receiverCity },
+          street: body.receiverStreet,
+          num: body.receiverNum || "1",
+        };
+      } else {
+        return reply.status(400).send({
+          error: `Не мога да намеря офис на Еконт в ${body.receiverCity}. Уточнете офис или адрес.`,
+        });
+      }
+
+      if (body.codAmount && body.codAmount > 0) {
+        label.services = {
+          cdAmount: Math.round(body.codAmount * 1.95583 * 100) / 100,
+          cdType: "get",
+          cdCurrency: "BGN",
+        };
+      }
+
+      const result = await econtPost(
+        "Shipments/LabelService.createLabel.json",
+        {
+          mode: "create",
+          label,
+        },
+      );
+
+      const shipmentNumber =
+        result.label?.shipmentNumber ?? result.shipmentNumber ?? null;
+      const pdfURL = result.label?.pdfURL ?? result.pdfURL ?? null;
+      const trackingUrl = shipmentNumber
+        ? `https://www.econt.com/services/track-shipment/${shipmentNumber}`
+        : null;
+
+      if (body.order_id && shipmentNumber) {
+        await query(
+          `UPDATE orders SET econt_shipment_number = $1, econt_tracking_url = $2, econt_pdf_url = $3, updated_at = NOW() WHERE id = $4`,
+          [shipmentNumber, trackingUrl, pdfURL, body.order_id],
+        );
+      }
+
+      return reply.send({ shipmentNumber, trackingUrl, pdfURL });
+    },
+  );
+
+  // Routes /update-shipment, /label-pdf, /track, /label-pdf-download
+  // land in later tasks.
 }
