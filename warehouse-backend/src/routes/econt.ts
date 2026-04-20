@@ -422,4 +422,120 @@ export default async function econtRoutes(app: FastifyInstance) {
       });
     },
   );
+
+  // GET /econt/label-pdf/:shipmentNumber — returns PDF URL (cached in DB or fresh)
+  app.get(
+    "/label-pdf/:shipmentNumber",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+      const { shipmentNumber } = request.params as { shipmentNumber: string };
+
+      const { rows } = await query(
+        "SELECT econt_pdf_url FROM orders WHERE econt_shipment_number = $1 LIMIT 1",
+        [shipmentNumber],
+      );
+
+      if (rows[0]?.econt_pdf_url) {
+        return reply.send({ pdfURL: rows[0].econt_pdf_url });
+      }
+
+      try {
+        const pdfRes = await econtPost(
+          "Shipments/LabelService.printLabels.json",
+          { shipmentNumbers: [shipmentNumber], format: "pdf" },
+        );
+        if (pdfRes?.pdfURL) {
+          await query(
+            "UPDATE orders SET econt_pdf_url = $1 WHERE econt_shipment_number = $2",
+            [pdfRes.pdfURL, shipmentNumber],
+          );
+          return reply.send({ pdfURL: pdfRes.pdfURL });
+        }
+      } catch {
+        /* fallthrough */
+      }
+
+      return reply.send({ pdfURL: null, proxyAvailable: true });
+    },
+  );
+
+  // GET /econt/track/:shipmentNumber
+  app.get(
+    "/track/:shipmentNumber",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+      const { shipmentNumber } = request.params as { shipmentNumber: string };
+
+      const result = await econtPost(
+        "Shipments/ShipmentService.getShipmentStatuses.json",
+        { shipmentNumbers: [shipmentNumber] },
+      );
+      return reply.send({
+        shipmentNumber,
+        statuses: result.shipmentStatuses || [],
+      });
+    },
+  );
+
+  // GET /econt/label-pdf-download/:shipmentNumber — proxy PDF bytes
+  app.get(
+    "/label-pdf-download/:shipmentNumber",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+      const { shipmentNumber } = request.params as { shipmentNumber: string };
+
+      try {
+        const { rows } = await query(
+          "SELECT econt_pdf_url FROM orders WHERE econt_shipment_number = $1 LIMIT 1",
+          [shipmentNumber],
+        );
+        if (rows[0]?.econt_pdf_url) {
+          const pdfRes = await fetch(rows[0].econt_pdf_url);
+          if (pdfRes.ok) {
+            const buf = Buffer.from(await pdfRes.arrayBuffer());
+            if (buf.length > 500 && buf[0] === 0x25) {
+              reply.header("Content-Type", "application/pdf");
+              reply.header(
+                "Content-Disposition",
+                `attachment; filename="waybill-${shipmentNumber}.pdf"`,
+              );
+              return reply.send(buf);
+            }
+          }
+        }
+      } catch {
+        /* fallthrough */
+      }
+
+      try {
+        const result = await econtPost(
+          "Shipments/LabelService.printLabels.json",
+          { shipmentNumbers: [shipmentNumber], format: "pdf" },
+        );
+        if (result?.pdfURL) {
+          await query(
+            "UPDATE orders SET econt_pdf_url = $1 WHERE econt_shipment_number = $2",
+            [result.pdfURL, shipmentNumber],
+          ).catch(() => {});
+          const pdfRes = await fetch(result.pdfURL);
+          if (pdfRes.ok) {
+            const buffer = Buffer.from(await pdfRes.arrayBuffer());
+            reply.header("Content-Type", "application/pdf");
+            reply.header(
+              "Content-Disposition",
+              `attachment; filename="waybill-${shipmentNumber}.pdf"`,
+            );
+            return reply.send(buffer);
+          }
+        }
+      } catch {
+        /* fallthrough */
+      }
+
+      return reply.status(404).send({ error: "PDF not available" });
+    },
+  );
 }
