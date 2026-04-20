@@ -16,7 +16,7 @@
 
 **Files created (new in MERT-M):**
 
-- `/Users/magic/Projects/mert-m/warehouse-backend/migrations/031_mertm_deprecate_batches.sql` — deprecates `batches` table and `expiry_*`, `batch_*`, `production_date` columns (safe, non-destructive)
+- `/Users/magic/Projects/mert-m/warehouse-backend/migrations/045_mertm_deprecate_batches.sql` — deprecates `batches` table and `expiry_*`, `batch_*`, `production_date` columns (safe, non-destructive)
 - `/Users/magic/Projects/mert-m/CLAUDE.md` — MERT-M project guide (replaces Greek Foods one)
 - `/Users/magic/Projects/mert-m/.gitignore` — standard Node/env ignores
 - `/Users/magic/Projects/mert-m/README.md` — MERT-M overview (replaces Greek Foods one)
@@ -346,7 +346,7 @@ Expected: both `HEAD_UNCHANGED` and `STATUS_UNCHANGED` print — confirms we've 
 
 **Files:**
 
-- Create: `warehouse-backend/migrations/031_mertm_deprecate_batches.sql`
+- Create: `warehouse-backend/migrations/045_mertm_deprecate_batches.sql`
 
 This migration is safe and idempotent — it adds a comment marking deprecation, but does not drop anything. The `batches` table and expiry columns still exist physically, just unused by code.
 
@@ -356,16 +356,14 @@ This migration is safe and idempotent — it adds a comment marking deprecation,
 ls /Users/magic/Projects/mert-m/warehouse-backend/migrations/ | sort | tail -5
 ```
 
-Expected: highest-numbered migration is 028 or 029 or 030 (depending on Greek Foods' current state). Note that number — the new one is `031_` (higher than any existing).
-
-If the highest is something different, adjust the new migration number to be `max + 1`.
+Expected: highest-numbered migration is `044_order_item_discount.sql`. Our new migration is `045_`. If the actual highest has changed since this plan was written, adjust the new migration number to be `max + 1`.
 
 - [ ] **Step 4.2: Create the deprecation migration**
 
-Create `/Users/magic/Projects/mert-m/warehouse-backend/migrations/031_mertm_deprecate_batches.sql` with:
+Create `/Users/magic/Projects/mert-m/warehouse-backend/migrations/045_mertm_deprecate_batches.sql` with:
 
 ```sql
--- 031_mertm_deprecate_batches.sql
+-- 045_mertm_deprecate_batches.sql
 -- MERT-M does not sell perishable goods, so batches and expiry tracking
 -- are no longer used by application code. This migration marks the schema
 -- as deprecated but does NOT drop anything (for rollback safety).
@@ -408,7 +406,7 @@ docker compose up -d postgres
 npm run migrate
 ```
 
-Expected: migration runner reports `031_mertm_deprecate_batches.sql` executed with no error.
+Expected: migration runner reports `045_mertm_deprecate_batches.sql` executed with no error.
 
 - [ ] **Step 4.4: Verify the comment is set**
 
@@ -422,7 +420,7 @@ Expected: output contains "DEPRECATED 2026-04-20 — MERT-M does not use batch/e
 
 ```bash
 cd /Users/magic/Projects/mert-m
-git add warehouse-backend/migrations/031_mertm_deprecate_batches.sql
+git add warehouse-backend/migrations/045_mertm_deprecate_batches.sql
 git commit -m "feat(db): deprecate batches table and expiry columns for MERT-M
 
 MERT-M sells durable goods, not perishables. Batches and expiry columns
@@ -854,10 +852,10 @@ ON CONFLICT (product_id, warehouse_id) DO UPDATE
 Note: the UNIQUE constraint on inventory currently is `(product_id, batch_id, warehouse_id)` per Greek Foods migration `001_initial.sql`. We need to handle this:
 
 - **Option A (simpler for v1):** Leave constraint as-is; always pass `batch_id = NULL`. Requires `UNIQUE(product_id, batch_id, warehouse_id)` to treat NULL rows as distinct — PostgreSQL does this by default, which is a bug for our use case (it'll create many NULL-batch rows for the same product).
-- **Option B (correct):** Add a partial unique index without batch_id. Add to migration 031:
+- **Option B (correct):** Add a partial unique index without batch_id. Add to migration 045:
 
 ```sql
--- Append to 031_mertm_deprecate_batches.sql:
+-- Append to 045_mertm_deprecate_batches.sql:
 CREATE UNIQUE INDEX IF NOT EXISTS inventory_product_warehouse_nobatch_uidx
   ON inventory (product_id, warehouse_id)
   WHERE batch_id IS NULL;
@@ -881,7 +879,7 @@ cd /Users/magic/Projects/mert-m/warehouse-backend
 npm run migrate
 ```
 
-Expected: migration 031 reapplies cleanly (idempotent), partial index now exists.
+Expected: migration 045 reapplies cleanly (idempotent), partial index now exists.
 
 - [ ] **Step 7.9: Run incoming test — should PASS**
 
