@@ -206,7 +206,7 @@ export function OwnerDashboard() {
                     color: "#f3f6ff",
                     fontSize: 12,
                   }}
-                  formatter={(v: number) => formatCurrency(v)}
+                  formatter={(v) => formatCurrency(Number(v ?? 0))}
                 />
                 <Area
                   type="monotone"
