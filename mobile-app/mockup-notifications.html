@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<title>Notifications</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 390px; height: 844px; overflow: hidden;
+    background: #0a0a14;
+    font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', sans-serif;
+    color: #ffffff;
+    position: relative;
+  }
+
+  .status-bar {
+    height: 54px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 0 24px 8px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .status-icons { display: flex; gap: 6px; align-items: center; }
+
+  .content {
+    height: calc(844px - 54px - 83px);
+    overflow: hidden;
+    padding: 0 20px;
+  }
+
+  /* Nav */
+  .nav-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 0 14px;
+    position: relative;
+  }
+  .back-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #6366f1;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .page-heading {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.4px;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  /* Unread banner */
+  .unread-banner {
+    background: rgba(99,102,241,0.1);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 14px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .unread-count {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .unread-dot-big {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #6366f1;
+    box-shadow: 0 0 8px rgba(99,102,241,0.5);
+    flex-shrink: 0;
+  }
+  .unread-text {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #818cf8;
+    letter-spacing: -0.1px;
+  }
+  .read-all-btn {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6366f1;
+    background: rgba(99,102,241,0.15);
+    padding: 5px 12px;
+    border-radius: 8px;
+  }
+
+  /* Section label */
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #4b5563;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    margin-bottom: 8px;
+    padding-left: 2px;
+  }
+
+  /* Notification card */
+  .notif-card {
+    background: #12121e;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.07);
+    padding: 12px 14px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 8px;
+    position: relative;
+  }
+  .notif-card.unread {
+    border-color: rgba(249,115,22,0.15);
+    background: #141420;
+  }
+  .notif-card.read { opacity: 0.55; }
+
+  /* Unread dot */
+  .unread-indicator {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #f97316;
+    box-shadow: 0 0 6px rgba(249,115,22,0.5);
+    flex-shrink: 0;
+    margin-top: 4px;
+  }
+  .read-indicator {
+    width: 8px; height: 8px;
+    flex-shrink: 0;
+    margin-top: 4px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* Icon circle */
+  .notif-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .notif-icon.warning { background: rgba(249,115,22,0.15); }
+  .notif-icon.expiry { background: rgba(234,179,8,0.15); }
+  .notif-icon.success { background: rgba(34,197,94,0.15); }
+  .notif-icon.info { background: rgba(59,130,246,0.15); }
+
+  .notif-body { flex: 1; min-width: 0; }
+  .notif-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #e5e7eb;
+    letter-spacing: -0.1px;
+    line-height: 1.4;
+    margin-bottom: 3px;
+  }
+  .notif-sub {
+    font-size: 12px;
+    color: #6b7280;
+    line-height: 1.3;
+  }
+  .notif-time {
+    font-size: 11px;
+    color: #4b5563;
+    font-weight: 500;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  /* Swipe hint */
+  .swipe-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 0;
+    margin-bottom: 4px;
+  }
+  .swipe-line {
+    width: 40px; height: 1px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 1px;
+  }
+  .swipe-text {
+    font-size: 10px;
+    color: #374151;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+  }
+
+  /* Tab Bar */
+  .tab-bar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 83px;
+    background: rgba(18, 18, 30, 0.85);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: flex-start;
+    padding-top: 10px;
+  }
+  .tab-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .tab-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: #4b5563;
+  }
+</style>
+</head>
+<body>
+
+<!-- Status Bar -->
+<div class="status-bar">
+  <span>9:41</span>
+  <div class="status-icons">
+    <svg width="17" height="12" viewBox="0 0 17 12" fill="white">
+      <rect x="0" y="3" width="3" height="9" rx="1"/>
+      <rect x="4.5" y="2" width="3" height="10" rx="1"/>
+      <rect x="9" y="0" width="3" height="12" rx="1"/>
+      <rect x="13.5" y="0" width="3" height="12" rx="1" opacity="0.35"/>
+    </svg>
+    <svg width="25" height="12" viewBox="0 0 25 12" fill="white">
+      <rect x="0.5" y="0.5" width="21" height="11" rx="3.5" stroke="white" stroke-opacity="0.35" fill="none"/>
+      <rect x="2" y="2" width="17" height="8" rx="2" fill="white"/>
+      <path d="M23 4.5v3c.8-.4 1.3-1 1.3-1.5s-.5-1.1-1.3-1.5z"/>
+    </svg>
+  </div>
+</div>
+
+<div class="content">
+  <div class="nav-header">
+    <div class="back-btn">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+      Назад
+    </div>
+    <span class="page-heading">Известия</span>
+    <div style="width:40px;"></div>
+  </div>
+
+  <!-- Unread Banner -->
+  <div class="unread-banner">
+    <div class="unread-count">
+      <div class="unread-dot-big"></div>
+      <span class="unread-text">17 непрочетени известия</span>
+    </div>
+    <div class="read-all-btn">Прочети всички</div>
+  </div>
+
+  <!-- Unread Section -->
+  <div class="section-label">Непрочетени</div>
+
+  <div class="notif-card unread">
+    <div class="unread-indicator"></div>
+    <div class="notif-icon warning">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+    </div>
+    <div class="notif-body">
+      <div class="notif-title">Ниска наличност — Говеждо Пастрами</div>
+      <div class="notif-sub">само 1.13 бр · SKU-GR-0391</div>
+    </div>
+    <div class="notif-time">09:14</div>
+  </div>
+
+  <div class="notif-card unread">
+    <div class="unread-indicator"></div>
+    <div class="notif-icon expiry">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+      </svg>
+    </div>
+    <div class="notif-body">
+      <div class="notif-title">Партида изтича — Маслини Каламата 250г</div>
+      <div class="notif-sub">Изтича на 15.03.2024 · 4.80 бр</div>
+    </div>
+    <div class="notif-time">08:45</div>
+  </div>
+
+  <div class="notif-card unread">
+    <div class="unread-indicator"></div>
+    <div class="notif-icon warning">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/>
+      </svg>
+    </div>
+    <div class="notif-body">
+      <div class="notif-title">Ниска наличност — Хумус Класик</div>
+      <div class="notif-sub">само 0.50 бр · SKU-GR-0267</div>
+    </div>
+    <div class="notif-time">08:30</div>
+  </div>
+
+  <!-- Swipe Hint -->
+  <div class="swipe-hint">
+    <div class="swipe-line"></div>
+    <span class="swipe-text">ПЛЪЗНИ ЗА ОТХВЪРЛЯНЕ</span>
+    <div class="swipe-line"></div>
+  </div>
+
+  <!-- Read Section -->
+  <div class="section-label">Прочетени</div>
+
+  <div class="notif-card read">
+    <div class="read-indicator">
+      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>
+    <div class="notif-icon success" style="opacity:0.5;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>
+    <div class="notif-body">
+      <div class="notif-title">Доставка потвърдена</div>
+      <div class="notif-sub">INV-2024-0381 · 8 продукта</div>
+    </div>
+    <div class="notif-time">Вчера</div>
+  </div>
+
+  <div class="notif-card read">
+    <div class="read-indicator">
+      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>
+    <div class="notif-icon info" style="opacity:0.5;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+    </div>
+    <div class="notif-body">
+      <div class="notif-title">Поръчка #1042 изпратена</div>
+      <div class="notif-sub">Фета сирене · €47.90</div>
+    </div>
+    <div class="notif-time">Вчера</div>
+  </div>
+</div>
+
+<!-- Tab Bar -->
+<div class="tab-bar">
+  <div class="tab-item">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+    </div>
+    <span class="tab-label">Панел</span>
+  </div>
+  <div class="tab-item">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+    </div>
+    <span class="tab-label">Сканирай</span>
+  </div>
+  <div class="tab-item">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+        <polyline points="17 6 23 6 23 12"/>
+      </svg>
+    </div>
+    <span class="tab-label">Продажби</span>
+  </div>
+  <div class="tab-item">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>
+      </svg>
+    </div>
+    <span class="tab-label">Още</span>
+  </div>
+</div>
+
+</body>
+</html>

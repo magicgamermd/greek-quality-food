@@ -1,0 +1,69 @@
+{
+  "expo": {
+    "name": "Greek Foods Analytics",
+    "slug": "greek-foods-analytics",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f0f1a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.greekfoods.analytics"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0f0f1a"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.greekfoods.analytics",
+      "minSdkVersion": 28,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#6c3dff",
+          "sounds": []
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Нужен е достъп до камерата за сканиране на фактури"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Нужен е достъп до галерията"
+        }
+      ]
+    ],
+    "extra": {
+      "apiBaseUrl": "http://192.168.1.19:3003",
+      "eas": {
+        "projectId": "08e030b3-90ca-415b-a2ee-8e00faff63cd"
+      }
+    },
+    "owner": "jokermagician2008",
+    "updates": {}
+  }
+}

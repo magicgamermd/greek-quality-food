@@ -1,0 +1,88 @@
+version: 2
+updates:
+  # npm — warehouse-backend
+  - package-ecosystem: "npm"
+    directory: "/warehouse-backend"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "backend"
+
+  # npm — warehouse-frontend
+  - package-ecosystem: "npm"
+    directory: "/warehouse-frontend"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "frontend"
+
+  # npm — mobile-app
+  - package-ecosystem: "npm"
+    directory: "/mobile-app"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "mobile"
+
+  # npm — mobile-owner-app
+  - package-ecosystem: "npm"
+    directory: "/mobile-owner-app"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "mobile"
+
+  # npm — e2e-tests
+  - package-ecosystem: "npm"
+    directory: "/e2e-tests"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "e2e"
+
+  # pip — ai-service
+  - package-ecosystem: "pip"
+    directory: "/ai-service"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "ai-service"
+
+  # Docker — warehouse-backend
+  - package-ecosystem: "docker"
+    directory: "/warehouse-backend"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # Docker — ai-service
+  - package-ecosystem: "docker"
+    directory: "/ai-service"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
+      - "ci"

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "TC001",
+    "title": "post auth login with valid credentials",
+    "description": "Test the POST /auth/login endpoint with valid email and password to verify successful authentication, returning a JWT token and user details."
+  },
+  {
+    "id": "TC002",
+    "title": "post auth login with invalid password",
+    "description": "Test the POST /auth/login endpoint with an invalid password to verify that the system returns a 401 authentication error."
+  },
+  {
+    "id": "TC003",
+    "title": "get auth me with valid token",
+    "description": "Test the GET /auth/me endpoint with a valid JWT token to verify retrieval of the current authenticated user's profile."
+  },
+  {
+    "id": "TC004",
+    "title": "post auth logout and token invalidation",
+    "description": "Test the POST /auth/logout endpoint with a valid token to verify successful logout and that subsequent use of the same token is rejected."
+  },
+  {
+    "id": "TC005",
+    "title": "get users list with admin authorization",
+    "description": "Test the GET /users endpoint with an admin token to verify listing of users with pagination."
+  },
+  {
+    "id": "TC006",
+    "title": "post users creation with valid payload",
+    "description": "Test the POST /users endpoint with an admin token and valid user data to verify successful user creation."
+  },
+  {
+    "id": "TC007",
+    "title": "patch users role change with admin authorization",
+    "description": "Test the PATCH /users/:id/role endpoint with an admin token to verify successful user role update."
+  },
+  {
+    "id": "TC008",
+    "title": "delete users with admin authorization",
+    "description": "Test the DELETE /users/:id endpoint with an admin token to verify successful user deletion and proper handling of non-existent user IDs."
+  },
+  {
+    "id": "TC009",
+    "title": "post incoming scan with valid invoice upload",
+    "description": "Test the POST /incoming/scan endpoint with a valid invoice PDF upload to verify AI OCR processing and product matching."
+  },
+  {
+    "id": "TC010",
+    "title": "put incoming confirm delivery and update inventory",
+    "description": "Test the PUT /incoming/:id/confirm endpoint to confirm delivery of incoming goods and verify that batches are added to inventory correctly."
+  }
+]

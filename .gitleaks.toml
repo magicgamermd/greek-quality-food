@@ -1,0 +1,35 @@
+# Gitleaks configuration for the Greek Foods platform.
+# Extends the upstream default ruleset and adds repo-specific allowlists so
+# documentation placeholders (inside .env*.example files) do not fire.
+#
+# Docs: https://github.com/zricethezav/gitleaks/blob/master/README.md
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Greek Foods platform-wide allowlist"
+
+# Files that contain intentional placeholder values, not real secrets.
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\.production\.example$''',
+  '''(^|/)docs/SECRET-ROTATION-GUIDE\.md$''',
+  '''(^|/)scripts/generate-prod-secrets\.sh$''',
+  '''(^|/)\.gitleaks\.toml$''',
+  '''(^|/)\.pre-commit-config\.yaml$''',
+]
+
+# Strings that look like secrets but are intentional placeholders.
+regexes = [
+  '''change-me[-_a-z0-9]*''',
+  '''your-[-_a-z0-9]+''',
+  '''dev-secret-change-me''',
+  '''gf-internal-api-key-change-me''',
+  '''<RUN:[^>]*>''',
+  '''sk-\.\.\.''',
+]
+
+# Commits that predate the rotation policy - any real leaks in these are
+# expected to have already been rotated per the audit trail.
+# commits = [ "<sha>" ]

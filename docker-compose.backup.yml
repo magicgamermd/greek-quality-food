@@ -1,0 +1,58 @@
+# Optional: backup sidecar for self-hosted deployments.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+#
+# For Railway, use the cron snippet in docs/BACKUP-RESTORE.md instead of
+# this sidecar — Railway has its own cron/scheduled-job primitive.
+
+services:
+  pg-backup:
+    image: postgres:16-alpine
+    container_name: greekfoods-pg-backup
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      S3_BACKUP_BUCKET: ${S3_BACKUP_BUCKET:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-eu-central-1}
+      BACKUP_GPG_RECIPIENT: ${BACKUP_GPG_RECIPIENT:-}
+      BACKUP_LOCAL_DIR: /var/backups/postgres
+      TZ: UTC
+    volumes:
+      - ./scripts/backup:/scripts:ro
+      - pg_backups:/var/backups/postgres
+      - gnupg_home:/root/.gnupg
+    # Install deps once, then run busybox crond in foreground.
+    # Cron schedules:
+    #   02:30 UTC daily   -> nightly pg_dump
+    #   04:00 UTC Sunday  -> restore drill (requires RESTORE_SUPERUSER_URL)
+    command: >
+      sh -c "
+        apk add --no-cache bash aws-cli gnupg tzdata &&
+        mkdir -p /etc/crontabs &&
+        printf '%s\n%s\n' \
+          '30 2 * * * /scripts/nightly-pg-dump.sh' \
+          '0 4 * * 0 /scripts/restore-test.sh latest' \
+          > /etc/crontabs/root &&
+        chmod +x /scripts/*.sh &&
+        echo 'Backup sidecar ready. Cron active.' &&
+        crond -f -L /dev/stdout
+      "
+    healthcheck:
+      test: ["CMD", "pgrep", "crond"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  pg_backups:
+    driver: local
+  gnupg_home:
+    driver: local

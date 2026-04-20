@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Партньорски портал — Greek Foods B2B</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🫒</text></svg>" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/main.css" />
+</head>
+<body>
+
+<!-- NAVBAR -->
+<nav class="navbar scrolled" id="navbar" style="z-index:1001;">
+  <div class="nav-container">
+    <a href="index.html" class="nav-logo">
+      <div class="nav-logo-icon">🫒</div>
+      <div class="nav-logo-text">
+        <span>Greek Foods</span>
+        <span>Partner Portal</span>
+      </div>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html" data-t="nav_home">Начало</a></li>
+      <li><a href="products.html" data-t="nav_products">Продукти</a></li>
+      <li><a href="about.html" data-t="nav_about">За нас</a></li>
+      <li><a href="contact.html" data-t="nav_contact">Контакти</a></li>
+      <li><a href="portal.html" class="active" data-t="nav_portal">Портал</a></li>
+    </ul>
+    <div class="nav-right">
+      <div class="lang-switcher">
+        <button class="lang-btn active" data-lang="bg" onclick="setLang('bg')">BG</button>
+        <button class="lang-btn" data-lang="en" onclick="setLang('en')">EN</button>
+      </div>
+      <button onclick="toggleCart()" class="cart-btn" id="cartBtn">
+        🛒
+        <span class="cart-badge" id="cartBadgeNav">0</span>
+      </button>
+      <button onclick="logout()" style="background:rgba(220,53,69,0.15); border:1px solid rgba(220,53,69,0.3); color:#ff6b6b; border-radius:8px; padding:0.4rem 0.85rem; font-size:0.82rem; font-weight:600; cursor:pointer; transition:all 0.3s;" onmouseover="this.style.background='rgba(220,53,69,0.3)'" onmouseout="this.style.background='rgba(220,53,69,0.15)'">
+        Изход
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- PORTAL LAYOUT -->
+<div style="display:flex; min-height:100vh; padding-top:72px;">
+
+  <!-- Sidebar -->
+  <aside class="portal-sidebar">
+    <div class="portal-sidebar-title">НАВИГАЦИЯ</div>
+    <ul class="portal-nav">
+      <li><a href="#dashboard" class="active" onclick="showSection('dashboard')"><span class="nav-icon">📊</span> <span data-t="portal_orders">Моите поръчки</span></a></li>
+      <li><a href="#products" onclick="showSection('products')"><span class="nav-icon">🛍️</span> <span data-t="portal_products">Продукти с цени</span></a></li>
+      <li><a href="#new-order" onclick="showSection('new-order')"><span class="nav-icon">➕</span> <span data-t="portal_new_order">Нова поръчка</span></a></li>
+      <li><a href="#history" onclick="showSection('history')"><span class="nav-icon">📋</span> <span data-t="portal_order_history">История</span></a></li>
+      <li><a href="#account" onclick="showSection('account')"><span class="nav-icon">👤</span> <span data-t="portal_account">Моят акаунт</span></a></li>
+    </ul>
+    <div style="position:absolute; bottom:2rem; left:0; right:0; padding:0 1.5rem;">
+      <div style="background:rgba(108,61,255,0.15); border:1px solid rgba(108,61,255,0.25); border-radius:var(--radius); padding:1.25rem;">
+        <div style="font-size:0.75rem; font-weight:700; color:rgba(255,255,255,0.5); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.75rem;">Нужда от помощ?</div>
+        <div style="font-size:0.82rem; color:rgba(255,255,255,0.6); margin-bottom:0.75rem;">Свържете се с вашия персонален мениджър</div>
+        <a href="contact.html" style="display:block; background:var(--purple); color:white; text-align:center; padding:0.5rem; border-radius:8px; text-decoration:none; font-size:0.82rem; font-weight:600;">📞 Контакт</a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="portal-content">
+
+    <!-- ═══ DASHBOARD ═══ -->
+    <div id="section-dashboard">
+      <div class="portal-header-bar">
+        <div class="portal-welcome">
+          <span data-t="portal_welcome">Добре дошли,</span>
+          <span id="userName"> Партньор</span> 👋
+        </div>
+        <div style="display:flex; gap:0.75rem; align-items:center;">
+          <span style="font-size:0.85rem; color:var(--gray-500);" id="todayDate"></span>
+          <a href="#new-order" onclick="showSection('new-order')" class="btn btn-primary btn-sm">
+            ➕ <span data-t="portal_new_order">Нова поръчка</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="portal-stats">
+        <div class="portal-stat-card">
+          <div class="portal-stat-icon">📦</div>
+          <div>
+            <div class="portal-stat-value">12</div>
+            <div class="portal-stat-label">Общо поръчки</div>
+          </div>
+        </div>
+        <div class="portal-stat-card">
+          <div class="portal-stat-icon">✅</div>
+          <div>
+            <div class="portal-stat-value">10</div>
+            <div class="portal-stat-label">Доставени</div>
+          </div>
+        </div>
+        <div class="portal-stat-card">
+          <div class="portal-stat-icon">💰</div>
+          <div>
+            <div class="portal-stat-value">4 280 лв</div>
+            <div class="portal-stat-label">Тази месец</div>
+          </div>
+        </div>
+        <div class="portal-stat-card">
+          <div class="portal-stat-icon">🔄</div>
+          <div>
+            <div class="portal-stat-value">2</div>
+            <div class="portal-stat-label">В обработка</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent orders -->
+      <div class="portal-section-title">📋 Последни поръчки</div>
+      <div class="orders-table" style="margin-bottom:2rem;">
+        <table>
+          <thead>
+            <tr>
+              <th>№ Поръчка</th>
+              <th data-t="portal_order_date">Дата</th>
+              <th>Продукти</th>
+              <th data-t="portal_order_total">Сума</th>
+              <th data-t="portal_order_status">Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="recentOrders"></tbody>
+        </table>
+      </div>
+
+      <!-- Popular products quick order -->
+      <div class="portal-section-title">🔥 Бързи поръчки — Популярни продукти</div>
+      <div class="portal-products-grid" id="quickOrderGrid"></div>
+    </div>
+
+    <!-- ═══ PRODUCTS WITH PRICES ═══ -->
+    <div id="section-products" style="display:none;">
+      <div class="portal-header-bar">
+        <div style="font-size:1.3rem; font-weight:800; color:var(--navy);">🛍️ Продукти с актуални цени</div>
+        <div style="display:flex; gap:0.75rem;">
+          <div style="position:relative;">
+            <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--gray-400);">🔍</span>
+            <input type="text" id="portalSearch" oninput="filterPortalProducts()" placeholder="Търси..." style="padding:0.6rem 0.75rem 0.6rem 2.25rem; border:1px solid var(--gray-200); border-radius:8px; font-size:0.85rem; width:200px; outline:none;" />
+          </div>
+          <select id="portalCatFilter" onchange="filterPortalProducts()" style="padding:0.6rem 0.75rem; border:1px solid var(--gray-200); border-radius:8px; font-size:0.85rem; background:white; cursor:pointer; outline:none;">
+            <option value="all">Всички категории</option>
+          </select>
+        </div>
+      </div>
+      <div class="portal-products-grid" id="portalProductsGrid"></div>
+    </div>
+
+    <!-- ═══ NEW ORDER ═══ -->
+    <div id="section-new-order" style="display:none;">
+      <div class="portal-header-bar">
+        <div style="font-size:1.3rem; font-weight:800; color:var(--navy);">➕ Нова поръчка</div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 340px; gap:1.5rem; align-items:start;">
+        <!-- Product selection -->
+        <div>
+          <div style="background:white; border:1px solid var(--gray-200); border-radius:var(--radius-lg); padding:1.5rem; margin-bottom:1.5rem;">
+            <h3 style="font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:1rem;">Избери продукти</h3>
+            <div style="position:relative; margin-bottom:1rem;">
+              <span style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:var(--gray-400);">🔍</span>
+              <input type="text" id="orderSearch" oninput="filterOrderProducts()" placeholder="Търси продукт..." style="width:100%; padding:0.7rem 0.75rem 0.7rem 2.25rem; border:1px solid var(--gray-200); border-radius:10px; font-size:0.9rem; outline:none;" />
+            </div>
+            <div id="orderProductsList" style="display:flex; flex-direction:column; gap:0.5rem; max-height:500px; overflow-y:auto;"></div>
+          </div>
+        </div>
+
+        <!-- Order summary / Cart -->
+        <div style="position:sticky; top:90px;">
+          <div style="background:white; border:1px solid var(--gray-200); border-radius:var(--radius-lg); padding:1.5rem;">
+            <h3 style="font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:1rem;">🛒 Количка</h3>
+            <div id="orderCartItems">
+              <div style="text-align:center; padding:2rem; color:var(--gray-400);">
+                <div style="font-size:2rem; margin-bottom:0.5rem;">🛒</div>
+                <div style="font-size:0.88rem;" data-t="portal_cart_empty">Количката е празна</div>
+              </div>
+            </div>
+            <div id="orderCartFooter" style="display:none; border-top:1px solid var(--gray-200); padding-top:1rem; margin-top:1rem;">
+              <div style="display:flex; justify-content:space-between; font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:1.25rem;">
+                <span data-t="portal_total">Общо</span>
+                <span id="orderTotal">0.00 лв</span>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Адрес на доставка</label>
+                <input type="text" class="form-input" id="deliveryAddress" placeholder="бул. България 1, София" style="font-size:0.85rem;" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Дата на доставка</label>
+                <input type="date" class="form-input" id="deliveryDate" style="font-size:0.85rem;" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Забележки</label>
+                <textarea class="form-textarea" id="orderNotes" placeholder="Специални инструкции..." style="min-height:80px; font-size:0.85rem;"></textarea>
+              </div>
+              <button onclick="submitOrder()" class="btn btn-primary btn-full">
+                ✅ <span data-t="portal_checkout">Поръчай</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ ORDER HISTORY ═══ -->
+    <div id="section-history" style="display:none;">
+      <div class="portal-header-bar">
+        <div style="font-size:1.3rem; font-weight:800; color:var(--navy);">📋 История на поръчките</div>
+        <button class="btn btn-outline-purple btn-sm">⬇️ Изтегли PDF</button>
+      </div>
+      <div class="orders-table">
+        <table>
+          <thead>
+            <tr>
+              <th>№ Поръчка</th>
+              <th data-t="portal_order_date">Дата</th>
+              <th>Продукти</th>
+              <th data-t="portal_order_total">Сума</th>
+              <th data-t="portal_order_status">Статус</th>
+              <th>Доставка</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="historyOrders"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ ACCOUNT ═══ -->
+    <div id="section-account" style="display:none;">
+      <div class="portal-header-bar">
+        <div style="font-size:1.3rem; font-weight:800; color:var(--navy);">👤 Моят акаунт</div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
+        <div style="background:white; border:1px solid var(--gray-200); border-radius:var(--radius-lg); padding:2rem;">
+          <h3 style="font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:1.5rem;">Информация за акаунта</h3>
+          <div id="accountInfo"></div>
+          <button class="btn btn-primary btn-sm" style="margin-top:1.5rem;" onclick="showToast('✅ Промените са запазени!', 'success')">💾 Запази промените</button>
+        </div>
+        <div style="background:white; border:1px solid var(--gray-200); border-radius:var(--radius-lg); padding:2rem;">
+          <h3 style="font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:1.5rem;">Вашият мениджър</h3>
+          <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
+            <div style="width:60px;height:60px;background:var(--gradient-purple);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;">👨‍💼</div>
+            <div>
+              <div style="font-weight:700; color:var(--navy);">Петър Петров</div>
+              <div style="font-size:0.85rem; color:var(--purple);">Регионален мениджър</div>
+            </div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:0.75rem;">
+            <a href="tel:+359881234567" style="display:flex; align-items:center; gap:0.75rem; padding:0.75rem 1rem; background:var(--gray-50); border:1px solid var(--gray-200); border-radius:10px; text-decoration:none; color:var(--navy); font-size:0.88rem; transition:all 0.3s;" onmouseover="this.style.borderColor='var(--purple)'" onmouseout="this.style.borderColor='var(--gray-200)'">
+              📞 +359 88 123 45 67
+            </a>
+            <a href="mailto:petar@greekfoods.bg" style="display:flex; align-items:center; gap:0.75rem; padding:0.75rem 1rem; background:var(--gray-50); border:1px solid var(--gray-200); border-radius:10px; text-decoration:none; color:var(--navy); font-size:0.88rem; transition:all 0.3s;" onmouseover="this.style.borderColor='var(--purple)'" onmouseout="this.style.borderColor='var(--gray-200)'">
+              ✉️ petar@greekfoods.bg
+            </a>
+          </div>
+          <div style="margin-top:1.5rem; background:rgba(108,61,255,0.06); border:1px solid rgba(108,61,255,0.15); border-radius:var(--radius); padding:1rem;">
+            <div style="font-size:0.78rem; font-weight:700; color:var(--purple); margin-bottom:0.5rem;">ПАРТНЬОРСКИ СТАТУС</div>
+            <div style="font-size:1rem; font-weight:800; color:var(--navy);">🥇 Золотен партньор</div>
+            <div style="font-size:0.8rem; color:var(--gray-500); margin-top:0.25rem;">Отстъпка 8% от стандартни цени</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ═══ CART PANEL ═══ -->
+<div class="cart-overlay" id="cartOverlay" onclick="toggleCart()"></div>
+<div class="cart-panel" id="cartPanel">
+  <div class="cart-panel-header">
+    <span>🛒 <span data-t="portal_cart">Количка</span> (<span id="cartCount">0</span>)</span>
+    <button class="cart-close-btn" onclick="toggleCart()">✕</button>
+  </div>
+  <div class="cart-items" id="cartItemsList"></div>
+  <div class="cart-footer" id="cartFooter" style="display:none;">
+    <div class="cart-total">
+      <span data-t="portal_total">Общо</span>
+      <span id="cartTotal">0.00 лв</span>
+    </div>
+    <button onclick="goToOrder()" class="btn btn-primary btn-full">✅ <span data-t="portal_checkout">Поръчай</span></button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="assets/js/translations.js"></script>
+<script src="assets/js/products-data.js"></script>
+<script>
+  // ═══ AUTH GUARD ═══
+  if (!isLoggedIn()) {
+    window.location.href = 'login.html';
+  }
+
+  // ═══ INIT USER ═══
+  const user = getUser();
+  document.getElementById('userName').textContent = ' ' + user.name;
+
+  // Today's date
+  const now = new Date();
+  document.getElementById('todayDate').textContent = now.toLocaleDateString('bg-BG', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+  // Min date for delivery
+  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+  const dInput = document.getElementById('deliveryDate');
+  if (dInput) dInput.min = tomorrow.toISOString().split('T')[0];
+
+  // ═══ ORDER HISTORY DATA ═══
+  const ORDER_HISTORY = [
+    { id: '#GF-2024', date: '20.02.2026', items: 'Фета PDO, Маслини, Зехтин', total: '342.50', status: 'delivered', delivery: '21.02.2026' },
+    { id: '#GF-2023', date: '15.02.2026', items: 'Октопод, Скариди XL', total: '189.90', status: 'delivered', delivery: '16.02.2026' },
+    { id: '#GF-2022', date: '08.02.2026', items: 'Пита, Гириос, Кюфтета', total: '256.80', status: 'delivered', delivery: '09.02.2026' },
+    { id: '#GF-2025', date: '22.02.2026', items: 'Фета PDO, Кашкавал Гравиера', total: '145.60', status: 'processing', delivery: '23.02.2026' },
+    { id: '#GF-2026', date: '23.02.2026', items: 'Зехтин 5L x3, Маслини Халкидики', total: '196.50', status: 'pending', delivery: '24.02.2026' },
+    { id: '#GF-2021', date: '01.02.2026', items: 'Орегано, Мащерка, Шафран', total: '98.40', status: 'delivered', delivery: '02.02.2026' },
+    { id: '#GF-2020', date: '25.01.2026', items: 'Кисело мляко 10%, Фета', total: '234.20', status: 'delivered', delivery: '26.01.2026' },
+  ];
+
+  function getStatusPill(status) {
+    const map = {
+      pending: `<span class="status-pill pending">⏳ ${t('portal_status_pending')}</span>`,
+      confirmed: `<span class="status-pill confirmed">✅ ${t('portal_status_confirmed')}</span>`,
+      processing: `<span class="status-pill processing">⚙️ ${t('portal_status_processing')}</span>`,
+      delivered: `<span class="status-pill delivered">📦 ${t('portal_status_delivered')}</span>`,
+    };
+    return map[status] || status;
+  }
+
+  function renderRecentOrders() {
+    const tbody = document.getElementById('recentOrders');
+    if (!tbody) return;
+    tbody.innerHTML = ORDER_HISTORY.slice(0, 4).map(o => `
+      <tr>
+        <td style="font-weight:700; color:var(--purple);">${o.id}</td>
+        <td>${o.date}</td>
+        <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${o.items}</td>
+        <td style="font-weight:700;">${o.total} лв</td>
+        <td>${getStatusPill(o.status)}</td>
+        <td><button onclick="showSection('history')" style="background:none; border:none; color:var(--purple); font-size:0.82rem; font-weight:600; cursor:pointer;">Детайли →</button></td>
+      </tr>
+    `).join('');
+  }
+
+  function renderHistoryOrders() {
+    const tbody = document.getElementById('historyOrders');
+    if (!tbody) return;
+    tbody.innerHTML = ORDER_HISTORY.map(o => `
+      <tr>
+        <td style="font-weight:700; color:var(--purple);">${o.id}</td>
+        <td>${o.date}</td>
+        <td>${o.items}</td>
+        <td style="font-weight:700;">${o.total} лв</td>
+        <td>${getStatusPill(o.status)}</td>
+        <td style="color:var(--gray-500); font-size:0.85rem;">${o.delivery}</td>
+        <td>
+          <button onclick="showToast('📄 Фактура #' + '${o.id}' + ' изтеглена')" style="background:none; border:1px solid var(--gray-200); border-radius:6px; padding:4px 10px; font-size:0.78rem; color:var(--gray-600); cursor:pointer;">PDF</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  // ═══ PRODUCTS RENDERING ═══
+  function renderPortalProducts() {
+    const select = document.getElementById('portalCatFilter');
+    if (select && select.options.length === 1) {
+      CATEGORIES.filter(c => c.id !== 'all').forEach(cat => {
+        const opt = document.createElement('option');
+        opt.value = cat.id;
+        opt.textContent = currentLang === 'bg' ? cat.name_bg : cat.name_en;
+        select.appendChild(opt);
+      });
+    }
+    filterPortalProducts();
+  }
+
+  function filterPortalProducts() {
+    const q = (document.getElementById('portalSearch')?.value || '').toLowerCase();
+    const cat = document.getElementById('portalCatFilter')?.value || 'all';
+    let products = PRODUCTS.filter(p => {
+      const catMatch = cat === 'all' || p.cat === cat;
+      const nameMatch = p.name_bg.toLowerCase().includes(q) || p.name_en.toLowerCase().includes(q);
+      return catMatch && nameMatch;
+    });
+    renderPortalProductGrid(products);
+  }
+
+  function renderPortalProductGrid(products) {
+    const grid = document.getElementById('portalProductsGrid');
+    if (!grid) return;
+    grid.innerHTML = products.map(p => `
+      <div class="portal-product-card">
+        <div class="portal-product-img">${p.emoji}</div>
+        <div class="portal-product-body">
+          <div class="portal-product-name">${currentLang === 'bg' ? p.name_bg : p.name_en}</div>
+          <div class="portal-product-price">${p.price.toFixed(2)} <span class="currency">лв/${p.unit}</span></div>
+          <div>
+            <span class="stock-badge ${p.id % 5 === 0 ? 'low' : 'in'}">${p.id % 5 === 0 ? '⚡ ' + t('portal_low_stock') : '✅ ' + t('portal_in_stock')}</span>
+          </div>
+          <div class="portal-qty-input">
+            <button class="qty-btn" onclick="changeQty(${p.id}, -1)">−</button>
+            <input type="number" class="qty-num" id="qty-${p.id}" value="1" min="1" />
+            <button class="qty-btn" onclick="changeQty(${p.id}, 1)">+</button>
+          </div>
+          <button onclick="addToCart(${p.id})" class="btn btn-primary btn-sm btn-full">
+            🛒 ${t('portal_add')}
+          </button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // Quick order grid (popular only)
+  function renderQuickOrderGrid() {
+    const grid = document.getElementById('quickOrderGrid');
+    if (!grid) return;
+    const popular = PRODUCTS.filter(p => p.badge === 'popular').slice(0, 8);
+    grid.innerHTML = popular.map(p => `
+      <div class="portal-product-card">
+        <div class="portal-product-img">${p.emoji}</div>
+        <div class="portal-product-body">
+          <div class="portal-product-name">${currentLang === 'bg' ? p.name_bg : p.name_en}</div>
+          <div class="portal-product-price">${p.price.toFixed(2)} <span class="currency">лв</span></div>
+          <div><span class="stock-badge in">✅ ${t('portal_in_stock')}</span></div>
+          <div class="portal-qty-input">
+            <button class="qty-btn" onclick="changeQty('q${p.id}', -1)">−</button>
+            <input type="number" class="qty-num" id="qty-q${p.id}" value="1" min="1" />
+            <button class="qty-btn" onclick="changeQty('q${p.id}', 1)">+</button>
+          </div>
+          <button onclick="addToCart(${p.id}, 'q')" class="btn btn-primary btn-sm btn-full">
+            🛒 ${t('portal_add')}
+          </button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function changeQty(id, delta) {
+    const input = document.getElementById(`qty-${id}`);
+    if (!input) return;
+    let val = parseInt(input.value) + delta;
+    if (val < 1) val = 1;
+    input.value = val;
+  }
+
+  // ═══ ORDER PRODUCTS LIST ═══
+  function renderOrderProductsList() {
+    filterOrderProducts();
+  }
+
+  function filterOrderProducts() {
+    const q = (document.getElementById('orderSearch')?.value || '').toLowerCase();
+    let products = PRODUCTS.filter(p => p.name_bg.toLowerCase().includes(q) || p.name_en.toLowerCase().includes(q));
+    const container = document.getElementById('orderProductsList');
+    if (!container) return;
+    container.innerHTML = products.map(p => `
+      <div style="display:flex; align-items:center; gap:1rem; padding:0.75rem; background:var(--gray-50); border:1px solid var(--gray-200); border-radius:10px; transition:all 0.2s;" onmouseover="this.style.borderColor='var(--purple)'" onmouseout="this.style.borderColor='var(--gray-200)'">
+        <div style="font-size:2rem; width:48px; text-align:center; flex-shrink:0;">${p.emoji}</div>
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:0.88rem; font-weight:700; color:var(--navy); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${currentLang === 'bg' ? p.name_bg : p.name_en}</div>
+          <div style="font-size:0.78rem; color:var(--purple); font-weight:700; margin-top:2px;">${p.price.toFixed(2)} лв / ${p.unit}</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-shrink:0;">
+          <button class="qty-btn" onclick="changeQty('ol${p.id}', -1)">−</button>
+          <input type="number" class="qty-num" id="qty-ol${p.id}" value="1" min="1" style="width:40px;" />
+          <button class="qty-btn" onclick="changeQty('ol${p.id}', 1)">+</button>
+          <button onclick="addToCartFromOrder(${p.id})" class="btn btn-primary btn-sm">+ Добави</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ═══ CART ═══
+  let cart = getCart();
+
+  function addToCart(productId, prefix = '') {
+    const qtyInput = document.getElementById(`qty-${prefix}${productId}`);
+    const qty = qtyInput ? parseInt(qtyInput.value) || 1 : 1;
+    const product = PRODUCTS.find(p => p.id === productId);
+    if (!product) return;
+
+    const existing = cart.find(item => item.id === productId);
+    if (existing) {
+      existing.qty += qty;
+    } else {
+      cart.push({ id: productId, qty, name: product.name_bg, price: product.price, emoji: product.emoji });
+    }
+    saveCart(cart);
+    renderCartPanel();
+    showToast(`✅ ${product.name_bg} добавен в количката!`);
+  }
+
+  function addToCartFromOrder(productId) {
+    const qtyInput = document.getElementById(`qty-ol${productId}`);
+    const qty = qtyInput ? parseInt(qtyInput.value) || 1 : 1;
+    const product = PRODUCTS.find(p => p.id === productId);
+    if (!product) return;
+
+    const existing = cart.find(item => item.id === productId);
+    if (existing) { existing.qty += qty; }
+    else { cart.push({ id: productId, qty, name: product.name_bg, price: product.price, emoji: product.emoji }); }
+    saveCart(cart);
+    renderCartPanel();
+    renderOrderCart();
+    showToast(`✅ ${product.name_bg} добавен!`);
+  }
+
+  function removeFromCart(productId) {
+    cart = cart.filter(item => item.id !== productId);
+    saveCart(cart);
+    renderCartPanel();
+    renderOrderCart();
+  }
+
+  function renderCartPanel() {
+    const list = document.getElementById('cartItemsList');
+    const footer = document.getElementById('cartFooter');
+    const count = document.getElementById('cartCount');
+    const badgeNav = document.getElementById('cartBadgeNav');
+    const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+    const itemCount = cart.reduce((sum, item) => sum + item.qty, 0);
+
+    if (count) count.textContent = itemCount;
+    if (badgeNav) { badgeNav.textContent = itemCount; badgeNav.style.display = itemCount > 0 ? 'flex' : 'none'; }
+
+    if (cart.length === 0) {
+      list.innerHTML = `<div class="cart-empty-state"><div class="empty-icon">🛒</div><div>${t('portal_cart_empty')}</div></div>`;
+      footer.style.display = 'none';
+      return;
+    }
+    footer.style.display = 'block';
+    document.getElementById('cartTotal').textContent = total.toFixed(2) + ' лв';
+    list.innerHTML = cart.map(item => `
+      <div class="cart-item">
+        <div class="cart-item-img">${item.emoji}</div>
+        <div style="flex:1; min-width:0;">
+          <div class="cart-item-name">${item.name}</div>
+          <div class="cart-item-qty">x${item.qty}</div>
+        </div>
+        <div class="cart-item-price">${(item.price * item.qty).toFixed(2)} лв</div>
+        <button class="cart-item-remove" onclick="removeFromCart(${item.id})">✕</button>
+      </div>
+    `).join('');
+  }
+
+  function renderOrderCart() {
+    const container = document.getElementById('orderCartItems');
+    const footer = document.getElementById('orderCartFooter');
+    if (!container) return;
+    const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+    const totalEl = document.getElementById('orderTotal');
+    if (totalEl) totalEl.textContent = total.toFixed(2) + ' лв';
+    if (cart.length === 0) {
+      container.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--gray-400);"><div style="font-size:2rem; margin-bottom:0.5rem;">🛒</div><div style="font-size:0.88rem;">${t('portal_cart_empty')}</div></div>`;
+      if (footer) footer.style.display = 'none';
+      return;
+    }
+    if (footer) footer.style.display = 'block';
+    container.innerHTML = cart.map(item => `
+      <div style="display:flex; align-items:center; gap:0.75rem; padding:0.625rem 0; border-bottom:1px solid var(--gray-100);">
+        <div style="font-size:1.5rem;">${item.emoji}</div>
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:0.82rem; font-weight:600; color:var(--navy); line-height:1.3;">${item.name}</div>
+          <div style="font-size:0.78rem; color:var(--gray-500);">x${item.qty} × ${item.price.toFixed(2)} лв</div>
+        </div>
+        <div style="font-size:0.88rem; font-weight:700; color:var(--purple);">${(item.price * item.qty).toFixed(2)} лв</div>
+        <button onclick="removeFromCart(${item.id})" style="background:none; border:none; color:var(--gray-400); cursor:pointer; font-size:0.85rem;">✕</button>
+      </div>
+    `).join('');
+  }
+
+  function toggleCart() {
+    document.getElementById('cartPanel').classList.toggle('open');
+    document.getElementById('cartOverlay').classList.toggle('visible');
+  }
+
+  function goToOrder() {
+    toggleCart();
+    showSection('new-order');
+  }
+
+  function submitOrder() {
+    if (cart.length === 0) { showToast('⚠️ Количката е празна!', 'error'); return; }
+    const address = document.getElementById('deliveryAddress')?.value;
+    if (!address) { showToast('⚠️ Моля, въведете адрес за доставка!', 'error'); return; }
+
+    const btn = event.target.closest('button');
+    btn.innerHTML = '⏳ Изпращане...';
+    btn.disabled = true;
+
+    setTimeout(() => {
+      cart = [];
+      saveCart(cart);
+      renderCartPanel();
+      renderOrderCart();
+      btn.innerHTML = '✅ Поръчай';
+      btn.disabled = false;
+      showToast('🎉 Поръчката е изпратена успешно! Ще получите потвърждение по имейл.', 'success');
+      // Reset form
+      if (document.getElementById('deliveryAddress')) document.getElementById('deliveryAddress').value = '';
+      if (document.getElementById('orderNotes')) document.getElementById('orderNotes').value = '';
+      showSection('history');
+    }, 1500);
+  }
+
+  // ═══ NAVIGATION ═══
+  function showSection(id) {
+    const sections = ['dashboard', 'products', 'new-order', 'history', 'account'];
+    sections.forEach(s => {
+      const el = document.getElementById(`section-${s}`);
+      if (el) el.style.display = s === id ? 'block' : 'none';
+    });
+    document.querySelectorAll('.portal-nav a').forEach(a => {
+      a.classList.toggle('active', a.getAttribute('href') === `#${id}`);
+    });
+    // Initialize sections lazily
+    if (id === 'products') renderPortalProducts();
+    if (id === 'new-order') { renderOrderProductsList(); renderOrderCart(); }
+    if (id === 'history') renderHistoryOrders();
+    if (id === 'account') renderAccount();
+  }
+
+  function renderAccount() {
+    const user = getUser();
+    const container = document.getElementById('accountInfo');
+    if (!container) return;
+    container.innerHTML = `
+      <div class="form-group">
+        <label class="form-label">Име</label>
+        <input type="text" class="form-input" value="${user.name}" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Имейл</label>
+        <input type="email" class="form-input" value="${user.email || 'partner@greekfoods.bg'}" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Компания</label>
+        <input type="text" class="form-input" value="${user.company || 'Вашата Компания'}" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">ЕИК</label>
+        <input type="text" class="form-input" value="123456789" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Телефон</label>
+        <input type="tel" class="form-input" value="+359 88 123 456" />
+      </div>
+    `;
+  }
+
+  // ═══ TOAST ═══
+  function showToast(msg, type = '') {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.className = `toast ${type}`;
+    setTimeout(() => toast.classList.add('show'), 50);
+    setTimeout(() => toast.classList.remove('show'), 4000);
+  }
+
+  // ═══ INIT ═══
+  renderRecentOrders();
+  renderQuickOrderGrid();
+  renderCartPanel();
+
+  // Handle URL hash
+  const hash = window.location.hash.replace('#', '');
+  if (hash && ['dashboard','products','new-order','history','account'].includes(hash)) {
+    showSection(hash);
+  }
+
+  // Re-render on lang change
+  const origSetLang = setLang;
+  window.setLang = function(lang) {
+    origSetLang(lang);
+    renderQuickOrderGrid();
+    renderRecentOrders();
+    // Re-render current section
+    const current = document.querySelector('.portal-nav a.active')?.getAttribute('href')?.replace('#', '');
+    if (current) showSection(current);
+  };
+</script>
+</body>
+</html>

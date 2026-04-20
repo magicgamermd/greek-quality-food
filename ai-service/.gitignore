@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+.venv311/
+venv/
+env/
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat.pid
+
+# Env
+.env
+.env.local
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Build artefacts
+*.egg-info/
+dist/
+build/
+
+# Stray pip artefacts (from unquoted ">=X" shell redirects)
+=*

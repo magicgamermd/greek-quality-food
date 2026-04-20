@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>За нас — Greek Foods B2B</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🫒</text></svg>" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/main.css" />
+</head>
+<body>
+
+<!-- NAVBAR -->
+<nav class="navbar scrolled" id="navbar">
+  <div class="nav-container">
+    <a href="index.html" class="nav-logo">
+      <div class="nav-logo-icon">🫒</div>
+      <div class="nav-logo-text">
+        <span>Greek Foods</span>
+        <span data-t="hero_tagline">Вашият Професионален Партньор</span>
+      </div>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html" data-t="nav_home">Начало</a></li>
+      <li><a href="products.html" data-t="nav_products">Продукти</a></li>
+      <li><a href="about.html" class="active" data-t="nav_about">За нас</a></li>
+      <li><a href="contact.html" data-t="nav_contact">Контакти</a></li>
+      <li id="nav-login-item" class="nav-cta"><a href="login.html" data-t="nav_login">Вход за партньори</a></li>
+      <li id="nav-portal-item" style="display:none;"><a href="portal.html" data-t="nav_portal">Партньорски портал</a></li>
+    </ul>
+    <div class="nav-right">
+      <div class="lang-switcher">
+        <button class="lang-btn active" data-lang="bg" onclick="setLang('bg')">BG</button>
+        <button class="lang-btn" data-lang="en" onclick="setLang('en')">EN</button>
+      </div>
+      <a href="portal.html" class="cart-btn">🛒<span class="cart-badge">0</span></a>
+      <button class="mobile-menu-btn" onclick="toggleMobileMenu()"><span></span><span></span><span></span></button>
+    </div>
+  </div>
+</nav>
+
+<div class="mobile-nav" id="mobileNav">
+  <a href="index.html" data-t="nav_home">Начало</a>
+  <a href="products.html" data-t="nav_products">Продукти</a>
+  <a href="about.html" data-t="nav_about">За нас</a>
+  <a href="contact.html" data-t="nav_contact">Контакти</a>
+  <div class="mobile-nav-cta"><a href="login.html" data-t="nav_login">Вход за партньори</a></div>
+</div>
+
+<!-- PAGE HEADER -->
+<div class="page-header">
+  <div class="page-header-content">
+    <div class="breadcrumb">
+      <a href="index.html" data-t="nav_home">Начало</a> / <span data-t="nav_about">За нас</span>
+    </div>
+    <h1 data-t="about_title">За Greek Foods</h1>
+    <p data-t="about_subtitle">10+ години опит в доставката на качествени гръцки продукти</p>
+  </div>
+</div>
+
+<!-- STORY SECTION -->
+<section class="section">
+  <div class="container">
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items:center;">
+      <div>
+        <div style="display:inline-flex; align-items:center; gap:0.5rem; background:rgba(108,61,255,0.08); border:1px solid rgba(108,61,255,0.2); color:var(--purple); padding:0.4rem 1rem; border-radius:50px; font-size:0.85rem; font-weight:600; margin-bottom:1.5rem;">
+          🇬🇷 От Гърция до България
+        </div>
+        <h2 class="section-title" style="text-align:left; margin-bottom:1.25rem;" data-t="about_story_title">Нашата история</h2>
+        <p style="font-size:1rem; color:var(--gray-600); line-height:1.8; margin-bottom:1.5rem;" data-t="about_story">
+          Greek Foods е основана през 2014 г. с мисията да донесе най-добрите гръцки хранителни продукти директно на масата на българските ресторанти, хотели и хранителни вериги. Вярваме, че качеството на храната е в основата на успешния бизнес.
+        </p>
+        <p style="font-size:1rem; color:var(--gray-600); line-height:1.8; margin-bottom:2rem;">
+          Работим директно с производители от Атина, Крит, Халкидики и Македония — региони известни с изключителното качество на своите продукти. Това ни позволява да предлагаме автентични гръцки вкусове на конкурентни цени.
+        </p>
+        <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+          <a href="contact.html" class="btn btn-primary">Свържи се с нас</a>
+          <a href="products.html" class="btn btn-outline-purple">Разгледай продуктите</a>
+        </div>
+      </div>
+      <div style="background: linear-gradient(135deg, rgba(108,61,255,0.08) 0%, rgba(26,26,46,0.05) 100%); border:1px solid rgba(108,61,255,0.15); border-radius:var(--radius-xl); padding:3rem; text-align:center;">
+        <div style="font-size:6rem; margin-bottom:1rem;">🫒</div>
+        <div style="font-size:1.2rem; font-weight:700; color:var(--navy); margin-bottom:0.5rem;">Директно от производителя</div>
+        <div style="font-size:0.9rem; color:var(--gray-500); margin-bottom:2rem;">Автентични гръцки продукти с гарантирано качество и произход</div>
+        <div style="display:flex; justify-content:center; gap:1.5rem; flex-wrap:wrap;">
+          <div style="text-align:center;">
+            <div style="font-size:1.5rem; margin-bottom:0.25rem;">🏅</div>
+            <div style="font-size:0.8rem; color:var(--gray-500);">ISO 22000</div>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:1.5rem; margin-bottom:0.25rem;">🇪🇺</div>
+            <div style="font-size:0.8rem; color:var(--gray-500);">EU Certified</div>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:1.5rem; margin-bottom:0.25rem;">🌿</div>
+            <div style="font-size:0.8rem; color:var(--gray-500);">Organic Options</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section class="section section-dark">
+  <div class="container">
+    <div class="section-header">
+      <h2 class="section-title">Greek Foods в цифри</h2>
+      <p class="section-subtitle">Доверие, изградено с години работа и качество</p>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">500+</div>
+        <div class="stat-label" data-t="about_stats_partners">Партньора</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">2 000+</div>
+        <div class="stat-label" data-t="about_stats_products">Продукта</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">10+</div>
+        <div class="stat-label" data-t="about_stats_years">Години опит</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">5 000+</div>
+        <div class="stat-label" data-t="about_stats_delivery">Доставки/месец</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MISSION -->
+<section class="section section-gray">
+  <div class="container">
+    <div style="max-width:720px; margin:0 auto; text-align:center;">
+      <div style="font-size:3rem; margin-bottom:1.5rem;">🎯</div>
+      <h2 class="section-title" data-t="about_mission_title" style="margin-bottom:1.25rem;">Нашата мисия</h2>
+      <p style="font-size:1.1rem; color:var(--gray-600); line-height:1.8; margin-bottom:2.5rem;" data-t="about_mission">
+        Да бъдем надежден мост между гръцките производители и българския хорека сектор, предлагайки висококачествени продукти, конкурентни цени и отлично обслужване.
+      </p>
+    </div>
+    <!-- Values -->
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:1.5rem;">
+      <div style="background:white; border:1px solid var(--gray-200); border-radius:var(--radius-lg); padding:2rem; text-align:center;">
+        <div style="font-size:2.5rem; margin-bottom:1rem;">🏅</div>
+        <h3 style="font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:0.75rem;">Качество</h3>
+        <p style="font-size:0.9rem; color:var(--gray-500); line-height:1.6;">Работим само с проверени производители, сертифицирани по европейски стандарти.</p>
+      </div>
+      <div style="background:white; border:1px solid var(--gray-200); border-radius:var(--radius-lg); padding:2rem; text-align:center;">
+        <div style="font-size:2.5rem; margin-bottom:1rem;">🤝</div>
+        <h3 style="font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:0.75rem;">Партньорство</h3>
+        <p style="font-size:0.9rem; color:var(--gray-500); line-height:1.6;">Изграждаме дългосрочни отношения, основани на доверие, прозрачност и взаимна изгода.</p>
+      </div>
+      <div style="background:white; border:1px solid var(--gray-200); border-radius:var(--radius-lg); padding:2rem; text-align:center;">
+        <div style="font-size:2.5rem; margin-bottom:1rem;">🚀</div>
+        <h3 style="font-size:1rem; font-weight:700; color:var(--navy); margin-bottom:0.75rem;">Иновация</h3>
+        <p style="font-size:0.9rem; color:var(--gray-500); line-height:1.6;">Използваме AI технологии за оптимизиране на поръчките и доставките.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TEAM -->
+<section class="section">
+  <div class="container">
+    <div class="section-header">
+      <h2 class="section-title" data-t="about_team_title">Нашият екип</h2>
+      <p class="section-subtitle">Опитни специалисти, посветени на вашия успех</p>
+    </div>
+    <div class="team-grid">
+      <div class="team-card">
+        <div class="team-avatar">👨‍💼</div>
+        <div class="team-name">Никос Папакостас</div>
+        <div class="team-role">Изпълнителен директор</div>
+        <p class="team-desc">20+ години опит в хранителната индустрия. Основател на Greek Foods.</p>
+      </div>
+      <div class="team-card">
+        <div class="team-avatar">👩‍💼</div>
+        <div class="team-name">Мария Стоянова</div>
+        <div class="team-role">Директор продажби</div>
+        <p class="team-desc">Отговаря за партньорските отношения и развитието на бизнеса в България.</p>
+      </div>
+      <div class="team-card">
+        <div class="team-avatar">👨‍🍳</div>
+        <div class="team-name">Яннис Алексопулос</div>
+        <div class="team-role">Мениджър качество</div>
+        <p class="team-desc">Гарантира, че всеки продукт отговаря на най-строгите стандарти за качество.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <div class="container" style="position:relative;z-index:1;">
+    <h2 class="section-title" data-t="cta_title" style="margin-bottom:1rem;">Готови да станете наш партньор?</h2>
+    <p class="section-subtitle" data-t="cta_subtitle" style="margin-bottom:2.5rem;">Регистрирайте се и получете достъп до ексклузивни цени.</p>
+    <div class="cta-actions">
+      <a href="login.html" class="btn btn-primary btn-lg">🚀 <span data-t="cta_btn">Стани партньор</span></a>
+      <a href="contact.html" class="btn btn-outline btn-lg" data-t="cta_btn2">Свържи се с нас</a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div>
+        <a href="index.html" class="nav-logo" style="margin-bottom:1rem;display:inline-flex;">
+          <div class="nav-logo-icon">🫒</div>
+          <div class="nav-logo-text"><span>Greek Foods</span><span>B2B Platform</span></div>
+        </a>
+        <p class="footer-brand-desc" data-t="footer_desc">Вашият надежден доставчик на висококачествени гръцки хранителни продукти в България.</p>
+      </div>
+      <div>
+        <div class="footer-col-title" data-t="footer_links">Бързи връзки</div>
+        <ul class="footer-links">
+          <li><a href="index.html" data-t="nav_home">→ Начало</a></li>
+          <li><a href="products.html" data-t="nav_products">→ Продукти</a></li>
+          <li><a href="about.html" data-t="nav_about">→ За нас</a></li>
+          <li><a href="contact.html" data-t="nav_contact">→ Контакти</a></li>
+          <li><a href="login.html" data-t="nav_login">→ Вход</a></li>
+        </ul>
+      </div>
+      <div>
+        <div class="footer-col-title">Категории</div>
+        <ul class="footer-links">
+          <li><a href="products.html?cat=dairy">→ Млечни продукти</a></li>
+          <li><a href="products.html?cat=seafood">→ Морски дарове</a></li>
+          <li><a href="products.html?cat=olive">→ Маслини & Зехтин</a></li>
+          <li><a href="products.html?cat=meat">→ Месо & Деликатеси</a></li>
+        </ul>
+      </div>
+      <div>
+        <div class="footer-col-title" data-t="footer_contact">Контакти</div>
+        <div class="footer-contact-item"><span class="icon">📍</span><span data-t="footer_address">бул. България 127, София 1618</span></div>
+        <div class="footer-contact-item"><span class="icon">📞</span><span>+359 2 980 12 34</span></div>
+        <div class="footer-contact-item"><span class="icon">✉️</span><span>info@greekfoods.bg</span></div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 Greek Foods Bulgaria. <span data-t="footer_rights">Всички права запазени.</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/translations.js"></script>
+<script>
+  function toggleMobileMenu() {
+    document.getElementById('mobileNav').classList.toggle('open');
+  }
+</script>
+</body>
+</html>

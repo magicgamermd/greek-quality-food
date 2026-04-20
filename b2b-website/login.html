@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Вход за партньори — Greek Foods B2B</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🫒</text></svg>" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/main.css" />
+  <style>
+    .register-form { display: none; }
+    .tab-btn {
+      flex: 1;
+      padding: 0.75rem;
+      background: none;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--gray-500);
+      border-bottom: 2px solid var(--gray-200);
+      transition: var(--transition);
+    }
+    .tab-btn.active {
+      color: var(--purple);
+      border-bottom-color: var(--purple);
+    }
+  </style>
+</head>
+<body>
+
+<!-- Minimal Navbar -->
+<nav class="navbar scrolled">
+  <div class="nav-container">
+    <a href="index.html" class="nav-logo">
+      <div class="nav-logo-icon">🫒</div>
+      <div class="nav-logo-text">
+        <span>Greek Foods</span>
+        <span data-t="hero_tagline">Вашият Професионален Партньор</span>
+      </div>
+    </a>
+    <div class="nav-right">
+      <div class="lang-switcher">
+        <button class="lang-btn active" data-lang="bg" onclick="setLang('bg')">BG</button>
+        <button class="lang-btn" data-lang="en" onclick="setLang('en')">EN</button>
+      </div>
+      <a href="index.html" style="color:rgba(255,255,255,0.7); text-decoration:none; font-size:0.85rem;">← <span data-t="nav_home">Начало</span></a>
+    </div>
+  </div>
+</nav>
+
+<!-- LOGIN PAGE -->
+<main class="login-page">
+  <div class="login-container">
+    <!-- Brand Side -->
+    <div class="login-brand">
+      <a href="index.html" class="login-brand-logo">
+        <div class="logo-icon">🫒</div>
+        <span>Greek Foods</span>
+      </a>
+      <h2 data-t="login_partner_benefits">Ползи за партньорите</h2>
+      <p>Присъединете се към мрежата от 500+ успешни хорека бизнеса, които се доверяват на Greek Foods за качествени гръцки продукти.</p>
+      <ul class="login-benefits">
+        <li>
+          <div class="check">✓</div>
+          <span data-t="login_benefit1">Ексклузивни цени</span>
+        </li>
+        <li>
+          <div class="check">✓</div>
+          <span data-t="login_benefit2">Приоритетна доставка</span>
+        </li>
+        <li>
+          <div class="check">✓</div>
+          <span data-t="login_benefit3">Персонален мениджър</span>
+        </li>
+        <li>
+          <div class="check">✓</div>
+          <span data-t="login_benefit4">Специални оферти</span>
+        </li>
+        <li>
+          <div class="check">✓</div>
+          <span>24/7 онлайн поръчки</span>
+        </li>
+        <li>
+          <div class="check">✓</div>
+          <span>История на поръчките</span>
+        </li>
+      </ul>
+      <div style="margin-top:2.5rem; display:flex; gap:1rem; flex-wrap:wrap;">
+        <div style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:var(--radius); padding:1rem 1.25rem; text-align:center; flex:1;">
+          <div style="font-size:1.5rem; font-weight:900; color:white;">500+</div>
+          <div style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin-top:0.2rem;" data-t="about_stats_partners">Партньора</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:var(--radius); padding:1rem 1.25rem; text-align:center; flex:1;">
+          <div style="font-size:1.5rem; font-weight:900; color:white;">2 000+</div>
+          <div style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin-top:0.2rem;" data-t="about_stats_products">Продукта</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:var(--radius); padding:1rem 1.25rem; text-align:center; flex:1;">
+          <div style="font-size:1.5rem; font-weight:900; color:white;">10+</div>
+          <div style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin-top:0.2rem;" data-t="about_stats_years">Години</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Form Card -->
+    <div class="login-card">
+      <!-- Tabs -->
+      <div style="display:flex; margin-bottom:2rem; border-bottom:1px solid var(--gray-200);">
+        <button class="tab-btn active" id="tabLogin" onclick="switchTab('login')">🔑 <span data-t="login_title">Вход</span></button>
+        <button class="tab-btn" id="tabRegister" onclick="switchTab('register')">✨ <span data-t="login_register_link">Регистрация</span></button>
+      </div>
+
+      <!-- Login Form -->
+      <div id="loginFormWrap">
+        <h3 data-t="login_title">Вход за партньори</h3>
+        <p class="subtitle" data-t="login_subtitle">Влезте в партньорския портал</p>
+
+        <div id="loginError" style="display:none; background:rgba(220,53,69,0.1); border:1px solid rgba(220,53,69,0.3); border-radius:var(--radius); padding:0.75rem 1rem; margin-bottom:1.25rem; color:var(--danger); font-size:0.88rem; font-weight:600;">
+          ❌ Невалиден имейл или парола
+        </div>
+
+        <form id="loginForm" onsubmit="handleLogin(event)">
+          <div class="form-group">
+            <label class="form-label" data-t="login_email">Имейл адрес</label>
+            <input type="email" class="form-input" id="loginEmail" required placeholder="partner@company.bg" />
+          </div>
+          <div class="form-group">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+              <label class="form-label" style="margin:0;" data-t="login_password">Парола</label>
+              <a href="#" class="login-forgot" data-t="login_forgot">Забравена парола?</a>
+            </div>
+            <input type="password" class="form-input" id="loginPassword" required placeholder="••••••••" />
+          </div>
+          <label class="form-check">
+            <input type="checkbox" id="rememberMe" />
+            <span data-t="login_remember">Запомни ме</span>
+          </label>
+          <button type="submit" class="btn btn-primary btn-full" id="loginBtn">
+            🔑 <span data-t="login_btn">Влез</span>
+          </button>
+        </form>
+
+        <p class="login-divider">— или влез с —</p>
+        <button onclick="demoLogin()" class="btn btn-white btn-full" style="border:1px solid var(--gray-200); color:var(--gray-700);">
+          🎭 Демо достъп (без регистрация)
+        </button>
+      </div>
+
+      <!-- Register Form -->
+      <div id="registerFormWrap" class="register-form">
+        <h3>Регистрация на партньор</h3>
+        <p class="subtitle">Създайте вашия партньорски акаунт</p>
+
+        <form id="registerForm" onsubmit="handleRegister(event)">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Вашето име</label>
+              <input type="text" class="form-input" required placeholder="Иван" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Фамилия</label>
+              <input type="text" class="form-input" required placeholder="Иванов" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-t="contact_company">Компания</label>
+            <input type="text" class="form-input" required placeholder="Ресторант / Хотел / Верига" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">ЕИК / Булстат</label>
+            <input type="text" class="form-input" required placeholder="123456789" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-t="login_email">Имейл адрес</label>
+            <input type="email" class="form-input" required placeholder="ivan@company.bg" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-t="contact_phone">Телефон</label>
+            <input type="tel" class="form-input" required placeholder="+359 88 ..." />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-t="login_password">Парола</label>
+            <input type="password" class="form-input" required placeholder="Минимум 8 символа" />
+          </div>
+          <label class="form-check">
+            <input type="checkbox" required />
+            <span>Съгласен съм с <a href="#" style="color:var(--purple);">Общите условия</a></span>
+          </label>
+          <button type="submit" class="btn btn-primary btn-full" id="registerBtn">
+            ✨ Изпрати заявка
+          </button>
+        </form>
+      </div>
+
+      <p class="login-register-text">
+        <span data-t="login_register">Нямате акаунт?</span>
+        <a href="#" onclick="switchTab('register'); return false;" data-t="login_register_link">Регистрирайте се</a>
+      </p>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="assets/js/translations.js"></script>
+<script>
+  function switchTab(tab) {
+    const loginWrap = document.getElementById('loginFormWrap');
+    const registerWrap = document.getElementById('registerFormWrap');
+    const tabLogin = document.getElementById('tabLogin');
+    const tabRegister = document.getElementById('tabRegister');
+
+    if (tab === 'login') {
+      loginWrap.style.display = 'block';
+      registerWrap.style.display = 'none';
+      tabLogin.classList.add('active');
+      tabRegister.classList.remove('active');
+    } else {
+      loginWrap.style.display = 'none';
+      registerWrap.style.display = 'block';
+      tabLogin.classList.remove('active');
+      tabRegister.classList.add('active');
+    }
+  }
+
+  function handleLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn');
+    const errEl = document.getElementById('loginError');
+    const email = document.getElementById('loginEmail').value;
+    const pass = document.getElementById('loginPassword').value;
+
+    btn.innerHTML = '⏳ Влизане...';
+    btn.disabled = true;
+    errEl.style.display = 'none';
+
+    setTimeout(() => {
+      // Demo: any email + password "1234" or "demo"
+      if (pass === '1234' || pass === 'demo' || pass.length >= 6) {
+        localStorage.setItem('gf_logged_in', 'true');
+        localStorage.setItem('gf_user', JSON.stringify({
+          name: email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1),
+          email: email,
+          company: 'Вашата Компания'
+        }));
+        showToast('✅ Успешен вход! Пренасочване...');
+        setTimeout(() => window.location.href = 'portal.html', 1000);
+      } else {
+        errEl.style.display = 'block';
+        btn.innerHTML = '🔑 <span data-t="login_btn">Влез</span>';
+        btn.disabled = false;
+      }
+    }, 1200);
+  }
+
+  function handleRegister(e) {
+    e.preventDefault();
+    const btn = document.getElementById('registerBtn');
+    btn.innerHTML = '⏳ Изпращане...';
+    btn.disabled = true;
+
+    setTimeout(() => {
+      showToast('✅ Заявката е изпратена! Ще се свържем с вас до 24 часа.', 'success');
+      e.target.reset();
+      btn.innerHTML = '✨ Изпрати заявка';
+      btn.disabled = false;
+      switchTab('login');
+    }, 1500);
+  }
+
+  function demoLogin() {
+    localStorage.setItem('gf_logged_in', 'true');
+    localStorage.setItem('gf_user', JSON.stringify({
+      name: 'Демо Партньор',
+      email: 'demo@greekfoods.bg',
+      company: 'Демо Ресторант'
+    }));
+    showToast('✅ Демо достъп активиран!');
+    setTimeout(() => window.location.href = 'portal.html', 800);
+  }
+
+  function showToast(msg, type = '') {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.className = `toast ${type}`;
+    setTimeout(() => toast.classList.add('show'), 50);
+    setTimeout(() => toast.classList.remove('show'), 3500);
+  }
+
+  // Redirect if already logged in
+  if (isLoggedIn()) {
+    window.location.href = 'portal.html';
+  }
+</script>
+</body>
+</html>

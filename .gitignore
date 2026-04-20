@@ -1,0 +1,50 @@
+node_modules/
+dist/
+*.db
+*.sqlite
+ssl/
+nginx/
+docker-compose.yml
+warehouse-backend/node_modules/
+warehouse-frontend/node_modules/
+warehouse-frontend/dist/
+warehouse-backend/dist/
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+e2e-tests/playwright-report/
+e2e-tests/test-results/
+
+# Runtime data (uploaded files, scanned invoices, exported PDFs, etc.)
+warehouse-backend/uploads/
+warehouse-backend/data/
+warehouse-backend/tmp/
+
+# Vite-plugin-pwa dev artefacts
+warehouse-frontend/dev-dist/
+
+# Claude Code session-local state
+.claude/scheduled_tasks.lock
+.claude/sessions/
+tmp/
+
+# Generated test invoice fixtures (5+ MB, regenerable from scripts)
+test-invoices/generated/
+
+# -------------------------------------------------------------------------
+# Secret material - catch-all (applies at every level of the tree)
+# -------------------------------------------------------------------------
+# Any .env, .env.local, .env.production, .env.<stage>, etc. - at any depth.
+.env
+.env.*
+# Keep the *.example templates tracked (they contain only placeholders).
+!.env.example
+!.env.production.example
+!.env.*.example
+# Output of scripts/generate-prod-secrets.sh, if ever written to disk.
+prod-secrets.env
+scripts/prod-secrets.env
+# Mounted credential bundles.
+ai-service/secrets/

@@ -1,0 +1,13 @@
+.venv
+venv
+__pycache__
+*.pyc
+.DS_Store
+.git
+.env
+celerybeat-schedule
+celerybeat-schedule*
+tests/
+*.md
+tmp/
+.pytest_cache

@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sidebar: #1a1a2e;
+  --color-sidebar-hover: #16213e;
+  --color-accent: #6c3dff;
+  --color-accent-hover: #5a30d9;
+  --color-accent-light: #ede9ff;
+}
+
+/* ── iOS mobile / PWA fixes ────────────────────────────────────────────
+ *
+ * 1. Edge-to-edge dark background: without this, Safari paints a white
+ *    strip under the status bar and home-indicator when our <body> has
+ *    a height < 100dvh. We paint the html element dark so even when
+ *    rubber-band scrolling exposes the overscroll region, it's on-theme.
+ *
+ * 2. 100dvh / 100svh: dvh = dynamic viewport height (accounts for
+ *    Safari's collapsing toolbar), svh = small viewport height (worst
+ *    case). Using both keeps the layout stable across scroll states.
+ *
+ * 3. Prevent the "stuck zoomed" keyboard bug: Safari auto-zooms inputs
+ *    whose font-size is under 16px. Tailwind's `text-sm` = 14px triggers
+ *    this everywhere. Overriding to 16px on mobile-width viewports only
+ *    keeps the desktop layout tight but makes all inputs zoom-safe.
+ */
+
+html,
+body {
+  background-color: #0b1222; /* matches theme-color meta */
+  margin: 0;
+}
+
+html {
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+body {
+  min-height: 100dvh;
+  /* No safe-area padding on body — individual components (e.g. OwnerLayout's
+     fixed bottom-nav, sticky header) add their own `env(safe-area-inset-*)`
+     where they need it, so we don't end up with redundant margins that
+     break fixed positioning. */
+  overscroll-behavior-y: contain; /* no white rubber-band */
+}
+
+/* Force 16px font-size on form controls only on small screens. This is
+   the minimum Safari needs to skip its auto-zoom. Larger viewports
+   (>= 640px) keep the tighter 14px design. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

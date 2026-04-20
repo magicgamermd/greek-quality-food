@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<title>More Menu</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 390px; height: 844px; overflow: hidden;
+    background: #0a0a14;
+    font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', sans-serif;
+    color: #ffffff;
+    position: relative;
+  }
+
+  .status-bar {
+    height: 54px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 0 24px 8px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .status-icons { display: flex; gap: 6px; align-items: center; }
+
+  .content {
+    height: calc(844px - 54px - 83px);
+    overflow: hidden;
+    padding: 0 20px;
+  }
+
+  .page-header {
+    padding: 16px 0 18px;
+  }
+  .page-title {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.6px;
+  }
+
+  /* User card */
+  .user-card {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16162a 100%);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 18px;
+    padding: 18px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .user-card::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 120px; height: 120px;
+    background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%);
+    border-radius: 50%;
+  }
+  .avatar {
+    width: 52px; height: 52px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #6366f1, #818cf8);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(99,102,241,0.35);
+  }
+  .user-info { flex: 1; }
+  .user-name {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    margin-bottom: 3px;
+  }
+  .user-role {
+    font-size: 12px;
+    color: #6b7280;
+    font-weight: 500;
+  }
+  .user-badge {
+    background: rgba(99,102,241,0.15);
+    border: 1px solid rgba(99,102,241,0.25);
+    color: #818cf8;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 8px;
+    letter-spacing: 0.3px;
+  }
+
+  /* Menu list */
+  .menu-section {
+    margin-bottom: 14px;
+  }
+  .menu-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #4b5563;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 8px;
+    padding-left: 4px;
+  }
+  .menu-list {
+    background: #12121e;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    position: relative;
+  }
+  .menu-item + .menu-item::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 56px; right: 0;
+    height: 1px;
+    background: rgba(255,255,255,0.05);
+  }
+  .menu-icon {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .menu-icon.green { background: rgba(34,197,94,0.15); }
+  .menu-icon.indigo { background: rgba(99,102,241,0.15); }
+  .menu-icon.blue { background: rgba(59,130,246,0.15); }
+  .menu-icon.purple { background: rgba(139,92,246,0.15); }
+  .menu-icon.amber { background: rgba(251,191,36,0.15); }
+
+  .menu-text { flex: 1; }
+  .menu-label {
+    font-size: 14.5px;
+    font-weight: 600;
+    color: #e5e7eb;
+    letter-spacing: -0.2px;
+  }
+  .menu-sub {
+    font-size: 12px;
+    color: #6b7280;
+    margin-top: 1px;
+  }
+  .chevron {
+    display: flex; align-items: center;
+  }
+  .badge {
+    background: #ef4444;
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 10px;
+    margin-right: 6px;
+    min-width: 22px;
+    text-align: center;
+  }
+
+  /* Logout */
+  .logout-btn {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 14px;
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    cursor: pointer;
+  }
+  .logout-text {
+    font-size: 15px;
+    font-weight: 600;
+    color: #ef4444;
+    letter-spacing: -0.2px;
+  }
+
+  /* Version */
+  .version-text {
+    text-align: center;
+    font-size: 12px;
+    color: #374151;
+    font-weight: 500;
+  }
+
+  /* Tab Bar */
+  .tab-bar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 83px;
+    background: rgba(18, 18, 30, 0.85);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: flex-start;
+    padding-top: 10px;
+  }
+  .tab-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .tab-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: #4b5563;
+  }
+  .tab-item.active .tab-label { color: #6366f1; }
+</style>
+</head>
+<body>
+
+<!-- Status Bar -->
+<div class="status-bar">
+  <span>9:41</span>
+  <div class="status-icons">
+    <svg width="17" height="12" viewBox="0 0 17 12" fill="white">
+      <rect x="0" y="3" width="3" height="9" rx="1"/>
+      <rect x="4.5" y="2" width="3" height="10" rx="1"/>
+      <rect x="9" y="0" width="3" height="12" rx="1"/>
+      <rect x="13.5" y="0" width="3" height="12" rx="1" opacity="0.35"/>
+    </svg>
+    <svg width="25" height="12" viewBox="0 0 25 12" fill="white">
+      <rect x="0.5" y="0.5" width="21" height="11" rx="3.5" stroke="white" stroke-opacity="0.35" fill="none"/>
+      <rect x="2" y="2" width="17" height="8" rx="2" fill="white"/>
+      <path d="M23 4.5v3c.8-.4 1.3-1 1.3-1.5s-.5-1.1-1.3-1.5z"/>
+    </svg>
+  </div>
+</div>
+
+<div class="content">
+  <div class="page-header">
+    <div class="page-title">Още</div>
+  </div>
+
+  <!-- User Card -->
+  <div class="user-card">
+    <div class="avatar">А</div>
+    <div class="user-info">
+      <div class="user-name">Администратор</div>
+      <div class="user-role">admin@greekfoods.bg</div>
+    </div>
+    <div class="user-badge">ADMIN</div>
+  </div>
+
+  <!-- Menu Section -->
+  <div class="menu-section">
+    <div class="menu-section-title">Управление</div>
+    <div class="menu-list">
+      <div class="menu-item">
+        <div class="menu-icon green">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
+          </svg>
+        </div>
+        <div class="menu-text">
+          <div class="menu-label">Инвентар</div>
+          <div class="menu-sub">1808 продукта</div>
+        </div>
+        <div class="chevron">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </div>
+      </div>
+      <div class="menu-item">
+        <div class="menu-icon indigo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+        </div>
+        <div class="menu-text">
+          <div class="menu-label">Поръчки</div>
+          <div class="menu-sub">История и статуси</div>
+        </div>
+        <div class="chevron">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </div>
+      </div>
+      <div class="menu-item">
+        <div class="menu-icon blue">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="1" y="3" width="15" height="13"/>
+            <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/>
+            <circle cx="5.5" cy="18.5" r="2.5"/>
+            <circle cx="18.5" cy="18.5" r="2.5"/>
+          </svg>
+        </div>
+        <div class="menu-text">
+          <div class="menu-label">Входящи доставки</div>
+          <div class="menu-sub">Получи стока</div>
+        </div>
+        <div class="chevron">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </div>
+      </div>
+      <div class="menu-item">
+        <div class="menu-icon purple">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+        </div>
+        <div class="menu-text">
+          <div class="menu-label">Отчети</div>
+          <div class="menu-sub">PDF, Excel, статистики</div>
+        </div>
+        <div class="chevron">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </div>
+      </div>
+      <div class="menu-item">
+        <div class="menu-icon amber">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 01-3.46 0"/>
+          </svg>
+        </div>
+        <div class="menu-text">
+          <div class="menu-label">Известия</div>
+          <div class="menu-sub">Аларми и уведомления</div>
+        </div>
+        <div class="badge">17</div>
+        <div class="chevron">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logout -->
+  <div class="logout-btn">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+      <polyline points="16 17 21 12 16 7"/>
+      <line x1="21" y1="12" x2="9" y2="12"/>
+    </svg>
+    <span class="logout-text">Изход от профила</span>
+  </div>
+
+  <div class="version-text">Greek Foods v1.0</div>
+</div>
+
+<!-- Tab Bar -->
+<div class="tab-bar">
+  <div class="tab-item">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+      </svg>
+    </div>
+    <span class="tab-label">Панел</span>
+  </div>
+  <div class="tab-item">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+    </div>
+    <span class="tab-label">Сканирай</span>
+  </div>
+  <div class="tab-item">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+        <polyline points="17 6 23 6 23 12"/>
+      </svg>
+    </div>
+    <span class="tab-label">Продажби</span>
+  </div>
+  <div class="tab-item active">
+    <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>
+      </svg>
+    </div>
+    <span class="tab-label" style="color:#6366f1;">Още</span>
+  </div>
+</div>
+
+</body>
+</html>

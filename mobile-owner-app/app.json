@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "Greek Foods Owner",
+    "slug": "greek-foods-owner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0c0f1c"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.greekfoods.owner"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0c0f1c"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.greekfoods.owner",
+      "minSdkVersion": 28
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ],
+    "owner": "jokermagician2008",
+    "extra": {
+      "eas": {
+        "projectId": "08e030b3-90ca-415b-a2ee-8e00faff63cd"
+      }
+    }
+  }
+}

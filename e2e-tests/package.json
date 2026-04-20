@@ -1,0 +1,21 @@
+{
+  "name": "e2e-tests",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:auth": "playwright test tests/auth.spec.ts",
+    "test:owner-scan": "playwright test tests/owner-invoice-scan.spec.ts",
+    "test:incoming-regression": "playwright test tests/duplicate-scan-precheck.spec.ts tests/incoming-goods-scan-review.spec.ts tests/owner-invoice-scan.spec.ts",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

@@ -1,0 +1,12 @@
+-- 008_price_groups.sql: Add price group columns to products table
+-- Microinvest uses 10 price tiers per product
+
+ALTER TABLE products ADD COLUMN IF NOT EXISTS retail_price DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_1 DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_2 DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_3 DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_4 DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_5 DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_6 DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_7 DECIMAL(12,4) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS price_group_8 DECIMAL(12,4) DEFAULT 0;
