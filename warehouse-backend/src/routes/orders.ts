@@ -104,6 +104,17 @@ const createOrderSchema = z.object({
   partner_object_id: z.number().int().positive().nullish(),
   object_name: z.string().nullish(),
   object_code: z.string().nullish(),
+  econt_receiver_name: z.string().trim().max(255).optional(),
+  econt_receiver_phone: z.string().trim().max(50).optional(),
+  econt_delivery_type: z.enum(["office", "address"]).optional(),
+  econt_city: z.string().trim().max(255).optional(),
+  econt_office_code: z.string().trim().max(50).optional(),
+  econt_office_name: z.string().trim().max(500).optional(),
+  econt_street: z.string().trim().max(255).optional(),
+  econt_street_num: z.string().trim().max(20).optional(),
+  econt_cod_amount: z.coerce.number().nonnegative().optional(),
+  econt_weight: z.coerce.number().positive().optional(),
+  econt_shipping_cost: z.coerce.number().nonnegative().optional(),
   items: z.array(orderItemSchema).min(1),
 });
 
@@ -643,9 +654,16 @@ export default async function orderRoutes(app: FastifyInstance) {
       } = await client.query(
         `INSERT INTO orders (
            partner_id, delivery_date, notes, source, request_number,
-           partner_object_id, object_name, object_code, status, order_number
+           partner_object_id, object_name, object_code,
+           econt_receiver_name, econt_receiver_phone, econt_delivery_type,
+           econt_city, econt_office_code, econt_office_name,
+           econt_street, econt_street_num, econt_cod_amount,
+           econt_weight, econt_shipping_cost,
+           status, order_number
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', nextval('order_number_seq'))
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                 $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                 'pending', nextval('order_number_seq'))
          RETURNING *`,
         [
           body.partner_id,
@@ -656,6 +674,17 @@ export default async function orderRoutes(app: FastifyInstance) {
           objectSelection.partnerObjectId,
           objectSelection.objectName,
           objectSelection.objectCode,
+          body.econt_receiver_name ?? null,
+          body.econt_receiver_phone ?? null,
+          body.econt_delivery_type ?? null,
+          body.econt_city ?? null,
+          body.econt_office_code ?? null,
+          body.econt_office_name ?? null,
+          body.econt_street ?? null,
+          body.econt_street_num ?? null,
+          body.econt_cod_amount ?? null,
+          body.econt_weight ?? null,
+          body.econt_shipping_cost ?? null,
         ],
       );
 
