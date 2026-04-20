@@ -50,10 +50,6 @@ interface CompanySettings {
   fiscal_auto_print?: boolean;
   fiscal_operator_id?: string;
   fiscal_operator_password?: string;
-  // Write-off commission (НАП protocol auto-fill)
-  writeoff_commission_chair?: string;
-  writeoff_commission_member1?: string;
-  writeoff_commission_member2?: string;
 }
 
 export function Settings() {
@@ -718,65 +714,6 @@ export function Settings() {
                       }
                       placeholder="contact@example.com"
                     />
-                  </div>
-                </div>
-
-                {/* Write-off commission section — pre-fills the 3
-                    signature lines on Протокол за бракуване PDFs. */}
-                <div className="mt-6 pt-6 border-t border-gray-200">
-                  <h3 className="font-semibold text-sm mb-1">
-                    Комисия за бракуване (ООД / ЕООД изискване)
-                  </h3>
-                  <p className="text-xs text-gray-500 mb-3">
-                    Имената ще се попълват автоматично на протоколите за
-                    бракуване (Закон за счетоводството чл. 54 ал. 1).
-                    Физическите подписи остават ръчни — оставяме място срещу
-                    всяко име.
-                  </p>
-
-                  <div className="space-y-3">
-                    <div>
-                      <Label>Председател *</Label>
-                      <Input
-                        value={companyForm.writeoff_commission_chair || ""}
-                        onChange={(e) =>
-                          handleCompanyFormChange(
-                            "writeoff_commission_chair",
-                            e.target.value,
-                          )
-                        }
-                        placeholder="напр. Иван Петров (управител)"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <Label>Член 1 *</Label>
-                        <Input
-                          value={companyForm.writeoff_commission_member1 || ""}
-                          onChange={(e) =>
-                            handleCompanyFormChange(
-                              "writeoff_commission_member1",
-                              e.target.value,
-                            )
-                          }
-                          placeholder="напр. складов работник"
-                        />
-                      </div>
-                      <div>
-                        <Label>Член 2 *</Label>
-                        <Input
-                          value={companyForm.writeoff_commission_member2 || ""}
-                          onChange={(e) =>
-                            handleCompanyFormChange(
-                              "writeoff_commission_member2",
-                              e.target.value,
-                            )
-                          }
-                          placeholder="напр. счетоводител"
-                        />
-                      </div>
-                    </div>
                   </div>
                 </div>
 

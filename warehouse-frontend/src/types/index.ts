@@ -46,33 +46,16 @@ export interface Product {
   price_group_8?: number;
 }
 
-export interface Batch {
-  id: number;
-  product_id: number;
-  batch_number: string;
-  expiry_date: string;
-  quantity: number;
-  purchase_price?: number;
-  delivery_id?: number;
-  received_date?: string;
-  notes?: string;
-  created_at: string;
-  updated_at?: string;
-  product?: Product;
-}
-
 export interface InventoryItem {
   product_id: number;
-  batch_id: number;
   warehouse_id: number;
   quantity: number;
   product?: Product;
-  batch?: Batch;
 }
 
 export interface StockLevel {
   product_id: number;
-  product_name: string;
+  product_name?: string;
   name_bg?: string;
   name_en?: string;
   sku: string;
@@ -80,12 +63,10 @@ export interface StockLevel {
   total_quantity: number;
   total_stock?: number | string;
   low_stock_threshold?: number;
-  batches: {
-    batch_id: number;
-    batch_number: string;
-    expiry_date: string;
-    quantity: number;
-  }[];
+  selling_price?: number | string;
+  purchase_price?: number | string;
+  category_name_bg?: string;
+  category_name_en?: string;
 }
 
 export interface Supplier {
@@ -178,7 +159,6 @@ export interface IncomingItem {
   id: number;
   incoming_goods_id: number;
   product_id: number;
-  batch_id?: number;
   quantity: number;
   unit_price: number;
   total_price: number;
@@ -232,12 +212,10 @@ export interface OrderItem {
   id: number;
   order_id: number;
   product_id: number;
-  batch_id?: number;
   quantity: number;
   unit_price: number;
   total_price: number;
   product?: Product;
-  batch?: Batch;
   name_bg?: string;
   name_en?: string;
   sku?: string;
@@ -298,7 +276,6 @@ export interface DashboardKPIs {
   todays_orders: number;
   low_stock_count: number;
   pending_payments: number;
-  expiring_batches: number;
 }
 
 export interface SalesData {
@@ -336,15 +313,7 @@ export interface ScannedInvoiceItem {
   unit: string;
   price: number;
   unit_price?: number;
-  batch?: string | null;
-  batch_number?: string | null;
-  batch_number_raw?: string | null;
-  expiry?: string | null;
-  expiry_date?: string | null;
-  expiry_date_raw?: string | null;
-  production_date?: string | null;
   notes_raw?: string | null;
-  auto_batch?: string | null;
   total?: number | null;
   brand?: string | null;
   category_hint?: string | null;
@@ -374,9 +343,6 @@ export interface ScannedInvoice {
   invoice_number?: string | null;
   invoice_date?: string | null;
   document_type?: string | null;
-  needs_companion_doc?: boolean;
-  missing_batch?: boolean;
-  missing_expiry?: boolean;
   total?: number | null;
   currency?: string;
   scanned_file_path?: string;

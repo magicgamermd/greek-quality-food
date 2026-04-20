@@ -8,7 +8,6 @@ import {
   Package,
   Plus,
   RefreshCw,
-  Search,
   Upload,
   X,
 } from "lucide-react";
@@ -26,8 +25,6 @@ type ScannedItem = {
   quantity: number;
   unit_price: number;
   total_price?: number;
-  batch_number?: string | null;
-  expiry_date?: string | null;
   // Match fields (filled from /incoming/match-preview)
   matched_product_id?: number | null;
   matched_product_name?: string | null;
@@ -55,7 +52,6 @@ type ScanResult = {
   invoice_date?: string | null;
   total_amount?: number | null;
   items: ScannedItem[];
-  needs_companion_doc?: boolean;
   duplicate?: {
     duplicate: true;
     existing_id: number;
@@ -74,18 +70,16 @@ type Product = {
   selling_price?: number;
 };
 
-type Step = "idle" | "scanning" | "review" | "companion" | "saving" | "done";
+type Step = "idle" | "scanning" | "review" | "saving" | "done";
 
 export function OwnerScan() {
   const [step, setStep] = useState<Step>("idle");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [items, setItems] = useState<ScannedItem[]>([]);
-  const [companionScanning, setCompanionScanning] = useState(false);
   const [scannedFile, setScannedFile] = useState<File | null>(null);
   const [isTraining, setIsTraining] = useState(false);
   const [trainedFor, setTrainedFor] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const companionInputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
   const navigate = useNavigate();
 
@@ -161,8 +155,6 @@ export function OwnerScan() {
         quantity: parseFloat(li.quantity ?? 1),
         unit_price: parseFloat(li.unit_price ?? li.price ?? 0),
         total_price: parseFloat(li.total_price ?? 0),
-        batch_number: li.batch_number ?? null,
-        expiry_date: li.expiry_date ?? null,
       }));
 
       if (matched.length > 0) {
@@ -219,7 +211,6 @@ export function OwnerScan() {
         invoice_date: data.invoice_date ?? "",
         total_amount: parseFloat(data.total_amount ?? 0),
         items: matched,
-        needs_companion_doc: data.needs_companion_doc ?? false,
         duplicate:
           data.duplicate_invoice && data.duplicate_invoice.duplicate
             ? data.duplicate_invoice
@@ -230,24 +221,6 @@ export function OwnerScan() {
       setScanResult(data);
       setItems(data.items);
       setStep("review");
-
-      // Post-primary-scan shift detector: if the invoice itself has a
-      // batch_number column (L.N.) but row 1 is empty while ≥60% of later
-      // rows carry a batch, this is the classic "AI ate the header row"
-      // off-by-one pattern. Warn loudly so the user verifies before save.
-      const rows = data.items || [];
-      if (rows.length >= 3) {
-        const firstEmpty = !rows[0].batch_number;
-        const restFilled = rows
-          .slice(1)
-          .filter((r: any) => r.batch_number).length;
-        if (firstEmpty && restFilled >= Math.floor((rows.length - 1) * 0.6)) {
-          toast.warning(
-            "⚠️ Първият ред е без партида, а следващите имат. Възможно е AI-ът да е разместил колона 'партида' с 1 ред. Провери внимателно!",
-            { duration: 12000 },
-          );
-        }
-      }
     },
     onError: (err) => {
       toast.error(
@@ -283,7 +256,7 @@ export function OwnerScan() {
         );
       }
 
-      // 2. Create the incoming delivery with items + batches.
+      // 2. Create the incoming delivery with items.
       //    Strip undefined/null keys so backend Zod schemas don't complain
       //    about optional fields being explicitly null.
       const cleanObj = <T extends object>(o: T): Partial<T> =>
@@ -325,8 +298,6 @@ export function OwnerScan() {
           quantity: toNum(i.quantity) ?? 0,
           unit_price: toNum(i.unit_price) ?? 0,
           selling_price: toNum(i.selling_price),
-          batch_number: i.batch_number ?? undefined,
-          expiry_date: i.expiry_date ?? undefined,
         }),
       );
       return api.post("/incoming", payload);
@@ -363,8 +334,7 @@ export function OwnerScan() {
   /**
    * "Teach the AI" — send the corrected extraction back as a template for
    * future few-shot learning. Next time this supplier's invoice is scanned,
-   * the AI will see this confirmed example and extract more accurately
-   * (especially for supplier-specific quirks like ELMAR's L.N. batch format).
+   * the AI will see this confirmed example and extract more accurately.
    */
   const trainFromScan = async () => {
     if (!scannedFile || !scanResult || items.length === 0) return;
@@ -396,8 +366,6 @@ export function OwnerScan() {
           quantity: i.quantity,
           unit_price: i.unit_price,
           total_price: i.total_price ?? i.quantity * i.unit_price,
-          batch_number_raw: i.batch_number || null,
-          expiry_date_raw: i.expiry_date || null,
         })),
       };
 
@@ -420,219 +388,7 @@ export function OwnerScan() {
     }
   };
 
-  /**
-   * Scan a companion document (2nd doc with batch + expiry per product)
-   * and merge the results into the main invoice items.
-   *
-   * Matching strategy (first hit wins):
-   *   1. product_code exact match
-   *   2. matched_product_sku contains the companion's product_code
-   *   3. name-word overlap (words > 2 chars)
-   *   4. positional fallback (same index)
-   */
-  const handleCompanionScan = async (file: File) => {
-    setCompanionScanning(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await api.post("/incoming/scan", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        timeout: 150_000,
-      });
-      const data = res.data ?? {};
-      const rawItems: any[] = Array.isArray(data.items)
-        ? data.items
-        : Array.isArray(data.line_items)
-          ? data.line_items
-          : [];
-
-      if (rawItems.length === 0) {
-        toast.error("Не открих редове във 2-рия документ.");
-        return;
-      }
-
-      const normalize = (value: string | null | undefined) =>
-        String(value ?? "")
-          .toLowerCase()
-          .replace(/[^a-zа-яё0-9]/gi, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-
-      type CompanionItem = {
-        product_code: string;
-        name: string;
-        batch_number: string | null;
-        production_date: string | null;
-        expiry_date: string | null;
-      };
-      const companionItems: CompanionItem[] = rawItems.map((li: any) => ({
-        product_code: String(li.product_code_raw ?? li.product_code ?? "")
-          .trim()
-          .toUpperCase(),
-        name: normalize(
-          li.product_name_raw ??
-            li.product_name ??
-            li.name_en ??
-            li.name_bg ??
-            li.name,
-        ),
-        batch_number: li.batch_number ?? li.batch_number_raw ?? null,
-        production_date: li.production_date ?? null,
-        expiry_date: li.expiry_date ?? li.expiry_date_raw ?? null,
-      }));
-
-      const used = new Set<number>();
-      const merged = items.map((item, idx) => {
-        const invoiceCode = String(item.product_code ?? "")
-          .trim()
-          .toUpperCase();
-        const invoiceName = normalize(
-          item.matched_product_name || item.product_name,
-        );
-
-        // 1. Exact product_code match
-        let matchIdx = companionItems.findIndex(
-          (c, i) =>
-            !used.has(i) && c.product_code && c.product_code === invoiceCode,
-        );
-
-        // 2. matched_product_sku contains companion code (e.g. D1002 contains "1002")
-        if (matchIdx < 0 && item.matched_product_sku) {
-          const sku = item.matched_product_sku.toUpperCase();
-          matchIdx = companionItems.findIndex(
-            (c, i) =>
-              !used.has(i) &&
-              c.product_code &&
-              (sku.endsWith(c.product_code) || sku === c.product_code),
-          );
-        }
-
-        // 3. Name overlap — count shared words > 2 chars
-        if (matchIdx < 0 && invoiceName) {
-          const words = invoiceName.split(" ").filter((w) => w.length > 2);
-          let bestScore = 0;
-          companionItems.forEach((c, i) => {
-            if (used.has(i) || !c.name) return;
-            const cWords = c.name.split(" ").filter((w) => w.length > 2);
-            const overlap = words.filter((w) =>
-              cWords.some((cw) => cw.includes(w) || w.includes(cw)),
-            ).length;
-            if (overlap > bestScore) {
-              bestScore = overlap;
-              matchIdx = i;
-            }
-          });
-          if (bestScore === 0) matchIdx = -1;
-        }
-
-        // 4. Positional fallback
-        if (matchIdx < 0 && companionItems[idx] && !used.has(idx)) {
-          matchIdx = idx;
-        }
-
-        if (matchIdx < 0) return item;
-        used.add(matchIdx);
-        const c = companionItems[matchIdx];
-
-        const expiry = c.expiry_date || item.expiry_date || null;
-        // Batch fallback chain: companion batch_number → from production_date →
-        // from expiry - 2 months (DDMMYY) → keep existing
-        let batch = c.batch_number || item.batch_number || null;
-        if (!batch && c.production_date) {
-          const d = new Date(c.production_date);
-          if (!isNaN(d.getTime())) {
-            const dd = String(d.getDate()).padStart(2, "0");
-            const mm = String(d.getMonth() + 1).padStart(2, "0");
-            const yy = String(d.getFullYear()).slice(-2);
-            batch = `${dd}${mm}${yy}`;
-          }
-        }
-        if (!batch && expiry) {
-          const d = new Date(expiry);
-          if (!isNaN(d.getTime())) {
-            d.setMonth(d.getMonth() - 2);
-            const dd = String(d.getDate()).padStart(2, "0");
-            const mm = String(d.getMonth() + 1).padStart(2, "0");
-            const yy = String(d.getFullYear()).slice(-2);
-            batch = `${dd}${mm}${yy}`;
-          }
-        }
-
-        return { ...item, expiry_date: expiry, batch_number: batch };
-      });
-
-      // ── Off-by-one shift detection ────────────────────────────────────
-      //
-      // Classic OCR failure: the AI "eats" the first data row's batch value
-      // (confuses it with the header row) and pushes all batch values up by
-      // one — so row 1 ends up empty while rows 2..N carry the value that
-      // visually belongs to the row ABOVE them.
-      //
-      // Signatures we detect:
-      //   A. First row missing batch while ≥60% of the rest have one.
-      //   B. companion[N].batch_number literally matches invoice[N-1]'s
-      //      L.N. (ground-truth cross-check).
-      //
-      // When detected we issue a warning — we never silently swap values,
-      // the user must verify.
-      const withCompanion = merged.filter((_, i) => {
-        const src = companionItems;
-        return src.some(
-          (c) =>
-            c.product_code ===
-            String(items[i].product_code ?? "")
-              .trim()
-              .toUpperCase(),
-        );
-      });
-      const firstRowEmpty = merged.length > 0 && !merged[0].batch_number;
-      const restWithBatch = merged
-        .slice(1)
-        .filter((m) => m.batch_number).length;
-      const shiftPatternA =
-        firstRowEmpty &&
-        merged.length >= 3 &&
-        restWithBatch >= Math.floor((merged.length - 1) * 0.6);
-
-      let shiftPatternB = 0;
-      for (let i = 1; i < merged.length; i += 1) {
-        const curr = merged[i].batch_number;
-        const prevInvoice = items[i - 1].batch_number;
-        if (curr && prevInvoice && curr === prevInvoice) {
-          shiftPatternB += 1;
-        }
-      }
-
-      setItems(merged);
-      const filled = merged.filter(
-        (m, i) =>
-          (m.expiry_date && !items[i].expiry_date) ||
-          (m.batch_number && !items[i].batch_number),
-      ).length;
-
-      if (shiftPatternA || shiftPatternB >= 2) {
-        toast.warning(
-          "⚠️ Открит възможен off-by-one shift в партидите от 2-рия документ. Провери внимателно ред 1 и всички партиди преди запис.",
-          { duration: 12000 },
-        );
-      } else if (withCompanion.length > 0) {
-        toast.success(`Попълних ${filled} реда от 2-рия документ.`);
-      } else {
-        toast.success(`Попълних ${filled} реда от 2-рия документ.`);
-      }
-    } catch (err) {
-      toast.error(
-        getApiErrorMessage(err, "Грешка при сканиране на 2-рия документ."),
-      );
-    } finally {
-      setCompanionScanning(false);
-    }
-  };
-
   const unmatchedCount = items.filter((i) => !i.matched_product_id).length;
-  const missingExpiryCount = items.filter(
-    (i) => i.matched_product_id && !i.expiry_date,
-  ).length;
 
   // Derive SKU prefix by LEARNING from matched items in this scan.
   //
@@ -680,8 +436,7 @@ export function OwnerScan() {
       <div className="p-4 max-w-xl mx-auto space-y-4 pb-24">
         <h1 className="text-xl font-bold text-[#f3f6ff]">Сканирай фактура</h1>
         <p className="text-sm text-[#9aa8d6]">
-          Снимай доставническа фактура. AI ще извади продуктите, партидите и
-          сроковете автоматично.
+          Снимай доставническа фактура. AI ще извади продуктите автоматично.
         </p>
 
         <div className="grid grid-cols-1 gap-3">
@@ -748,7 +503,7 @@ export function OwnerScan() {
           <ul className="space-y-1 list-disc list-inside">
             <li>Добро осветление, без блик</li>
             <li>Цялата фактура в кадъра</li>
-            <li>Ако има 2-ри документ с партиди — след това</li>
+            <li>Чети SKU-тата — правят match по-точен</li>
           </ul>
         </div>
       </div>
@@ -784,7 +539,7 @@ export function OwnerScan() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-[#ff6b8a] text-sm">
-                  ⚠ Дубликат на фактура
+                  Дубликат на фактура
                 </p>
                 <p className="text-xs text-[#ffb0c0] mt-1">
                   Фактура{" "}
@@ -822,8 +577,8 @@ export function OwnerScan() {
           {!(supplierOverrideId ?? scanResult.supplier_id) ? (
             <div className="rounded-lg bg-[#f7c12a]/10 border border-[#f7c12a]/30 p-2 space-y-1.5">
               <p className="text-[11px] text-[#f7c12a] font-medium">
-                ⚠ Доставчикът не е разпознат автоматично. Избери от списъка, за
-                да го запомня за следващия път.
+                Доставчикът не е разпознат автоматично. Избери от списъка, за да
+                го запомня за следващия път.
               </p>
               <Combobox
                 variant="dark"
@@ -874,7 +629,7 @@ export function OwnerScan() {
         </div>
 
         {/* Match summary */}
-        <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="grid grid-cols-2 gap-2 text-center">
           <div className="rounded-lg bg-[#25c38b]/15 border border-[#25c38b]/30 py-2">
             <p className="text-lg font-bold text-[#25c38b]">
               {items.length - unmatchedCount}
@@ -884,12 +639,6 @@ export function OwnerScan() {
           <div className="rounded-lg bg-[#ff6b8a]/15 border border-[#ff6b8a]/30 py-2">
             <p className="text-lg font-bold text-[#ff6b8a]">{unmatchedCount}</p>
             <p className="text-[10px] text-[#9aa8d6] uppercase">Без match</p>
-          </div>
-          <div className="rounded-lg bg-[#ffb454]/15 border border-[#ffb454]/30 py-2">
-            <p className="text-lg font-bold text-[#ffb454]">
-              {missingExpiryCount}
-            </p>
-            <p className="text-[10px] text-[#9aa8d6] uppercase">Без срок</p>
           </div>
         </div>
 
@@ -913,48 +662,8 @@ export function OwnerScan() {
           ))}
         </div>
 
-        {/* Companion doc CTA if missing batches */}
-        {missingExpiryCount > 0 || scanResult.needs_companion_doc ? (
-          <button
-            onClick={() => {
-              if (!companionScanning) companionInputRef.current?.click();
-            }}
-            disabled={companionScanning}
-            className="w-full rounded-xl border border-[#ffb454] bg-[#ffb454]/10 hover:bg-[#ffb454]/20 p-3 text-sm text-[#ffb454] flex items-center justify-center gap-2 transition-colors disabled:opacity-60"
-          >
-            {companionScanning ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Сканирам 2-ри документ...
-              </>
-            ) : (
-              <>
-                <Camera className="h-4 w-4" />
-                Снимай 2-ри документ с партиди ({missingExpiryCount} липсват)
-              </>
-            )}
-          </button>
-        ) : null}
-
-        <input
-          ref={companionInputRef}
-          type="file"
-          accept="image/*,.heic,.heif,application/pdf"
-          className="hidden"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            // Reset so the same file can be picked again if needed
-            e.target.value = "";
-            await handleCompanionScan(file);
-          }}
-        />
-
-        {/* Train AI — only visible when scan is healthy (all matched + batches set) */}
-        {unmatchedCount === 0 &&
-        missingExpiryCount === 0 &&
-        items.length > 0 &&
-        scannedFile ? (
+        {/* Train AI — only visible when all items matched */}
+        {unmatchedCount === 0 && items.length > 0 && scannedFile ? (
           <button
             type="button"
             onClick={trainFromScan}
@@ -972,7 +681,7 @@ export function OwnerScan() {
                 AI научен за {scanResult.supplier_name}
               </>
             ) : (
-              <>🎓 Обучи AI от тази фактура ({scanResult.supplier_name})</>
+              <>Обучи AI от тази фактура ({scanResult.supplier_name})</>
             )}
           </button>
         ) : null}
@@ -1112,13 +821,9 @@ function ItemRow({
   onChange: (patch: Partial<ScannedItem>) => void;
   onRemove: () => void;
 }) {
-  // Auto-expand rows that need attention: no match, missing batch/expiry,
-  // or price was edited by user. Matched-clean rows stay collapsed.
+  // Auto-expand rows that need attention: no match or low-confidence match.
   const needsAttention =
-    !item.matched_product_id ||
-    !item.batch_number ||
-    !item.expiry_date ||
-    (item.match_confidence ?? 0) < 0.85;
+    !item.matched_product_id || (item.match_confidence ?? 0) < 0.85;
   const [expanded, setExpanded] = useState(needsAttention);
 
   const matchStatus = !item.matched_product_id
@@ -1176,14 +881,12 @@ function ItemRow({
               ) : null}
             </p>
           ) : null}
-          {/* Third line: quantity, prices, batch info */}
+          {/* Third line: quantity, prices */}
           <p className="text-xs text-[#9aa8d6] mt-0.5 truncate">
             {item.quantity} × {formatCurrency(item.unit_price)}
             {item.selling_price != null && item.selling_price > 0
               ? ` → ${formatCurrency(item.selling_price)}${priceChanged ? " *" : ""}`
               : ""}
-            {item.batch_number ? ` · №${item.batch_number}` : ""}
-            {item.expiry_date ? ` · до ${item.expiry_date}` : ""}
           </p>
         </div>
         <span
@@ -1324,7 +1027,7 @@ function ItemRow({
               {item.matched_product_id &&
               (item.selling_price == null || item.selling_price === 0) ? (
                 <p className="text-[10px] text-[#ff6b8a] mt-1">
-                  ⚠ Няма продажна цена в базата
+                  Няма продажна цена в базата
                 </p>
               ) : null}
             </div>
@@ -1344,125 +1047,6 @@ function ItemRow({
               }
               className="w-full px-3 py-2 rounded-lg bg-[#12162a] border border-[#243055] text-sm text-[#f3f6ff] focus:border-[#4f7cff] outline-none"
             />
-          </div>
-
-          {/* Batch + expiry (manual entry if no companion doc) */}
-          <div className="rounded-lg border border-[#243055] p-2.5 space-y-2 bg-[#0a0d18]">
-            <p className="text-[10px] text-[#9aa8d6] uppercase tracking-wide">
-              Партида и срок на годност
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-xs text-[#9aa8d6] mb-1 block">
-                  Партида №
-                </label>
-                <div className="flex gap-1.5">
-                  <input
-                    type="text"
-                    value={item.batch_number ?? ""}
-                    onChange={(e) => onChange({ batch_number: e.target.value })}
-                    placeholder="Ръчно или от сорс"
-                    className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-[#12162a] border border-[#243055] text-sm text-[#f3f6ff] focus:border-[#4f7cff] outline-none"
-                  />
-                  <button
-                    type="button"
-                    disabled={!item.expiry_date}
-                    onClick={() => {
-                      if (!item.expiry_date) return;
-                      // Batch = expiry − 2 months, formatted DDMMYY.
-                      // Example: expiry 19.08.2026 → batch "190626"
-                      const exp = new Date(item.expiry_date);
-                      const batchDate = new Date(exp);
-                      batchDate.setMonth(batchDate.getMonth() - 2);
-                      const d = String(batchDate.getDate()).padStart(2, "0");
-                      const m = String(batchDate.getMonth() + 1).padStart(
-                        2,
-                        "0",
-                      );
-                      const yy = String(batchDate.getFullYear()).slice(-2);
-                      onChange({ batch_number: `${d}${m}${yy}` });
-                    }}
-                    title="Генерирай партида (срок − 2 месеца, DDMMYY)"
-                    className={cn(
-                      "shrink-0 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors",
-                      item.expiry_date
-                        ? "bg-[#4f7cff]/20 border-[#4f7cff] text-[#4f7cff] hover:bg-[#4f7cff]/30"
-                        : "bg-[#12162a] border-[#243055] text-[#6b7692] cursor-not-allowed opacity-50",
-                    )}
-                  >
-                    ⚡ Авто
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="text-xs text-[#9aa8d6] mb-1 block">
-                  Срок на годност
-                </label>
-                {/* Text-based date input (DD.MM.YY) instead of native
-                    <input type="date"> — on iOS the native control pops
-                    up a full-screen wheel picker that overflows the
-                    tile AND has no discoverable clear. The text field
-                    + a trailing ✕ button give the user full control,
-                    and the inputMode="numeric" in SmartDateInput
-                    surfaces the numeric keypad without zoom-jumps. */}
-                <div className="relative">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="ДД.ММ.ГГ"
-                    value={(() => {
-                      const iso = item.expiry_date ?? "";
-                      if (!iso) return "";
-                      const parts = iso.split("T")[0].split("-");
-                      if (parts.length !== 3) return "";
-                      return `${parts[2]}.${parts[1]}.${parts[0]}`;
-                    })()}
-                    onChange={(e) => {
-                      const digits = e.target.value
-                        .replace(/\D/g, "")
-                        .slice(0, 8);
-                      if (digits.length === 0) {
-                        onChange({ expiry_date: null });
-                        return;
-                      }
-                      if (digits.length !== 6 && digits.length !== 8) return;
-                      const dd = digits.slice(0, 2);
-                      const mm = digits.slice(2, 4);
-                      const yyyy =
-                        digits.length === 6
-                          ? `20${digits.slice(4, 6)}`
-                          : digits.slice(4, 8);
-                      const day = parseInt(dd, 10);
-                      const mon = parseInt(mm, 10);
-                      if (
-                        day < 1 ||
-                        day > 31 ||
-                        mon < 1 ||
-                        mon > 12 ||
-                        !/^\d{4}$/.test(yyyy)
-                      ) {
-                        return;
-                      }
-                      onChange({ expiry_date: `${yyyy}-${mm}-${dd}` });
-                    }}
-                    className="w-full pl-3 pr-9 py-2 rounded-lg bg-[#12162a] border border-[#243055] text-sm text-[#f3f6ff] focus:border-[#4f7cff] outline-none"
-                  />
-                  {item.expiry_date ? (
-                    <button
-                      type="button"
-                      onClick={() => onChange({ expiry_date: null })}
-                      aria-label="Изчисти датата"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 h-6 w-6 rounded-full flex items-center justify-center text-[#9aa8d6] hover:text-[#f3f6ff] hover:bg-[#1f2544]"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-            <p className="text-[10px] text-[#6b7692]">
-              ⚡ Авто = партида от срока минус 2 месеца във формат ДДММГГ
-            </p>
           </div>
 
           {/* Fuzzy suggestions for unmatched items */}

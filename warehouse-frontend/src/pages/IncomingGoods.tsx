@@ -4,7 +4,6 @@ import {
   Camera,
   Upload,
   CheckCircle,
-  Clock,
   AlertCircle,
   Eye,
   PackagePlus,
@@ -37,7 +36,6 @@ import { Combobox } from "@/components/ui/combobox";
 import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -59,31 +57,6 @@ import {
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
 import { BakaliqLoader } from "@/components/BakaliqLoader";
 import { HighlightMatch } from "@/lib/highlight";
-
-// Batch format: DDMMYYYY from production date
-function batchFromProdDate(prodDateStr: string): string {
-  try {
-    const d = new Date(prodDateStr);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    return `${dd}${mm}${d.getFullYear()}`;
-  } catch {
-    return "";
-  }
-}
-function autoBatchFromExpiry(
-  expiryDateStr: string,
-  shelfLifeMonths = 12,
-): string {
-  try {
-    const expiry = new Date(expiryDateStr);
-    const production = new Date(expiry);
-    production.setMonth(production.getMonth() - shelfLifeMonths);
-    return batchFromProdDate(production.toISOString().split("T")[0]);
-  } catch {
-    return "";
-  }
-}
 
 function toNumberOr(value: unknown, fallback = 0): number {
   const num = Number.parseFloat(String(value ?? ""));
@@ -149,17 +122,6 @@ function normalizeScannedInvoice(raw: any): ScannedInvoice {
       unit: li.unit ?? "бр",
       price: unitPrice,
       unit_price: unitPrice,
-      batch: li.batch_number ?? li.batch ?? null,
-      batch_number: li.batch_number ?? li.batch ?? li.batch_number_raw ?? null,
-      batch_number_raw:
-        li.batch_number_raw ?? li.batch_number ?? li.batch ?? null,
-      expiry: li.expiry_date ?? li.expiry ?? null,
-      expiry_date: li.expiry_date ?? li.expiry ?? li.expiry_date_raw ?? null,
-      expiry_date_raw:
-        li.expiry_date_raw ?? li.expiry_date ?? li.expiry ?? null,
-      production_date: li.production_date ?? null,
-      notes_raw: li.notes_raw ?? null,
-      auto_batch: li.auto_batch ?? null,
       total: toOptionalNumber(li.total_price ?? li.total),
       brand: li.brand ?? null,
       category_hint: li.category_hint ?? null,
@@ -190,9 +152,6 @@ function normalizeScannedInvoice(raw: any): ScannedInvoice {
     invoice_number: raw?.invoice_number ?? null,
     invoice_date: raw?.invoice_date ?? null,
     document_type: raw?.document_type ?? "invoice",
-    needs_companion_doc: Boolean(raw?.needs_companion_doc),
-    missing_batch: Boolean(raw?.missing_batch),
-    missing_expiry: Boolean(raw?.missing_expiry),
     total: toOptionalNumber(raw?.total ?? raw?.total_gross ?? raw?.total_net),
     currency: raw?.currency ?? "EUR",
     scanned_file_path: raw?.scanned_file_path,
@@ -228,177 +187,6 @@ const statusVariants: Record<
   cancelled: "destructive",
 };
 
-// Smart DD.MM expiry input — user types 4 digits (e.g. 1904), gets DD.MM + year badge
-function ExpiryDateInput({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (iso: string) => void;
-}) {
-  const curYear = new Date().getFullYear();
-  const parseInitial = () => {
-    if (!value) return { raw: "", year: curYear };
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return { raw: "", year: curYear };
-    return {
-      raw: `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`,
-      year: d.getFullYear(),
-    };
-  };
-  const init = parseInitial();
-  const [raw, setRaw] = useState(init.raw);
-  const [year, setYear] = useState(init.year);
-
-  const emit = (r: string, y: number) => {
-    const digits = r.replace(".", "");
-    if (digits.length === 4) {
-      const day = parseInt(digits.slice(0, 2));
-      const month = parseInt(digits.slice(2, 4));
-      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-        onChange(
-          `${y}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-        );
-        return;
-      }
-    }
-    onChange("");
-  };
-
-  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const digits = e.target.value.replace(/\D/g, "").slice(0, 4);
-    const formatted =
-      digits.length > 2 ? `${digits.slice(0, 2)}.${digits.slice(2)}` : digits;
-    setRaw(formatted);
-    emit(formatted, year);
-  };
-
-  const toggleYear = () => {
-    const maxYear = curYear + 3;
-    const newYear = year >= maxYear ? curYear : year + 1;
-    setYear(newYear);
-    emit(raw, newYear);
-  };
-
-  return (
-    <div className="flex items-center gap-2 mt-1">
-      <input
-        type="text"
-        inputMode="numeric"
-        value={raw}
-        onChange={handleInput}
-        placeholder="ДД.ММ"
-        maxLength={5}
-        className="w-20 border rounded px-2 py-1.5 text-sm font-mono tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
-      />
-      <button
-        type="button"
-        onClick={toggleYear}
-        title="Клик за следваща година"
-        className="text-xs px-2 py-1.5 rounded-md bg-blue-100 text-blue-700 font-bold hover:bg-blue-200 transition-colors select-none"
-      >
-        '{String(year).slice(2)}
-      </button>
-    </div>
-  );
-}
-
-// Smart date input — accepts DD.MM.YY or DD.MM.YYYY and auto-expands 2-digit year to 20YY
-const SmartDateInput = React.forwardRef<
-  HTMLInputElement,
-  {
-    value: string; // ISO YYYY-MM-DD or empty
-    onChange: (iso: string) => void;
-    onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
-    disabled?: boolean;
-    className?: string;
-    placeholder?: string;
-  }
->(({ value, onChange, onKeyDown, disabled, className, placeholder }, ref) => {
-  const isoToDot = (iso: string): string => {
-    if (!iso) return "";
-    const parts = iso.split("-");
-    if (parts.length !== 3) return "";
-    return `${parts[2]}.${parts[1]}.${parts[0]}`;
-  };
-
-  const [display, setDisplay] = useState(() => isoToDot(value));
-  const innerRef = useRef<HTMLInputElement | null>(null);
-
-  // Sync from parent when not focused
-  useEffect(() => {
-    const dotted = isoToDot(value);
-    if (document.activeElement !== innerRef.current && dotted !== display) {
-      setDisplay(dotted);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-
-  const parseAndEmit = (text: string) => {
-    const digits = text.replace(/\./g, "").replace(/\D/g, "");
-    if (digits.length !== 6 && digits.length !== 8) {
-      onChange("");
-      return;
-    }
-    const dd = digits.slice(0, 2);
-    const mm = digits.slice(2, 4);
-    const yyyy =
-      digits.length === 6 ? `20${digits.slice(4, 6)}` : digits.slice(4, 8);
-    const day = parseInt(dd, 10);
-    const mon = parseInt(mm, 10);
-    if (day < 1 || day > 31 || mon < 1 || mon > 12 || !/^\d{4}$/.test(yyyy)) {
-      onChange("");
-      return;
-    }
-    onChange(`${yyyy}-${mm}-${dd}`);
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-    const digits = raw.replace(/[^\d]/g, "").slice(0, 8);
-    let formatted = "";
-    if (digits.length <= 2) formatted = digits;
-    else if (digits.length <= 4)
-      formatted = `${digits.slice(0, 2)}.${digits.slice(2)}`;
-    else
-      formatted = `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}`;
-    setDisplay(formatted);
-    parseAndEmit(formatted);
-  };
-
-  const handleBlur = () => {
-    const digits = display.replace(/\./g, "");
-    if (digits.length === 6) {
-      // Expand YY → 20YY in display
-      setDisplay(
-        `${digits.slice(0, 2)}.${digits.slice(2, 4)}.20${digits.slice(4, 6)}`,
-      );
-    }
-  };
-
-  return (
-    <Input
-      ref={(el) => {
-        innerRef.current = el;
-        if (typeof ref === "function") ref(el);
-        else if (ref)
-          (ref as React.MutableRefObject<HTMLInputElement | null>).current = el;
-      }}
-      type="text"
-      inputMode="numeric"
-      value={display}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      onKeyDown={onKeyDown}
-      disabled={disabled}
-      className={className}
-      placeholder={placeholder ?? "ДД.ММ.ГГ"}
-      maxLength={10}
-    />
-  );
-});
-SmartDateInput.displayName = "SmartDateInput";
-
 export function IncomingGoods() {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -416,8 +204,6 @@ export function IncomingGoods() {
       quantity: string;
       unit_price: string;
       unit: string;
-      batch_number: string;
-      expiry_date: string;
       original_purchase_price: number | null;
     }[]
   >([
@@ -427,8 +213,6 @@ export function IncomingGoods() {
       quantity: "",
       unit_price: "",
       unit: "бр",
-      batch_number: "",
-      expiry_date: "",
       original_purchase_price: null,
     },
   ]);
@@ -460,8 +244,6 @@ export function IncomingGoods() {
     "quantity",
     "unit",
     "unit_price",
-    "expiry_date",
-    "batch_number",
   ] as const;
   type RowField = (typeof ROW_FIELD_ORDER)[number];
 
@@ -550,17 +332,6 @@ export function IncomingGoods() {
     invoice_date: string;
   }>({ supplier_id: "", invoice_number: "", invoice_date: "" });
   const [itemPrices, setItemPrices] = useState<Record<number, number>>({});
-  const [completionItems, setCompletionItems] = useState<any[]>([]);
-  const [completionDocId, setCompletionDocId] = useState<number | null>(null);
-  const [showCompletionModal, setShowCompletionModal] = useState(false);
-  const [completionStep, setCompletionStep] = useState<
-    "preview" | "ask" | "manual" | "companion"
-  >("preview");
-  const [companionScanning, setCompanionScanning] = useState(false);
-  const [companionScanError, setCompanionScanError] = useState("");
-  const [savingBatches, setSavingBatches] = useState(false);
-  const [completionConfirmError, setCompletionConfirmError] = useState("");
-  const [completionSaveError, setCompletionSaveError] = useState("");
 
   // Date — default today only; history mode allows custom range
   const today = new Date().toISOString().split("T")[0];
@@ -577,10 +348,6 @@ export function IncomingGoods() {
   const [loadingDetails, setLoadingDetails] = useState(false);
   // Local editable copy for pending-delivery edits
   const [editItems, setEditItems] = useState<any[]>([]);
-  // Refs for Enter-key navigation through batch/expiry fields in edit modal.
-  // Map keyed by item.id (or index string) → HTMLInputElement.
-  const editExpiryRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const editBatchRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [editHeader, setEditHeader] = useState<{
     supplier_id: string;
     invoice_number: string;
@@ -639,8 +406,6 @@ export function IncomingGoods() {
         quantity: "",
         unit_price: "",
         unit: "бр",
-        batch_number: "",
-        expiry_date: "",
         original_purchase_price: null,
       },
     ]);
@@ -953,10 +718,6 @@ export function IncomingGoods() {
             selling_price: dbSelling,
             selling_price_db: dbSelling,
             unit: item.unit || "бр",
-            batch_number: item.batch_number ?? "",
-            expiry_date: item.expiry_date
-              ? String(item.expiry_date).split("T")[0]
-              : "",
             // Dirty flags
             dirty: false,
             toDelete: false,
@@ -1022,8 +783,6 @@ export function IncomingGoods() {
           id: i.id,
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price || 0),
-          batch_number: i.batch_number || null,
-          expiry_date: i.expiry_date || null,
         }));
       if (dirty.length > 0) {
         await api.patch(`/incoming/${selectedDoc.id}/items`, { items: dirty });
@@ -1255,170 +1014,6 @@ export function IncomingGoods() {
     }
   };
 
-  // Save batch/expiry data via PATCH after delivery is confirmed
-  const handleSaveBatches = async () => {
-    setCompletionSaveError("");
-
-    if (completionDocId) {
-      setSavingBatches(true);
-      try {
-        const updates = completionItems.filter(
-          (i) => i.batch_number || i.expiry_date,
-        );
-        if (updates.length > 0) {
-          await api.patch(`/incoming/${completionDocId}/batches`, {
-            items: updates.map((i) => ({
-              incoming_item_id: i.incoming_item_id ?? null,
-              product_id: i.product_id,
-              batch_number: i.batch_number || null,
-              expiry_date: i.expiry_date || null,
-              production_date: i.production_date || null,
-            })),
-          });
-          qc.invalidateQueries({ queryKey: ["inventory"] });
-        }
-      } catch (error) {
-        setCompletionSaveError(
-          getApiErrorMessage(
-            error,
-            "Партидите и сроковете не бяха записани. Провери данните и опитай отново.",
-          ),
-        );
-        return;
-      } finally {
-        setSavingBatches(false);
-      }
-    }
-
-    setShowCompletionModal(false);
-    setCompletionStep("preview");
-    setCompletionConfirmError("");
-    setCompletionSaveError("");
-  };
-
-  // Scan companion/conformity document and merge batch+expiry into existing completionItems
-  const handleCompanionScan = async (file: File) => {
-    setCompanionScanning(true);
-    setCompanionScanError("");
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await api.post("/incoming/scan", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      const d = res.data ?? {};
-      // Normalize companion items — keep all fields (same fallback order as mobile)
-      const companionSource = Array.isArray(d.items)
-        ? d.items
-        : Array.isArray(d.line_items)
-          ? d.line_items
-          : [];
-      const companionItems: any[] = companionSource.map((li: any) => ({
-        name_en: (li.product_name || li.name || "").toLowerCase(),
-        name_bg: (li.name_bg || "").toLowerCase(),
-        product_code: String(li.product_code ?? "")
-          .trim()
-          .toUpperCase(),
-        batch_number: li.batch_number ?? null,
-        production_date: li.production_date ?? null,
-        expiry_date: li.expiry_date ?? null,
-        auto_batch: li.auto_batch ?? null,
-      }));
-
-      // Score-based name matching between invoice items (Bulgarian) and companion items (English/Greek)
-      const normalize = (s: string) =>
-        s
-          .toLowerCase()
-          .replace(/[^a-zа-яё0-9]/gi, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-
-      const companionCodeIndex = new Map<string, number[]>();
-      companionItems.forEach((ci, idx) => {
-        if (!ci.product_code) return;
-        const arr = companionCodeIndex.get(ci.product_code) ?? [];
-        arr.push(idx);
-        companionCodeIndex.set(ci.product_code, arr);
-      });
-      const usedCompanionIdx = new Set<number>();
-
-      const updated = completionItems.map((item, idx) => {
-        const invName = normalize(item.product_name || item.name_en || "");
-        const invCode = String(item.product_code ?? "")
-          .trim()
-          .toUpperCase();
-
-        let matchIdx: number | null = null;
-        if (invCode) {
-          const candidates = companionCodeIndex.get(invCode) ?? [];
-          matchIdx = candidates.find((ci) => !usedCompanionIdx.has(ci)) ?? null;
-        }
-
-        // Find best matching companion item by word overlap (one-to-one).
-        if (matchIdx == null) {
-          let bestScore = 0;
-          companionItems.forEach((ci, ciIdx) => {
-            if (usedCompanionIdx.has(ciIdx)) return;
-            const ciName = normalize(ci.name_en + " " + ci.name_bg);
-            const invWords = invName.split(" ").filter((w) => w.length > 2);
-            const ciWords = ciName.split(" ").filter((w) => w.length > 2);
-            const overlap = invWords.filter((w) =>
-              ciWords.some((cw) => cw.includes(w) || w.includes(cw)),
-            ).length;
-            if (overlap > bestScore) {
-              bestScore = overlap;
-              matchIdx = ciIdx;
-            }
-          });
-        }
-
-        // Positional fallback if no code/name match found.
-        if (
-          matchIdx == null &&
-          companionItems[idx] &&
-          !usedCompanionIdx.has(idx)
-        ) {
-          matchIdx = idx;
-        }
-        if (matchIdx == null) {
-          const firstUnused = companionItems.findIndex(
-            (_, ciIdx) => !usedCompanionIdx.has(ciIdx),
-          );
-          matchIdx = firstUnused >= 0 ? firstUnused : null;
-        }
-
-        const match = matchIdx != null ? companionItems[matchIdx] : null;
-        if (!match) return item;
-        usedCompanionIdx.add(matchIdx!);
-
-        const expiry = match.expiry_date || "";
-        // Batch priority: explicit from companion → auto_batch → preserve existing → from production_date → from expiry
-        const batch =
-          match.batch_number ||
-          match.auto_batch ||
-          item.batch_number ||
-          (match.production_date
-            ? batchFromProdDate(match.production_date)
-            : "") ||
-          (expiry ? autoBatchFromExpiry(expiry) : "");
-
-        return {
-          ...item,
-          expiry_date: expiry,
-          batch_number: batch,
-          production_date: match.production_date || item.production_date,
-        };
-      });
-
-      setCompletionItems(updated);
-      setCompletionStep("manual"); // show pre-filled manual entry
-    } catch {
-      setCompanionScanError("Грешка при сканиране на втория документ");
-    } finally {
-      setCompanionScanning(false);
-    }
-  };
-
   const confirmMutation = useMutation({
     mutationFn: async () => {
       // Create incoming document with editable unit prices
@@ -1445,9 +1040,6 @@ export function IncomingGoods() {
             unit: item.unit ?? undefined,
             quantity: item.quantity,
             unit_price: itemPrices[i] ?? item.unit_price ?? item.price ?? 0,
-            batch_number: item.batch_number ?? item.batch ?? undefined,
-            expiry_date: item.expiry_date ?? item.expiry ?? undefined,
-            production_date: item.production_date ?? undefined,
             selling_price:
               item.selling_price != null ? item.selling_price : undefined,
           };
@@ -1456,14 +1048,11 @@ export function IncomingGoods() {
       return doc.data;
     },
     onSuccess: async (doc) => {
-      setCompletionSaveError("");
-
       // Auto-confirm the delivery so inventory is updated immediately
       try {
         await api.put(`/incoming/${doc.id}/confirm`);
-        setCompletionConfirmError("");
       } catch (error) {
-        setCompletionConfirmError(
+        toast.error(
           getApiErrorMessage(
             error,
             "Доставката е записана, но потвърждението не успя. Наличността може да не е обновена.",
@@ -1473,38 +1062,9 @@ export function IncomingGoods() {
       qc.invalidateQueries({ queryKey: ["incoming"] });
       qc.invalidateQueries({ queryKey: ["products"] });
       setScanOpen(false);
-
-      // Build completion items — merge scanned data (names/units) with saved items (product_ids)
-      const scannedArr = scanned?.items ?? [];
-      const savedArr: any[] = Array.isArray(doc.items) ? doc.items : [];
-      const savedItems = scannedArr.map((item: any, idx: number) => {
-        const saved = savedArr[idx] ?? {};
-        return {
-          ...item,
-          product_name:
-            (item as any).name_bg || item.product_name || item.name || "",
-          name_en: item.product_name || item.name_en || "",
-          product_code: item.product_code || null,
-          incoming_item_id: saved.id ?? null,
-          product_id: saved.product_id ?? item.product_id ?? null,
-          batch_number: item.batch_number || item.batch || "",
-          expiry_date: item.expiry_date || item.expiry || "",
-          quantity: saved.quantity ?? item.quantity,
-          unit: item.unit,
-          unit_price:
-            saved.unit_price ??
-            itemPrices[idx] ??
-            item.unit_price ??
-            item.price ??
-            0,
-        };
-      });
-      setCompletionItems(savedItems);
-      setCompletionDocId(doc.id);
-      setCompletionStep("ask");
-      setShowCompletionModal(true);
       setScanned(null);
       setItemPrices({});
+      toast.success("Доставката е записана успешно.");
     },
     onError: (err: any) => {
       const data = err?.response?.data;
@@ -1659,8 +1219,6 @@ export function IncomingGoods() {
           quantity: "",
           unit_price: "",
           unit: "бр",
-          batch_number: "",
-          expiry_date: "",
           original_purchase_price: null,
         },
       ];
@@ -1718,21 +1276,6 @@ export function IncomingGoods() {
     if (e.key !== "Enter") return;
     e.preventDefault();
 
-    // If Enter on empty batch_number but expiry is set → auto-generate
-    if (field === "batch_number") {
-      const current = manualItems[index];
-      if (current && !current.batch_number.trim() && current.expiry_date) {
-        const generated = autoBatchFromExpiry(current.expiry_date, 2);
-        if (generated) {
-          setManualItems((items) =>
-            items.map((entry, i) =>
-              i === index ? { ...entry, batch_number: generated } : entry,
-            ),
-          );
-        }
-      }
-    }
-
     const currentPos = ROW_FIELD_ORDER.indexOf(field);
     const nextField = ROW_FIELD_ORDER[currentPos + 1];
 
@@ -1758,20 +1301,14 @@ export function IncomingGoods() {
       }
 
       const items = manualItems
-        .map((item) => {
-          const batch = item.batch_number.trim();
-          const expiry = item.expiry_date.trim();
-          return {
-            ...(item.product_id ? { product_id: item.product_id } : {}),
-            product_name: item.product_name.trim(),
-            name_bg: item.product_name.trim(),
-            quantity: Number(item.quantity),
-            unit_price: Number(item.unit_price || 0),
-            unit: item.unit.trim() || "бр",
-            ...(batch ? { batch_number: batch } : {}),
-            ...(expiry ? { expiry_date: expiry } : {}),
-          };
-        })
+        .map((item) => ({
+          ...(item.product_id ? { product_id: item.product_id } : {}),
+          product_name: item.product_name.trim(),
+          name_bg: item.product_name.trim(),
+          quantity: Number(item.quantity),
+          unit_price: Number(item.unit_price || 0),
+          unit: item.unit.trim() || "бр",
+        }))
         .filter((item) => item.product_name);
 
       if (items.length === 0) {
@@ -2256,7 +1793,7 @@ export function IncomingGoods() {
                         return (
                           <div
                             key={item.id ?? index}
-                            className="grid grid-cols-12 md:grid-cols-[repeat(16,minmax(0,1fr))] gap-3 items-end border rounded-lg p-3"
+                            className="grid grid-cols-12 md:grid-cols-[repeat(12,minmax(0,1fr))] gap-3 items-end border rounded-lg p-3"
                           >
                             <div className="col-span-12 md:col-span-5 space-y-1.5">
                               <Label>Артикул</Label>
@@ -2362,136 +1899,6 @@ export function IncomingGoods() {
                                     : undefined
                                 }
                               />
-                            </div>
-                            <div className="col-span-6 md:col-span-2 space-y-1.5">
-                              <Label>Срок на годност</Label>
-                              <SmartDateInput
-                                ref={(el) => {
-                                  editExpiryRefs.current[String(index)] = el;
-                                }}
-                                value={item.expiry_date}
-                                disabled={readonly}
-                                onChange={(iso) =>
-                                  setEditItems((current) =>
-                                    current.map((entry, i) =>
-                                      i === index
-                                        ? {
-                                            ...entry,
-                                            expiry_date: iso,
-                                            dirty: true,
-                                          }
-                                        : entry,
-                                    ),
-                                  )
-                                }
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    // Focus this row's batch input
-                                    const batchEl =
-                                      editBatchRefs.current[String(index)];
-                                    batchEl?.focus();
-                                    batchEl?.select();
-                                  }
-                                }}
-                              />
-                            </div>
-                            <div className="col-span-6 md:col-span-2 space-y-1.5">
-                              <Label>Партида</Label>
-                              <div className="flex gap-1">
-                                <Input
-                                  ref={(el) => {
-                                    editBatchRefs.current[String(index)] = el;
-                                  }}
-                                  value={item.batch_number}
-                                  disabled={readonly}
-                                  onChange={(e) =>
-                                    setEditItems((current) =>
-                                      current.map((entry, i) =>
-                                        i === index
-                                          ? {
-                                              ...entry,
-                                              batch_number: e.target.value,
-                                              dirty: true,
-                                            }
-                                          : entry,
-                                      ),
-                                    )
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key !== "Enter") return;
-                                    e.preventDefault();
-                                    const current = editItems[index];
-                                    const trimmed = String(
-                                      current?.batch_number ?? "",
-                                    ).trim();
-                                    // If batch is empty AND expiry set → auto-generate
-                                    if (!trimmed && current?.expiry_date) {
-                                      const generated = autoBatchFromExpiry(
-                                        current.expiry_date,
-                                        2,
-                                      );
-                                      if (generated) {
-                                        setEditItems((prev) =>
-                                          prev.map((entry, i) =>
-                                            i === index
-                                              ? {
-                                                  ...entry,
-                                                  batch_number: generated,
-                                                  dirty: true,
-                                                }
-                                              : entry,
-                                          ),
-                                        );
-                                      }
-                                    }
-                                    // Focus next row's expiry (or wrap to first)
-                                    const nextIdx = index + 1;
-                                    const nextEl =
-                                      editExpiryRefs.current[String(nextIdx)];
-                                    if (nextEl) {
-                                      nextEl.focus();
-                                      nextEl.select();
-                                    } else {
-                                      // Last row — blur to finish
-                                      (e.target as HTMLInputElement).blur();
-                                    }
-                                  }}
-                                  placeholder="напр. L2509"
-                                  className="flex-1"
-                                />
-                                {!readonly && (
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="shrink-0 px-2"
-                                    disabled={!item.expiry_date}
-                                    onClick={() => {
-                                      if (!item.expiry_date) return;
-                                      const generated = autoBatchFromExpiry(
-                                        item.expiry_date,
-                                        2,
-                                      );
-                                      if (!generated) return;
-                                      setEditItems((current) =>
-                                        current.map((entry, i) =>
-                                          i === index
-                                            ? {
-                                                ...entry,
-                                                batch_number: generated,
-                                                dirty: true,
-                                              }
-                                            : entry,
-                                        ),
-                                      );
-                                    }}
-                                    title="Генерирай от срока на годност (срок - 2 месеца → DDMMYYYY)"
-                                  >
-                                    Ген
-                                  </Button>
-                                )}
-                              </div>
                             </div>
                             {!readonly && (
                               <div className="col-span-12 md:col-span-1 flex justify-end items-end">
@@ -2749,7 +2156,7 @@ export function IncomingGoods() {
                     key={index}
                     className="grid grid-cols-12 gap-3 items-end border rounded-lg p-3"
                   >
-                    <div className="col-span-12 md:col-span-3 space-y-1.5">
+                    <div className="col-span-12 md:col-span-5 space-y-1.5">
                       <Label>Артикул</Label>
                       <div className="space-y-2">
                         <div className="relative">
@@ -2854,7 +2261,7 @@ export function IncomingGoods() {
                         ) : null}
                       </div>
                     </div>
-                    <div className="col-span-4 md:col-span-1 space-y-1.5">
+                    <div className="col-span-4 md:col-span-2 space-y-1.5">
                       <Label>Кол-во</Label>
                       <Input
                         ref={(el) => {
@@ -2879,7 +2286,7 @@ export function IncomingGoods() {
                         placeholder="0"
                       />
                     </div>
-                    <div className="col-span-4 md:col-span-1 space-y-1.5">
+                    <div className="col-span-4 md:col-span-2 space-y-1.5">
                       <Label>Мярка</Label>
                       <Input
                         ref={(el) => {
@@ -2924,77 +2331,6 @@ export function IncomingGoods() {
                         placeholder="0.00"
                       />
                     </div>
-                    <div className="col-span-6 md:col-span-2 space-y-1.5">
-                      <Label>Срок на годност</Label>
-                      <SmartDateInput
-                        ref={(el) => {
-                          rowInputRefs.current[`${index}:expiry_date`] = el;
-                        }}
-                        value={item.expiry_date}
-                        onChange={(iso) =>
-                          setManualItems((current) =>
-                            current.map((entry, entryIndex) =>
-                              entryIndex === index
-                                ? { ...entry, expiry_date: iso }
-                                : entry,
-                            ),
-                          )
-                        }
-                        onKeyDown={(e) =>
-                          handleRowFieldEnter(e, index, "expiry_date")
-                        }
-                      />
-                    </div>
-                    <div className="col-span-6 md:col-span-2 space-y-1.5">
-                      <Label>Партида</Label>
-                      <div className="flex gap-1">
-                        <Input
-                          ref={(el) => {
-                            rowInputRefs.current[`${index}:batch_number`] = el;
-                          }}
-                          value={item.batch_number}
-                          onChange={(e) =>
-                            setManualItems((current) =>
-                              current.map((entry, entryIndex) =>
-                                entryIndex === index
-                                  ? { ...entry, batch_number: e.target.value }
-                                  : entry,
-                              ),
-                            )
-                          }
-                          onKeyDown={(e) =>
-                            handleRowFieldEnter(e, index, "batch_number")
-                          }
-                          placeholder="напр. L2509"
-                          className="flex-1"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="shrink-0 px-2"
-                          disabled={!item.expiry_date}
-                          onClick={() => {
-                            if (!item.expiry_date) return;
-                            const generated = autoBatchFromExpiry(
-                              item.expiry_date,
-                              2,
-                            );
-                            if (!generated) return;
-                            setManualItems((current) =>
-                              current.map((entry, entryIndex) =>
-                                entryIndex === index
-                                  ? { ...entry, batch_number: generated }
-                                  : entry,
-                              ),
-                            );
-                          }}
-                          title="Генерирай от срока на годност (срок - 2 месеца → DDMMYYYY)"
-                        >
-                          Ген
-                        </Button>
-                      </div>
-                    </div>
                     <div className="col-span-12 md:col-span-1 flex justify-end items-end">
                       <Button
                         type="button"
@@ -3011,8 +2347,6 @@ export function IncomingGoods() {
                                     quantity: "",
                                     unit_price: "",
                                     unit: "бр",
-                                    batch_number: "",
-                                    expiry_date: "",
                                     original_purchase_price: null,
                                   },
                                 ]
@@ -3375,31 +2709,6 @@ export function IncomingGoods() {
                             </div>
                           </div>
 
-                          {/* Batch/expiry info if present */}
-                          {(item.batch_number ||
-                            item.batch ||
-                            item.expiry_date ||
-                            item.expiry) && (
-                            <div className="mt-2 text-xs text-muted-foreground">
-                              {(item.batch_number || item.batch) && (
-                                <span>
-                                  Партида: {item.batch_number || item.batch}
-                                </span>
-                              )}
-                              {(item.batch_number || item.batch) &&
-                                (item.expiry_date || item.expiry) &&
-                                " • "}
-                              {(item.expiry_date || item.expiry) && (
-                                <span>
-                                  Годност:{" "}
-                                  {formatDate(
-                                    item.expiry_date || item.expiry || "",
-                                  )}
-                                </span>
-                              )}
-                            </div>
-                          )}
-
                           {/* Inline search/bind/create flow */}
                           {mappingOpen && (
                             <div className="mt-3 space-y-2.5 rounded-lg border bg-muted/10 p-2.5">
@@ -3584,253 +2893,6 @@ export function IncomingGoods() {
               </Button>
             )}
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Completion modal — post-save flow: preview → companion? → manual expiry → pricing */}
-      <Dialog
-        open={showCompletionModal}
-        onOpenChange={(open) => {
-          if (!open) {
-            setShowCompletionModal(false);
-            setCompletionStep("preview");
-            setCompletionConfirmError("");
-            setCompletionSaveError("");
-          }
-        }}
-      >
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
-          {completionConfirmError && (
-            <ErrorMessage message={completionConfirmError} />
-          )}
-          {completionSaveError && (
-            <ErrorMessage message={completionSaveError} />
-          )}
-
-          {/* STEP 1: Preview — show what was extracted */}
-          {completionStep === "preview" && (
-            <>
-              <DialogHeader className="shrink-0">
-                <DialogTitle>
-                  {completionConfirmError
-                    ? "⚠️ Доставката е записана, но не е потвърдена"
-                    : "✅ Доставката е записана"}
-                </DialogTitle>
-                <DialogDescription>
-                  {completionConfirmError
-                    ? "Провери грешката по-долу. Документът е записан, но наличността може да не е обновена."
-                    : "AI извлече следните продукти. Провери преди да продължиш."}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex-1 overflow-y-auto min-h-0 mt-4 space-y-2 pr-1">
-                {completionItems.map((item, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between px-4 py-2.5 rounded-lg border bg-muted/20 text-sm"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <span className="font-medium truncate block">
-                        {item.product_name}
-                      </span>
-                      {item.name_en && item.name_en !== item.product_name && (
-                        <span className="text-xs text-muted-foreground">
-                          <span className="opacity-60">На фактурата: </span>
-                          {item.name_en}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0 text-right">
-                      <span className="font-mono font-semibold">
-                        {item.quantity} {formatUnit(item.unit)}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {Number(item.unit_price).toFixed(2)} €
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <DialogFooter className="shrink-0 mt-4 gap-2">
-                <Button
-                  variant="ghost"
-                  onClick={handleSaveBatches}
-                  className="text-muted-foreground"
-                >
-                  ⏭️ Затвори
-                </Button>
-                <Button onClick={() => setCompletionStep("ask")}>
-                  Продължи — дати на годност →
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-
-          {/* STEP 2: Ask about companion document */}
-          {completionStep === "ask" && (
-            <>
-              <DialogHeader>
-                <DialogTitle>📋 Дати на годност и партиди</DialogTitle>
-                <DialogDescription>
-                  Имате ли придружителен документ (протокол, сертификат) с дати
-                  на годност?
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-col gap-3 mt-6 mb-4">
-                <label className="cursor-pointer">
-                  <input
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    className="hidden"
-                    disabled={companionScanning}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) handleCompanionScan(f);
-                    }}
-                  />
-                  {companionScanning ? (
-                    <BakaliqLoader text="Сканиране на втория документ..." />
-                  ) : (
-                    <div className="flex items-center gap-3 h-16 px-4 rounded-md border border-input bg-background hover:bg-accent transition-colors">
-                      <span className="text-2xl">📄</span>
-                      <div className="text-left">
-                        <div className="font-semibold text-sm">
-                          Да, имам втори документ
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Качи придружителния документ — ще извлека датите
-                          автоматично
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {companionScanError && (
-                    <p className="text-xs text-red-500 mt-1 px-1">
-                      {companionScanError}
-                    </p>
-                  )}
-                </label>
-                <Button
-                  variant="outline"
-                  className="h-16 text-base justify-start gap-3"
-                  onClick={() => setCompletionStep("manual")}
-                >
-                  <span className="text-2xl">✏️</span>
-                  <div className="text-left">
-                    <div className="font-semibold">Ще въведа ръчно</div>
-                    <div className="text-xs text-muted-foreground">
-                      Въведи дата и месец за всеки продукт
-                    </div>
-                  </div>
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="h-12 text-muted-foreground"
-                  onClick={handleSaveBatches}
-                >
-                  ⏭️ Пропусни — без дати на годност
-                </Button>
-              </div>
-              <DialogFooter className="shrink-0">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCompletionStep("preview")}
-                >
-                  ← Назад
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-
-          {/* STEP 3: Manual expiry entry with smart DD.MM input */}
-          {completionStep === "manual" && (
-            <>
-              <DialogHeader className="shrink-0">
-                <DialogTitle>✏️ Въведи дати на годност</DialogTitle>
-                <DialogDescription>
-                  Пиши само ден и месец (напр. <strong>1904</strong> → 19.04).
-                  Годината е '26 по подразбиране — кликни за да смениш.
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="flex-1 overflow-y-auto min-h-0 space-y-3 mt-4 pr-1">
-                {completionItems.map((item, i) => (
-                  <div key={i} className="border rounded-lg p-4 bg-muted/30">
-                    <div className="flex items-start justify-between gap-2 mb-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate">
-                          {item.product_name}
-                        </p>
-                        {item.name_en && item.name_en !== item.product_name && (
-                          <p className="text-xs text-muted-foreground truncate uppercase tracking-wide">
-                            <span className="opacity-60">На фактурата: </span>
-                            {item.name_en}
-                          </p>
-                        )}
-                      </div>
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {item.quantity} {formatUnit(item.unit)}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground block mb-1">
-                          Партида
-                        </label>
-                        <Input
-                          value={item.batch_number}
-                          onChange={(e) =>
-                            setCompletionItems((current) =>
-                              current.map((entry, idx) =>
-                                idx === i
-                                  ? { ...entry, batch_number: e.target.value }
-                                  : entry,
-                              ),
-                            )
-                          }
-                          placeholder="напр. 00245680"
-                          className="text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground block mb-1">
-                          Годен до
-                        </label>
-                        <Input
-                          type="date"
-                          value={item.expiry_date}
-                          onChange={(e) =>
-                            setCompletionItems((current) =>
-                              current.map((entry, idx) =>
-                                idx === i
-                                  ? { ...entry, expiry_date: e.target.value }
-                                  : entry,
-                              ),
-                            )
-                          }
-                          className="text-sm"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <DialogFooter className="shrink-0 mt-4 gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCompletionStep("ask")}
-                >
-                  ← Назад
-                </Button>
-                <Button onClick={handleSaveBatches} disabled={savingBatches}>
-                  {savingBatches ? <Spinner size="sm" /> : null}
-                  Запази датите
-                </Button>
-              </DialogFooter>
-            </>
-          )}
         </DialogContent>
       </Dialog>
     </div>

@@ -5,7 +5,6 @@ import {
   ShoppingCart,
   AlertTriangle,
   CreditCard,
-  Clock,
   Package,
   ArrowRight,
 } from "lucide-react";
@@ -15,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
-import type { DashboardKPIs, Order, StockLevel, Invoice } from "@/types";
+import type { DashboardKPIs, Order, StockLevel } from "@/types";
 
 const kpiCards = [
   {
@@ -54,15 +53,6 @@ const kpiCards = [
     format: (v: number) => formatCurrency(v),
     link: "/invoices?status=unpaid",
   },
-  {
-    key: "expiring_batches",
-    label: "Изтичащи партиди",
-    icon: Clock,
-    color: "text-yellow-600",
-    bg: "bg-yellow-50",
-    format: (v: number) => `${v} партиди`,
-    link: "/inventory?tab=expiring",
-  },
 ];
 
 export function Dashboard() {
@@ -79,12 +69,9 @@ export function Dashboard() {
       ].includes(key);
     }
     if (user?.role === "warehouse") {
-      return [
-        "total_stock_value",
-        "low_stock_count",
-        "expiring_batches",
-        "todays_orders",
-      ].includes(key);
+      return ["total_stock_value", "low_stock_count", "todays_orders"].includes(
+        key,
+      );
     }
     return true; // admin sees all
   });
@@ -97,10 +84,9 @@ export function Dashboard() {
     queryKey: ["dashboard-kpis"],
     queryFn: async () => {
       // Use individual endpoints for accurate counts
-      const [dashRes, lowStockRes, expiringRes] = await Promise.allSettled([
+      const [dashRes, lowStockRes] = await Promise.allSettled([
         api.get("/analytics/dashboard"),
         api.get("/inventory/low-stock"),
-        api.get("/inventory/expiring"),
       ]);
 
       const dash = dashRes.status === "fulfilled" ? dashRes.value?.data : {};
@@ -110,19 +96,12 @@ export function Dashboard() {
             ? lowStockRes.value.data
             : lowStockRes.value?.data?.data || []
           : [];
-      const expiringArr =
-        expiringRes.status === "fulfilled"
-          ? Array.isArray(expiringRes.value?.data)
-            ? expiringRes.value.data
-            : expiringRes.value?.data?.data || []
-          : [];
 
       return {
         total_stock_value: parseFloat(dash.total_stock_value) || 0,
         todays_orders: dash.today_orders || 0,
         low_stock_count: lowStockArr.length,
         pending_payments: parseFloat(dash.pending_payments_amount) || 0,
-        expiring_batches: expiringArr.length,
       };
     },
     refetchInterval: 30000,

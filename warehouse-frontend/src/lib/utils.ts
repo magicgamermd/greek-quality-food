@@ -92,10 +92,7 @@ export function formatDateTime(date: string | Date): string {
   }).format(new Date(date));
 }
 
-export function getApiErrorMessage(
-  error: unknown,
-  fallback: string,
-): string {
+export function getApiErrorMessage(error: unknown, fallback: string): string {
   const apiMessage =
     (error as any)?.response?.data?.message ??
     (error as any)?.response?.data?.error ??
@@ -110,16 +107,4 @@ export function isoDateToday(): string {
   const now = new Date();
   const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
   return localDate.toISOString().slice(0, 10);
-}
-
-export function isExpiringSoon(expiryDate: string, days = 30): boolean {
-  const expiry = new Date(expiryDate);
-  const now = new Date();
-  const diffMs = expiry.getTime() - now.getTime();
-  const diffDays = diffMs / (1000 * 60 * 60 * 24);
-  return diffDays <= days && diffDays > 0;
-}
-
-export function isExpired(expiryDate: string): boolean {
-  return new Date(expiryDate) < new Date();
 }

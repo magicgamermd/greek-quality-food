@@ -10,7 +10,6 @@ export interface OwnerDashboardKPI {
   low_stock_count: number;
   pending_payments: number;
   pending_payments_amount: number;
-  expiring_soon_count: number;
 }
 
 export interface OwnerSalesPoint {
@@ -44,8 +43,6 @@ export interface OwnerIncomingGoodsItem {
   name_en?: string;
   sku?: string;
   unit?: string;
-  batch_number?: string;
-  expiry_date?: string;
 }
 
 export interface OwnerIncomingGoods {
@@ -73,10 +70,9 @@ export function useOwnerDashboardKpi() {
   return useQuery({
     queryKey: ["owner", "kpi"],
     queryFn: async (): Promise<OwnerDashboardKPI> => {
-      const [dashRes, lowStockRes, expiringRes] = await Promise.allSettled([
+      const [dashRes, lowStockRes] = await Promise.allSettled([
         api.get("/analytics/dashboard"),
         api.get("/inventory/low-stock"),
-        api.get("/inventory/expiring"),
       ]);
 
       const dash = dashRes.status === "fulfilled" ? dashRes.value.data : {};
@@ -86,12 +82,6 @@ export function useOwnerDashboardKpi() {
             ? lowStockRes.value.data
             : lowStockRes.value.data?.data || []
           : [];
-      const expiring =
-        expiringRes.status === "fulfilled"
-          ? Array.isArray(expiringRes.value.data)
-            ? expiringRes.value.data
-            : expiringRes.value.data?.data || []
-          : [];
 
       return {
         today_orders: asNumber(dash.today_orders),
@@ -100,7 +90,6 @@ export function useOwnerDashboardKpi() {
         low_stock_count: lowStock.length,
         pending_payments: asNumber(dash.pending_payments),
         pending_payments_amount: asNumber(dash.pending_payments_amount),
-        expiring_soon_count: expiring.length,
       };
     },
     refetchInterval: 60_000,
@@ -111,10 +100,14 @@ export function useOwnerSalesAnalytics(period: OwnerSalesPeriod) {
   return useQuery({
     queryKey: ["owner", "sales", period],
     queryFn: async (): Promise<OwnerSalesAnalytics> => {
-      const response = await api.get("/analytics/sales", { params: { period } });
+      const response = await api.get("/analytics/sales", {
+        params: { period },
+      });
       const raw = response.data;
       const series = Array.isArray(raw?.data) ? raw.data : [];
-      const topProducts = Array.isArray(raw?.top_products) ? raw.top_products : [];
+      const topProducts = Array.isArray(raw?.top_products)
+        ? raw.top_products
+        : [];
       return {
         series: series.map((point: any) => ({
           period: String(point.period || ""),
@@ -159,7 +152,10 @@ export function useOwnerIncomingGoods(params: {
 export function useOwnerIncomingGoodsById(id: number | null) {
   return useQuery({
     queryKey: ["owner", "incoming", "details", id],
-    queryFn: () => api.get(`/incoming/${id}`).then((r) => unwrap<OwnerIncomingGoods>(r.data)),
+    queryFn: () =>
+      api
+        .get(`/incoming/${id}`)
+        .then((r) => unwrap<OwnerIncomingGoods>(r.data)),
     enabled: id !== null,
   });
 }
@@ -168,7 +164,8 @@ export function useOwnerConfirmIncomingGoods() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (id: number) => api.put(`/incoming/${id}/confirm`).then((r) => r.data),
+    mutationFn: (id: number) =>
+      api.put(`/incoming/${id}/confirm`).then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["owner", "incoming"] });
       queryClient.invalidateQueries({ queryKey: ["owner", "kpi"] });
@@ -181,7 +178,9 @@ export function useOwnerCancelIncomingGoods() {
 
   return useMutation({
     mutationFn: ({ id, reason }: { id: number; reason?: string }) =>
-      api.put(`/incoming/${id}/cancel`, reason ? { reason } : {}).then((r) => r.data),
+      api
+        .put(`/incoming/${id}/cancel`, reason ? { reason } : {})
+        .then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["owner", "incoming"] });
       queryClient.invalidateQueries({ queryKey: ["owner", "kpi"] });

@@ -90,13 +90,6 @@ function hasAnnulledInvoice(order: Pick<Order, "annulled_invoice_at">) {
   return Boolean(order.annulled_invoice_at);
 }
 
-interface BatchInfo {
-  id: number;
-  batch_number: string;
-  expiry_date: string | null;
-  stock: number;
-}
-
 interface OrderProduct {
   id: number;
   name_bg: string;
@@ -110,7 +103,6 @@ interface OrderProduct {
   purchase_price: number | null;
   total_stock: number;
   partner_price: number | null;
-  batches?: BatchInfo[];
 }
 
 interface OrderItemRow {
@@ -127,11 +119,6 @@ interface OrderItemRow {
   /** Snapshot of the product's purchase_price at pick time — used to
    *  warn the cashier when the typed selling price dips below cost. */
   cost_price: number;
-  selected_batch_id: string;
-  batches: BatchInfo[];
-  // Manual batch/expiry entry (used when no existing batch is picked from FEFO)
-  manual_batch_number: string;
-  manual_expiry_date: string;
 }
 
 let orderItemRowSeq = 0;
@@ -148,86 +135,13 @@ const makeOrderItemRow = (
   unit: "",
   stock: 0,
   cost_price: 0,
-  selected_batch_id: "",
-  batches: [],
-  manual_batch_number: "",
-  manual_expiry_date: "",
   ...overrides,
 });
 
 const emptyItem = (): OrderItemRow => makeOrderItemRow();
-const AUTO_BATCH_VALUE = "__auto__";
-
-function formatBatchExpiry(expiryDate: string | null | undefined) {
-  if (!expiryDate) return "без срок";
-  return new Date(expiryDate).toLocaleDateString("bg-BG", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
-}
-
-function getSelectedBatch(item: OrderItemRow) {
-  if (!item.selected_batch_id) return null;
-  return (
-    item.batches.find((batch) => String(batch.id) === item.selected_batch_id) ??
-    null
-  );
-}
 
 function getEffectiveStock(item: OrderItemRow) {
-  const selectedBatch = getSelectedBatch(item);
-  if (selectedBatch && selectedBatch.stock >= 0) {
-    return selectedBatch.stock;
-  }
   return item.stock;
-}
-
-function BatchSelectField({
-  item,
-  onChange,
-  disabled,
-}: {
-  item: OrderItemRow;
-  onChange: (value: string) => void;
-  disabled?: boolean;
-}) {
-  if (!item.product_id) {
-    return <span className="text-xs text-gray-400">Избери продукт</span>;
-  }
-
-  return (
-    <div className="space-y-1">
-      <Select
-        value={item.selected_batch_id || AUTO_BATCH_VALUE}
-        onChange={(e) =>
-          onChange(e.target.value === AUTO_BATCH_VALUE ? "" : e.target.value)
-        }
-        disabled={disabled}
-      >
-        <option value={AUTO_BATCH_VALUE}>Автоматично (FEFO)</option>
-        {item.batches.map((batch) => (
-          <option key={batch.id} value={batch.id}>
-            {`${batch.batch_number}${batch.stock >= 0 ? ` · ${batch.stock} ${item.unit || "бр."}` : ""}`}
-          </option>
-        ))}
-      </Select>
-      {item.batches.length === 0 && (
-        <div className="text-xs text-gray-400">
-          Няма налични партиди за избор
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Get expiry date of the currently selected batch (or null if auto/FEFO). */
-function getSelectedBatchExpiry(item: OrderItemRow): string | null {
-  if (!item.selected_batch_id) return null;
-  const batch = item.batches.find(
-    (b) => String(b.id) === String(item.selected_batch_id),
-  );
-  return batch?.expiry_date || null;
 }
 
 async function openInvoicePdf(invoiceId: number) {
@@ -451,7 +365,6 @@ const ProductSearch = forwardRef<
         const rawPrice = p.partner_price ?? p.group_price ?? p.selling_price;
         const price = rawPrice != null ? parseFloat(String(rawPrice)) : 0;
         const stock = parseFloat(String(p.total_stock || 0));
-        const batches = p.batches || [];
         return (
           <div>
             <div className="flex justify-between items-center">
@@ -477,36 +390,6 @@ const ProductSearch = forwardRef<
                 </div>
               </div>
             </div>
-            {batches.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {batches.slice(0, 3).map((b, i) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center gap-1 text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded"
-                  >
-                    <span className="font-mono">{b.batch_number}</span>
-                    {b.expiry_date && (
-                      <span className="text-blue-400">
-                        до{" "}
-                        {new Date(b.expiry_date).toLocaleDateString("bg-BG", {
-                          day: "2-digit",
-                          month: "2-digit",
-                          year: "numeric",
-                        })}
-                      </span>
-                    )}
-                    <span className="text-blue-500 font-medium">
-                      ({b.stock} {p.unit || "бр."})
-                    </span>
-                  </span>
-                ))}
-                {batches.length > 3 && (
-                  <span className="text-[10px] text-gray-400">
-                    +{batches.length - 3} още
-                  </span>
-                )}
-              </div>
-            )}
           </div>
         );
       }}
@@ -552,17 +435,6 @@ function OrderDetailModal({
   const [issuedCreditNoteId, setIssuedCreditNoteId] = useState<number | null>(
     null,
   );
-  // Per-row batch/expiry edit state (pending orders only)
-  const [batchEdits, setBatchEdits] = useState<
-    Record<
-      number,
-      { batch_number: string; expiry_date: string; dirty: boolean }
-    >
-  >({});
-  const [savingBatchItemId, setSavingBatchItemId] = useState<number | null>(
-    null,
-  );
-
   useEffect(() => {
     setGeneratedInvoiceId(null);
     setEditOpen(false);
@@ -572,56 +444,7 @@ function OrderDetailModal({
     setCreditNoteReason("");
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
-    setBatchEdits({});
-    setSavingBatchItemId(null);
   }, [order?.id]);
-
-  // Seed batch edits when items arrive
-  useEffect(() => {
-    const seed: typeof batchEdits = {};
-    for (const it of (fullOrder?.items ?? []) as any[]) {
-      if (!(it.id in batchEdits)) {
-        seed[it.id] = {
-          batch_number: it.batch_number ?? "",
-          expiry_date: it.expiry_date
-            ? String(it.expiry_date).split("T")[0]
-            : "",
-          dirty: false,
-        };
-      }
-    }
-    if (Object.keys(seed).length > 0) {
-      setBatchEdits((prev) => ({ ...seed, ...prev }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullOrder?.items]);
-
-  const saveItemBatch = async (itemId: number) => {
-    if (!detail) return;
-    const edit = batchEdits[itemId];
-    if (!edit) return;
-    setSavingBatchItemId(itemId);
-    try {
-      await api.patch(`/orders/${detail.id}/items/${itemId}`, {
-        batch_number: edit.batch_number.trim() || null,
-        expiry_date: edit.expiry_date || null,
-      });
-      setBatchEdits((prev) => ({
-        ...prev,
-        [itemId]: { ...edit, dirty: false },
-      }));
-      qc.invalidateQueries({ queryKey: ["order-detail", detail.id] });
-      qc.invalidateQueries({ queryKey: ["orders"] });
-    } catch (err: any) {
-      toast.error(
-        err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          "Неуспешно записване на партида/срок.",
-      );
-    } finally {
-      setSavingBatchItemId(null);
-    }
-  };
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
@@ -916,8 +739,6 @@ function OrderDetailModal({
               <TableHeader>
                 <TableRow>
                   <TableHead>Продукт</TableHead>
-                  <TableHead className="w-40">Партида</TableHead>
-                  <TableHead className="w-36">Годност</TableHead>
                   <TableHead className="w-20 text-right">К-во</TableHead>
                   <TableHead className="w-24 text-right">Ед. цена</TableHead>
                   <TableHead className="w-24 text-right">Сума</TableHead>
@@ -927,7 +748,7 @@ function OrderDetailModal({
                 {items.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={6}
+                      colSpan={4}
                       className="text-center text-gray-400 py-6"
                     >
                       Няма артикули
@@ -945,18 +766,6 @@ function OrderDetailModal({
                       item.product?.sku ||
                       item.sku ||
                       `Продукт #${item.product_id}`;
-                    const batchNum =
-                      item.batch_number || item.product?.batch_number;
-                    const expiryDate =
-                      item.expiry_date || item.product?.expiry_date;
-                    // Allow batch/expiry edits until invoice is generated —
-                    // covers forgotten data during pending/confirmed/processing/fulfilled
-                    const canEditBatch =
-                      detail.status !== "cancelled" &&
-                      detail.status !== "invoiced" &&
-                      !hasInvoice;
-                    const isPending = canEditBatch;
-                    const edit = batchEdits[item.id];
                     return (
                       <TableRow key={item.id}>
                         <TableCell>
@@ -973,93 +782,6 @@ function OrderDetailModal({
                               )}
                             </div>
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          {isPending && edit ? (
-                            <Input
-                              value={edit.batch_number}
-                              onChange={(e) =>
-                                setBatchEdits((prev) => ({
-                                  ...prev,
-                                  [item.id]: {
-                                    ...edit,
-                                    batch_number: e.target.value,
-                                    dirty: true,
-                                  },
-                                }))
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  // Focus the date input in the next TableCell
-                                  const next = (
-                                    e.currentTarget.parentElement
-                                      ?.nextElementSibling as HTMLElement | null
-                                  )?.querySelector<HTMLInputElement>("input");
-                                  next?.focus();
-                                  next?.select();
-                                }
-                              }}
-                              placeholder="партида"
-                              className="h-9 text-sm font-mono w-full"
-                            />
-                          ) : batchNum ? (
-                            <span className="text-sm font-mono bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
-                              {batchNum}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-300">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {isPending && edit ? (
-                            <div className="flex items-center gap-1">
-                              <SmartDateInput
-                                value={edit.expiry_date}
-                                onChange={(iso) =>
-                                  setBatchEdits((prev) => ({
-                                    ...prev,
-                                    [item.id]: {
-                                      ...edit,
-                                      expiry_date: iso,
-                                      dirty: true,
-                                    },
-                                  }))
-                                }
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    if (edit.dirty) saveItemBatch(item.id);
-                                  }
-                                }}
-                                className="h-9 text-sm flex-1"
-                                placeholder="ДД.ММ.ГГ"
-                              />
-                              {edit.dirty && (
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-9 px-2 shrink-0"
-                                  disabled={savingBatchItemId === item.id}
-                                  onClick={() => saveItemBatch(item.id)}
-                                  title="Запази партида/срок"
-                                >
-                                  {savingBatchItemId === item.id ? (
-                                    <Spinner size="sm" />
-                                  ) : (
-                                    "✓"
-                                  )}
-                                </Button>
-                              )}
-                            </div>
-                          ) : expiryDate ? (
-                            <span className="text-sm text-gray-700">
-                              {formatDate(expiryDate)}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-300">—</span>
-                          )}
                         </TableCell>
                         <TableCell className="text-right text-sm">
                           {item.quantity}
@@ -1623,18 +1345,6 @@ function EditOrderItemsModal({
           discount_percent: String((item as any).discount_percent ?? "0"),
           unit: item.product?.unit || (item as any).unit || "бр.",
           stock: -1, // unknown until product is re-selected from search
-          selected_batch_id: item.batch_id ? String(item.batch_id) : "",
-          batches:
-            item.batch_id && (item as any).batch_number
-              ? [
-                  {
-                    id: item.batch_id,
-                    batch_number: (item as any).batch_number,
-                    expiry_date: (item as any).expiry_date || null,
-                    stock: -1,
-                  },
-                ]
-              : [],
         }),
       ) || [];
 
@@ -1652,29 +1362,16 @@ function EditOrderItemsModal({
       setItems((prev) =>
         prev.map((item, i) =>
           i === idx
-            ? (() => {
-                const batches = product.batches || [];
-                const selectedBatchId =
-                  item.selected_batch_id &&
-                  batches.some(
-                    (batch) => String(batch.id) === item.selected_batch_id,
-                  )
-                    ? item.selected_batch_id
-                    : "";
-
-                return {
-                  ...item,
-                  product_id: String(product.id),
-                  product_name: product.name_bg || product.name_en || "Без име",
-                  quantity: item.quantity || "1",
-                  unit_price:
-                    item.unit_price || (price != null ? String(price) : ""),
-                  unit: product.unit || "бр.",
-                  stock,
-                  batches,
-                  selected_batch_id: selectedBatchId,
-                };
-              })()
+            ? {
+                ...item,
+                product_id: String(product.id),
+                product_name: product.name_bg || product.name_en || "Без име",
+                quantity: item.quantity || "1",
+                unit_price:
+                  item.unit_price || (price != null ? String(price) : ""),
+                unit: product.unit || "бр.",
+                stock,
+              }
             : item,
         ),
       );
@@ -1717,19 +1414,6 @@ function EditOrderItemsModal({
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price),
           discount_percent: Number(i.discount_percent) || 0,
-          batch_id: i.selected_batch_id
-            ? Number(i.selected_batch_id)
-            : undefined,
-          // When no existing batch is picked, pass manual values for the
-          // server to find-or-create the batch.
-          batch_number:
-            !i.selected_batch_id && i.manual_batch_number.trim()
-              ? i.manual_batch_number.trim()
-              : undefined,
-          expiry_date:
-            !i.selected_batch_id && i.manual_expiry_date.trim()
-              ? i.manual_expiry_date.trim()
-              : undefined,
         })),
       }),
     onSuccess: (res) => {
@@ -1805,14 +1489,7 @@ function EditOrderItemsModal({
               <Table className="min-w-[1000px]">
                 <TableHeader>
                   <TableRow>
-                    {/* Wider dialog (98vw / 1680px) lets us relax the
-                        cramped columns: FEFO batch label + "или ръчно:
-                        партида" input + "Няма налични партиди за избор"
-                        helper all need breathing room. Product column
-                        uses min-width so it claims residual space. */}
                     <TableHead className="min-w-[320px]">Продукт</TableHead>
-                    <TableHead className="w-[260px]">Партида</TableHead>
-                    <TableHead className="w-32">Годност</TableHead>
                     <TableHead className="w-24">Наличност</TableHead>
                     <TableHead className="w-28">Количество</TableHead>
                     <TableHead className="w-32">Ед. цена</TableHead>
@@ -1867,55 +1544,6 @@ function EditOrderItemsModal({
                               />
                             </ProductSearchBoundary>
                           )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
-                            <BatchSelectField
-                              item={item}
-                              onChange={(value) =>
-                                setItem(i, "selected_batch_id", value)
-                              }
-                              disabled={!item.product_id}
-                            />
-                            {!item.selected_batch_id && item.product_id && (
-                              <Input
-                                value={item.manual_batch_number}
-                                onChange={(e) =>
-                                  setItem(
-                                    i,
-                                    "manual_batch_number",
-                                    e.target.value,
-                                  )
-                                }
-                                placeholder="или ръчно: партида"
-                                className="h-7 text-xs font-mono"
-                              />
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {(() => {
-                            const exp = getSelectedBatchExpiry(item);
-                            if (exp) {
-                              return (
-                                <span className="text-sm text-gray-700 whitespace-nowrap">
-                                  {formatBatchExpiry(exp)}
-                                </span>
-                              );
-                            }
-                            // No picked batch — allow manual entry
-                            return (
-                              <SmartDateInput
-                                value={item.manual_expiry_date}
-                                onChange={(iso) =>
-                                  setItem(i, "manual_expiry_date", iso)
-                                }
-                                disabled={!item.product_id}
-                                className="h-8 text-xs"
-                                placeholder="ДД.ММ.ГГ"
-                              />
-                            );
-                          })()}
                         </TableCell>
                         <TableCell>
                           {item.product_id ? (
@@ -2073,14 +1701,13 @@ function CreateOrderModal({
   const [orderCreated, setOrderCreated] = useState(false);
   const [confirmOverstock, setConfirmOverstock] = useState(false);
 
-  // Keyboard-flow refs — Enter in expiry jumps to qty → price → (next row)
-  // expiry, so warehouse staff can key-fill a whole order from a single
+  // Keyboard-flow refs — Enter in qty jumps to price → (next row) qty,
+  // so warehouse staff can key-fill a whole order from a single
   // "typed scan" without reaching for the mouse. Keyed by row_key so
   // adding/removing rows keeps the right input in focus.
   const qtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const priceRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const discountRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const expiryRefs = useRef<Record<string, HTMLInputElement | null>>({});
   // Full "top-of-form" keyboard flow: партньор → дата → № заявка →
   // обект → (име/код ако нов) → първи продукт.
   const partnerInputRef = useRef<HTMLInputElement | null>(null);
@@ -2094,7 +1721,7 @@ function CreateOrderModal({
   );
   // Pending focus intents — set synchronously, consumed after next render
   // when the refs have been reconciled (e.g. after handleProductSelect
-  // swaps the <ProductSearch> for the expiry/qty row, or after addItem
+  // swaps the <ProductSearch> for the qty row, or after addItem
   // appends a new row).
   const pendingFocusRowRef = useRef<string | null>(null);
   const pendingFocusNewRowProductRef = useRef<boolean>(false);
@@ -2138,16 +1765,14 @@ function CreateOrderModal({
 
   // Consume deferred focus intents AFTER items re-render so refs point
   // at the newly rendered inputs. Two flavours:
-  //   (a) just-picked-product → jump from ProductSearch to the row's
-  //       expiry (or qty if batch/expiry is auto-picked).
+  //   (a) just-picked-product → jump from ProductSearch to the row's qty.
   //   (b) just-added-row → focus the new row's ProductSearch.
   useEffect(() => {
     if (pendingFocusRowRef.current) {
       const rowKey = pendingFocusRowRef.current;
       pendingFocusRowRef.current = null;
       queueMicrotask(() => {
-        const target =
-          expiryRefs.current[rowKey] ?? qtyRefs.current[rowKey] ?? null;
+        const target = qtyRefs.current[rowKey] ?? null;
         focusAndSelect(target);
       });
     }
@@ -2191,10 +1816,9 @@ function CreateOrderModal({
       setItems((prev) =>
         prev.map((item, i) => {
           if (i !== idx) return item;
-          // Remember which row's expiry/qty to focus after this render:
+          // Remember which row's qty to focus after this render:
           // once the row flips from "product picker" to "filled product",
-          // the expiry/qty inputs will mount and the deferred focus
-          // effect can honour it.
+          // the qty input mounts and the deferred focus effect honours it.
           pendingFocusRowRef.current = item.row_key;
           return {
             ...item,
@@ -2205,8 +1829,6 @@ function CreateOrderModal({
             unit: product.unit || "бр.",
             stock,
             cost_price: Number.isFinite(cost) && cost > 0 ? cost : 0,
-            batches: product.batches || [],
-            selected_batch_id: "",
           };
         }),
       );
@@ -2286,9 +1908,6 @@ function CreateOrderModal({
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price) || undefined,
           discount_percent: Number(i.discount_percent) || 0,
-          batch_id: i.selected_batch_id
-            ? Number(i.selected_batch_id)
-            : undefined,
         })),
       }),
     onSuccess: (res) => {
@@ -2299,7 +1918,7 @@ function CreateOrderModal({
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       if (onCreated && createdOrder && createdOrder.id) {
-        // Open detail modal directly — user sees order summary + can edit batches
+        // Open detail modal directly — user sees order summary
         onClose();
         onCreated(createdOrder);
         return;
@@ -2565,14 +2184,7 @@ function CreateOrderModal({
               <Table className="min-w-[1000px]">
                 <TableHeader>
                   <TableRow>
-                    {/* Wider dialog (98vw / 1680px) lets us relax the
-                        cramped columns: FEFO batch label + "или ръчно:
-                        партида" input + "Няма налични партиди за избор"
-                        helper all need breathing room. Product column
-                        uses min-width so it claims residual space. */}
                     <TableHead className="min-w-[320px]">Продукт</TableHead>
-                    <TableHead className="w-[260px]">Партида</TableHead>
-                    <TableHead className="w-32">Годност</TableHead>
                     <TableHead className="w-24">Наличност</TableHead>
                     <TableHead className="w-28">Количество</TableHead>
                     <TableHead className="w-32">Ед. цена</TableHead>
@@ -2638,66 +2250,6 @@ function CreateOrderModal({
                               />
                             </ProductSearchBoundary>
                           )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
-                            <BatchSelectField
-                              item={item}
-                              onChange={(value) =>
-                                setItem(i, "selected_batch_id", value)
-                              }
-                              disabled={!item.product_id}
-                            />
-                            {!item.selected_batch_id && item.product_id && (
-                              <Input
-                                value={item.manual_batch_number}
-                                onChange={(e) =>
-                                  setItem(
-                                    i,
-                                    "manual_batch_number",
-                                    e.target.value,
-                                  )
-                                }
-                                placeholder="или ръчно: партида"
-                                className="h-7 text-xs font-mono"
-                              />
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {(() => {
-                            const exp = getSelectedBatchExpiry(item);
-                            if (exp) {
-                              return (
-                                <span className="text-sm text-gray-700 whitespace-nowrap">
-                                  {formatBatchExpiry(exp)}
-                                </span>
-                              );
-                            }
-                            // No picked batch — allow manual entry
-                            return (
-                              <SmartDateInput
-                                ref={(el) => {
-                                  expiryRefs.current[item.row_key] = el;
-                                }}
-                                value={item.manual_expiry_date}
-                                onChange={(iso) =>
-                                  setItem(i, "manual_expiry_date", iso)
-                                }
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    focusAndSelect(
-                                      qtyRefs.current[item.row_key],
-                                    );
-                                  }
-                                }}
-                                disabled={!item.product_id}
-                                className="h-8 text-xs"
-                                placeholder="ДД.ММ.ГГ"
-                              />
-                            );
-                          })()}
                         </TableCell>
                         <TableCell>
                           {item.product_id ? (
@@ -2801,7 +2353,7 @@ function CreateOrderModal({
                               const nextRow = items[i + 1];
                               if (nextRow) {
                                 focusAndSelect(
-                                  expiryRefs.current[nextRow.row_key],
+                                  qtyRefs.current[nextRow.row_key],
                                 );
                                 return;
                               }
@@ -2815,9 +2367,7 @@ function CreateOrderModal({
                               ) {
                                 addItemAndFocus();
                               } else {
-                                focusAndSelect(
-                                  expiryRefs.current[item.row_key],
-                                );
+                                focusAndSelect(qtyRefs.current[item.row_key]);
                               }
                             }}
                             className={`w-20 ${discount > 0 ? "border-blue-400 text-blue-700" : ""}`}

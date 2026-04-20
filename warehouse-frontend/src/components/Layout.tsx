@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Package,
   Warehouse,
-  Trash2,
   PackagePlus,
   ShoppingCart,
   Users,
@@ -21,7 +20,6 @@ import {
   Settings,
   CheckCheck,
   AlertTriangle,
-  Clock,
   DollarSign,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -83,19 +81,12 @@ const allNavItems = [
     label: "Плащания",
     roles: ["admin", "accountant"],
   },
-  {
-    to: "/write-offs",
-    icon: Trash2,
-    label: "Бракуване",
-    roles: ["admin", "warehouse", "accountant"],
-  },
   { to: "/analytics", icon: BarChart3, label: "Анализи", roles: ["admin"] },
   { to: "/settings", icon: Settings, label: "Настройки", roles: ["admin"] },
 ];
 
 const notifTypeIcons: Record<string, React.ElementType> = {
   low_stock: AlertTriangle,
-  expiring: Clock,
   payment: DollarSign,
   order_created: ShoppingCart,
   order_fulfilled: ShoppingCart,
@@ -104,7 +95,6 @@ const notifTypeIcons: Record<string, React.ElementType> = {
 
 const notifTypeBg: Record<string, string> = {
   low_stock: "bg-red-50 text-red-600",
-  expiring: "bg-orange-50 text-orange-600",
   payment: "bg-green-50 text-green-600",
   order_created: "bg-blue-50 text-blue-600",
 };

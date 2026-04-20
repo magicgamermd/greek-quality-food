@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import { CreditCard, Package, Receipt, TrendingUp } from "lucide-react";
 import {
   Area,
@@ -44,7 +43,6 @@ type SalesPoint = { group_name: string; total_revenue: number };
 
 export function OwnerDashboard() {
   const { period, from, to, setPeriod } = usePeriod();
-  const navigate = useNavigate();
 
   // Main profit KPIs for the selected period
   const profitQ = useQuery<ProfitResponse>({
@@ -63,27 +61,6 @@ export function OwnerDashboard() {
     queryKey: ["owner-dashboard"],
     queryFn: () => api.get("/analytics/dashboard").then((r) => r.data),
     refetchInterval: 60_000,
-  });
-
-  // Expired stock alert — counts batches past expiry with positive qty
-  const expiredQ = useQuery<{ count: number; total_value: number }>({
-    queryKey: ["owner-expired-stock"],
-    queryFn: async () => {
-      const res = await api.get("/inventory/expiring?days=0");
-      const rows = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
-      // Rows where expiry_date < today — backend includes these in days=0
-      const expired = rows.filter((r: any) => {
-        if (!r.expiry_date) return false;
-        return new Date(r.expiry_date) < new Date();
-      });
-      const total_value = expired.reduce((sum: number, r: any) => {
-        const qty = Number(r.quantity ?? 0);
-        const price = Number(r.purchase_price ?? r.unit_cost ?? 0);
-        return sum + qty * price;
-      }, 0);
-      return { count: expired.length, total_value };
-    },
-    refetchInterval: 300_000, // 5 min — not a hot KPI
   });
 
   // 30-day sparkline (revenue trend)
@@ -114,30 +91,6 @@ export function OwnerDashboard() {
       </div>
 
       <PeriodSwitcher value={period} onChange={(p) => setPeriod(p)} />
-
-      {/* Expired-stock alert — shown only when there's stock past expiry */}
-      {expiredQ.data && expiredQ.data.count > 0 ? (
-        <button
-          type="button"
-          onClick={() => navigate("/write-offs")}
-          className="w-full text-left rounded-xl border border-red-500/40 bg-red-500/10 p-3 hover:bg-red-500/15 transition-colors flex items-center gap-3"
-        >
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-500/25 text-red-300 text-lg">
-            ⚠
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-red-200">
-              Изтекла стока: {expiredQ.data.count}{" "}
-              {expiredQ.data.count === 1 ? "партида" : "партиди"}
-            </p>
-            <p className="text-xs text-red-300/80">
-              Стойност {formatCurrency(expiredQ.data.total_value)} — тапни за
-              бракуване
-            </p>
-          </div>
-          <span className="text-red-300">›</span>
-        </button>
-      ) : null}
 
       {/* KPI grid */}
       <div className="grid grid-cols-2 gap-3">

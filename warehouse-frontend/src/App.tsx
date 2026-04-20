@@ -22,12 +22,9 @@ import { Partners } from "@/pages/Partners";
 import { Suppliers } from "@/pages/Suppliers";
 import { Invoices } from "@/pages/Invoices";
 import { Payments } from "@/pages/Payments";
-import { WriteOffs } from "@/pages/WriteOffs";
 import { Analytics } from "@/pages/Analytics";
 import { Settings } from "@/pages/Settings";
 import { OwnerAnalytics } from "@/pages/OwnerAnalytics";
-import { OwnerIncomingAcceptance } from "@/pages/OwnerIncomingAcceptance";
-import { OwnerInvoiceScan } from "@/pages/OwnerInvoiceScan";
 import { OwnerDashboard } from "@/pages/owner/OwnerDashboard";
 import { OwnerScan } from "@/pages/owner/OwnerScan";
 import { OwnerPayments } from "@/pages/owner/OwnerPayments";
@@ -117,8 +114,14 @@ function AppRoutes() {
         <Route path="top" element={<OwnerTop />} />
         {/* Legacy routes kept for backwards compatibility / deep links */}
         <Route path="analytics" element={<OwnerAnalytics />} />
-        <Route path="incoming" element={<OwnerIncomingAcceptance />} />
-        <Route path="incoming/scan" element={<OwnerInvoiceScan />} />
+        <Route
+          path="incoming"
+          element={<Navigate to="/owner/scan" replace />}
+        />
+        <Route
+          path="incoming/scan"
+          element={<Navigate to="/owner/scan" replace />}
+        />
         <Route path="*" element={<Navigate to="/owner/dashboard" replace />} />
       </Route>
       <Route
@@ -157,14 +160,6 @@ function AppRoutes() {
           element={
             <ProtectedRoute allowedRoles={["admin", "warehouse"]}>
               <Inventory />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="write-offs"
-          element={
-            <ProtectedRoute allowedRoles={["admin", "warehouse", "accountant"]}>
-              <WriteOffs />
             </ProtectedRoute>
           }
         />
