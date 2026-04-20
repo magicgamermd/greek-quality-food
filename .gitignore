@@ -8,6 +8,9 @@ warehouse-backend/node_modules/
 warehouse-frontend/node_modules/
 warehouse-frontend/dist/
 warehouse-backend/dist/
+telegram-bot/node_modules/
+telegram-bot/logs/
+telegram-bot/processed-uids.json
 *.log
 .DS_Store
 __pycache__/
