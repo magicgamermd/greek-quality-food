@@ -23,10 +23,8 @@ import settingsRoutes from "./routes/settings.js";
 import notificationRoutes from "./routes/notifications.js";
 import importRoutes from "./routes/import.js";
 import exportRoutes from "./routes/export.js";
-import batchRoutes from "./routes/batches.js";
 import productAliasRoutes from "./routes/product-aliases.js";
 import fiscalRoutes from "./routes/fiscal.js";
-import writeoffRoutes from "./routes/writeoffs.js";
 
 dotenv.config();
 
@@ -38,13 +36,18 @@ declare module "@fastify/jwt" {
   }
 }
 
-const app = Fastify({
-  logger: {
-    level: process.env.NODE_ENV === "production" ? "info" : "debug",
-  },
-});
+// Build the Fastify app (plugins + routes) without binding to a port.
+// Exported so Vitest tests can boot the full route table and assert
+// endpoint presence / absence without opening a socket. Each call
+// returns a fresh Fastify instance so multiple tests can build in
+// isolation within a single process.
+export async function build() {
+  const app = Fastify({
+    logger: {
+      level: process.env.NODE_ENV === "production" ? "info" : "debug",
+    },
+  });
 
-async function start() {
   // Plugins
   const corsOrigin = process.env.CORS_ORIGIN;
   const explicitCorsOrigins = corsOrigin
@@ -227,10 +230,39 @@ async function start() {
   await app.register(notificationRoutes, { prefix: "/notifications" });
   await app.register(importRoutes, { prefix: "/import" });
   await app.register(exportRoutes, { prefix: "/export" });
-  await app.register(batchRoutes, { prefix: "/batches" });
   await app.register(productAliasRoutes, { prefix: "/product-aliases" });
   await app.register(fiscalRoutes, { prefix: "/fiscal" });
-  await app.register(writeoffRoutes, { prefix: "/inventory/write-offs" });
+
+  return app;
+}
+
+async function start() {
+  const app = await build();
+
+  // Graceful shutdown — drain in-flight requests + close DB pool before exit.
+  // Without this, Railway/PM2 redeploys would SIGTERM the process mid-
+  // transaction, leaving incoming_goods/orders rows in inconsistent state.
+  //
+  // Order matters:
+  //   1. app.close() — Fastify stops accepting new connections, waits for
+  //      in-flight handlers to finish (default 5s timeout).
+  //   2. pool.end() — pg.Pool drains idle clients, returning ROLLBACK on
+  //      any still-open transactions.
+  const shutdown = async (signal: string) => {
+    app.log.info({ signal }, "shutdown initiated");
+    try {
+      await app.close();
+      await dbPool.end();
+      app.log.info("shutdown complete");
+      process.exit(0);
+    } catch (err) {
+      app.log.error({ err }, "shutdown failed");
+      process.exit(1);
+    }
+  };
+
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 
   // Start server
   const port = parseInt(process.env.PORT || "3000", 10);
@@ -242,34 +274,12 @@ async function start() {
   );
 }
 
-// Graceful shutdown — drain in-flight requests + close DB pool before exit.
-// Without this, Railway/PM2 redeploys would SIGTERM the process mid-
-// transaction, leaving incoming_goods/orders rows in inconsistent state.
-//
-// Order matters:
-//   1. app.close() — Fastify stops accepting new connections, waits for
-//      in-flight handlers to finish (default 5s timeout).
-//   2. pool.end() — pg.Pool drains idle clients, returning ROLLBACK on
-//      any still-open transactions.
-const shutdown = async (signal: string) => {
-  app.log.info({ signal }, "shutdown initiated");
-  try {
-    await app.close();
-    await dbPool.end();
-    app.log.info("shutdown complete");
-    process.exit(0);
-  } catch (err) {
-    app.log.error({ err }, "shutdown failed");
+// Auto-start when running the server directly. Skipped under Vitest so
+// tests can import { build } without binding to a port or spawning
+// SIGTERM/SIGINT handlers that interfere with the runner.
+if (!process.env.VITEST) {
+  start().catch((err) => {
+    console.error("Failed to start server:", err);
     process.exit(1);
-  }
-};
-
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
-process.on("SIGINT", () => void shutdown("SIGINT"));
-
-start().catch((err) => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
-
-export default app;
+  });
+}
