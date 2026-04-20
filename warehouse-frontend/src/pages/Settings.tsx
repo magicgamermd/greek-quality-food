@@ -606,7 +606,7 @@ export function Settings() {
                     onChange={(e) =>
                       handleCompanyFormChange("company_name", e.target.value)
                     }
-                    placeholder="Например: Greek Foods EOOD"
+                    placeholder="Например: МЕРТ-М ЕООД"
                   />
                 </div>
 

@@ -215,12 +215,12 @@ export function Layout() {
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/10">
-          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-[#6c3dff] shrink-0">
-            <span className="text-white font-bold text-sm">GF</span>
+          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-[#f97316] shrink-0">
+            <span className="text-white font-bold text-sm">ММ</span>
           </div>
           {(sidebarOpen || isMobile) && (
             <div className="overflow-hidden">
-              <p className="font-bold text-sm leading-tight">Greek Foods</p>
+              <p className="font-bold text-sm leading-tight">МЕРТ-М</p>
               <p className="text-xs text-white/50">Склад</p>
             </div>
           )}
@@ -309,7 +309,7 @@ export function Layout() {
 
           {/* Breadcrumb */}
           <div className="flex items-center gap-1 text-sm text-gray-500">
-            <span>Greek Foods</span>
+            <span>МЕРТ-М</span>
             <ChevronRight className="h-4 w-4" />
             <span className="text-gray-900 font-medium">
               {currentRouteName}

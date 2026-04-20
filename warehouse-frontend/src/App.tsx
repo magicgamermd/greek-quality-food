@@ -85,7 +85,7 @@ function AppRoutes() {
           ) : (
             <Login
               redirectTo="/owner"
-              appTitle="Greek Foods Owner"
+              appTitle="МЕРТ-М Owner"
               subtitle="Owner PWA: анализи и приемане на доставки"
               loginHeading="Вход в owner PWA"
               theme="owner"

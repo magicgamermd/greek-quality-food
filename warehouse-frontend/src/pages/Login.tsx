@@ -21,8 +21,8 @@ interface LoginProps {
 
 export function Login({
   redirectTo = "/",
-  appTitle = "Greek Foods",
-  subtitle = "Система за управление на склад",
+  appTitle = "МЕРТ-М Склад",
+  subtitle = "Влезте в системата за управление на склад",
   loginHeading = "Вход в системата",
   theme = "default",
   loginProfile = "default",
@@ -100,13 +100,18 @@ export function Login({
               "inline-flex items-center justify-center h-16 w-16 rounded-2xl mb-4",
               isOwnerTheme
                 ? "border border-[#243055] bg-[#12162a] text-[#4f7cff]"
-                : "bg-[#6c3dff] text-white",
+                : "bg-[#f97316] text-white",
             )}
           >
-            <span className="font-bold text-2xl">GF</span>
+            <span className="font-bold text-2xl">ММ</span>
           </div>
           <h1 className="text-2xl font-bold text-white">{appTitle}</h1>
-          <p className={cn("mt-1", isOwnerTheme ? "text-[#9aa8d6]" : "text-white/60")}>
+          <p
+            className={cn(
+              "mt-1",
+              isOwnerTheme ? "text-[#9aa8d6]" : "text-white/60",
+            )}
+          >
             {subtitle}
           </p>
         </div>
@@ -144,7 +149,10 @@ export function Login({
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="email" className={isOwnerTheme ? "text-[#9aa8d6]" : ""}>
+              <Label
+                htmlFor="email"
+                className={isOwnerTheme ? "text-[#9aa8d6]" : ""}
+              >
                 Имейл
               </Label>
               <Input
@@ -164,7 +172,10 @@ export function Login({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="password" className={isOwnerTheme ? "text-[#9aa8d6]" : ""}>
+              <Label
+                htmlFor="password"
+                className={isOwnerTheme ? "text-[#9aa8d6]" : ""}
+              >
                 Парола
               </Label>
               <div className="relative">
@@ -206,7 +217,9 @@ export function Login({
               type="submit"
               className={cn(
                 "w-full mt-2",
-                isOwnerTheme ? "bg-[#4f7cff] hover:bg-[#4672ec] text-white" : "",
+                isOwnerTheme
+                  ? "bg-[#4f7cff] hover:bg-[#4672ec] text-white"
+                  : "",
               )}
               disabled={loading}
             >
@@ -214,7 +227,9 @@ export function Login({
                 <>
                   <Spinner
                     size="sm"
-                    className={isOwnerTheme ? "border-white/30 border-t-white" : ""}
+                    className={
+                      isOwnerTheme ? "border-white/30 border-t-white" : ""
+                    }
                   />
                   Влизане...
                 </>

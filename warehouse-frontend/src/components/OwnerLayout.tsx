@@ -53,12 +53,12 @@ export function OwnerLayout() {
       <header className="hidden md:block sticky top-0 z-30 border-b border-[#243055] bg-[#090c18]/90 backdrop-blur">
         <div className="max-w-6xl mx-auto px-4 py-3.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="h-9 w-9 rounded-xl border border-[#243055] bg-[#12162a] flex items-center justify-center font-bold text-sm text-[#4f7cff]">
-              GF
+            <div className="h-9 w-9 rounded-xl border border-[#243055] bg-[#12162a] flex items-center justify-center font-bold text-sm text-[#f97316]">
+              ММ
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold truncate text-[#f3f6ff]">
-                Greek Foods Owner
+                МЕРТ-М Owner
               </p>
               <p className="text-xs text-[#9aa8d6] truncate">
                 {currentRouteName}
