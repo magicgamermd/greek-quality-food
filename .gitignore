@@ -4,7 +4,6 @@ dist/
 *.sqlite
 ssl/
 nginx/
-docker-compose.yml
 warehouse-backend/node_modules/
 warehouse-frontend/node_modules/
 warehouse-frontend/dist/
