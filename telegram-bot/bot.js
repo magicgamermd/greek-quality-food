@@ -1188,25 +1188,31 @@ async function _processUserMessageInner(bot, chatId, userId, userName, text) {
     }
   }
 
-  // 2. "справка" / "наличности" / "inventory" — PDF report
+  // 2. "справка" / "наличности" / "inventory" — top-30 stocked products as text
   if (
     /(?:справка|наличност|inventory|всички продукти|цялата база)/i.test(text)
   ) {
-    bot.sendChatAction(chatId, "upload_document");
+    bot.sendChatAction(chatId, "typing");
     try {
-      const res = await apiCall("GET", "/inventory/report/pdf");
-      const pdfBuffer = Buffer.from(await res.arrayBuffer());
-      const { tmpdir } = await import("os");
-      const { join } = await import("path");
-      const { writeFileSync, unlinkSync } = await import("fs");
-      const tmpPath = join(tmpdir(), `inventory-report-${Date.now()}.pdf`);
-      writeFileSync(tmpPath, pdfBuffer);
-      await bot.sendDocument(chatId, tmpPath, {
-        caption: "📦 Инвентарна справка — всички продукти, наличности и цени",
+      const res = await apiCall("GET", "/inventory?limit=30&has_stock=true");
+      const data = await res.json();
+      const rows = data.data || data.rows || data.items || [];
+      if (!rows.length) {
+        await bot.sendMessage(chatId, "📦 Няма налични продукти в момента.");
+        return;
+      }
+      const lines = rows.slice(0, 30).map((r, i) => {
+        const name = r.name_bg || r.name || r.product_name || "?";
+        const sku = r.sku || "";
+        const qty = r.total_quantity ?? r.quantity ?? r.stock_level ?? "?";
+        const price = r.selling_price ?? r.price ?? "";
+        return `${i + 1}. ${name}${sku ? ` [${sku}]` : ""} — ${qty} бр${price ? ` · ${price} лв` : ""}`;
       });
-      try {
-        unlinkSync(tmpPath);
-      } catch {}
+      const body = lines.join("\n");
+      await bot.sendMessage(
+        chatId,
+        `📦 Топ 30 с наличност:\n\n${body}\n\nПълна справка: ${API_URL.replace(/\/+$/, "")}/inventory`,
+      );
     } catch (err) {
       console.error("Inventory report error:", err.message);
       await bot.sendMessage(chatId, "❌ Грешка при генериране на справката.");
@@ -1890,7 +1896,9 @@ async function main() {
       await bot.answerCallbackQuery(query.id, { text: "Потвърждаване..." });
 
       try {
-        await apiCall("PUT", `/orders/${orderId}/status`, { status: "confirmed" });
+        await apiCall("PUT", `/orders/${orderId}/status`, {
+          status: "confirmed",
+        });
         await bot.sendMessage(
           chatId,
           `✅ Поръчка #${orderId} от email е потвърдена.`,
@@ -2076,7 +2084,7 @@ async function main() {
       return;
     }
     // --- Shipping payment buttons ---
-        // --- Done (fulfill) order: done_ORDER_ID ---
+    // --- Done (fulfill) order: done_ORDER_ID ---
     if (data.startsWith("done_")) {
       const orderId = parseInt(data.replace("done_", ""), 10);
       if (!orderId) {
