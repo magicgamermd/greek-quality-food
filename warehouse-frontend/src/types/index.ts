@@ -206,6 +206,20 @@ export interface Order {
   receipt_printed?: boolean;
   receipt_printed_at?: string;
   invoice_include_vat?: boolean;
+  econt_receiver_name?: string | null;
+  econt_receiver_phone?: string | null;
+  econt_delivery_type?: "office" | "address" | null;
+  econt_city?: string | null;
+  econt_office_code?: string | null;
+  econt_office_name?: string | null;
+  econt_street?: string | null;
+  econt_street_num?: string | null;
+  econt_cod_amount?: number | null;
+  econt_weight?: number | null;
+  econt_shipping_cost?: number | null;
+  econt_shipment_number?: string | null;
+  econt_tracking_url?: string | null;
+  econt_pdf_url?: string | null;
 }
 
 export interface OrderItem {
