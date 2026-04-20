@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-mertm}
+      POSTGRES_USER: ${POSTGRES_USER:-warehouse}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-mertm_warehouse}
     ports:
@@ -18,7 +18,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mertm} -d ${POSTGRES_DB:-mertm_warehouse}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-warehouse} -d ${POSTGRES_DB:-mertm_warehouse}",
+        ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -26,7 +30,7 @@ services:
       resources:
         limits:
           memory: 1G
-          cpus: '1.0'
+          cpus: "1.0"
         reservations:
           memory: 256M
 
@@ -49,7 +53,7 @@ services:
       resources:
         limits:
           memory: 512M
-          cpus: '0.5'
+          cpus: "0.5"
         reservations:
           memory: 128M
 
@@ -62,7 +66,7 @@ services:
     ports:
       - "3003:3000"
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://mertm:${POSTGRES_PASSWORD}@postgres:5432/mertm_warehouse}
+      DATABASE_URL: ${DATABASE_URL:-postgres://warehouse:${POSTGRES_PASSWORD}@postgres:5432/mertm_warehouse}
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
@@ -91,7 +95,7 @@ services:
       resources:
         limits:
           memory: 1G
-          cpus: '1.0'
+          cpus: "1.0"
         reservations:
           memory: 256M
 
@@ -110,7 +114,7 @@ services:
       resources:
         limits:
           memory: 256M
-          cpus: '0.5'
+          cpus: "0.5"
         reservations:
           memory: 64M
 
