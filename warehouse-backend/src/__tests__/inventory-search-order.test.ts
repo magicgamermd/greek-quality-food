@@ -73,7 +73,9 @@ describe("inventory search ordering", () => {
     }
   });
 
-  it("supports SKU search and no-expiry inventory filter", async () => {
+  // MERT-M: batch/expiry tracking removed — the `no_expiry` query param is
+  // now silently ignored (not forwarded to SQL). SKU search still works.
+  it("supports SKU search and silently ignores legacy no_expiry filter", async () => {
     mockQuery
       .mockResolvedValueOnce(resultRows([]))
       .mockResolvedValueOnce(resultRows([{ total: "0" }]));
@@ -90,9 +92,9 @@ describe("inventory search ordering", () => {
       expect(String(sql)).toContain(
         "WHEN LOWER(COALESCE(p.sku, '')) = $3 THEN 0",
       );
-      expect(String(sql)).toContain(
-        "COUNT(inv.product_id) > 0 AND COUNT(CASE WHEN inv.batch_id IS NULL OR b.expiry_date IS NULL THEN 1 END) > 0",
-      );
+      // Legacy batch/expiry fragments must NOT leak into the new SQL
+      expect(String(sql)).not.toContain("batch_id");
+      expect(String(sql)).not.toContain("b.expiry_date");
       expect(params).toEqual(["10001", "%10001%", "10001", "10001%", 25, 0]);
     } finally {
       await app.close();
