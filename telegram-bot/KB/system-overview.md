@@ -3,24 +3,38 @@
 ## Обща информация
 
 МЕРТ-М ЕООД е водещ вносител на професионално кухненско оборудване в България от 1997г.
+Марки: Hendi, Bartscher, KitchenAid, Liebherr, Unox, Fiamma и др.
+Пазар: B2B — ресторанти, заведения, хотели, пекарни.
 
 ## Системата
 
-- **Frontend (Админ панел):** https://mert-m-demo.pages.dev
-- **Backend API:** https://mert-m-demo-production.up.railway.app
-- **Данни за вход:** admin@mertm.bg / mertm2024!
+- **Frontend (Админ панел):** http://localhost:5173 (dev) / self-hosted продукция
+- **Backend API:** http://localhost:3003 (dev) / self-hosted продукция
+- **Данни за вход:** admin@mertm.bg (паролата е в .env на bot-а — API_PASSWORD)
 
 ## Основни модули
 
-1. **Продукти** — каталог с 50+ продукта, категории, цени, наличности
-2. **Поръчки** — създаване, редактиране, статуси, история
-3. **Фактури** — автоматично генериране на PDF фактури
-4. **Клиенти/Партньори** — база данни с контрагенти
+1. **Продукти** — каталог с търговско кухненско оборудване, SKU, категории, цени, наличности
+2. **Поръчки** — създаване, редактиране, статуси (pending/confirmed/fulfilled/cancelled), история
+3. **Фактури** — автоматично генериране на PDF фактури (BGN, ДДС 20%)
+4. **Клиенти/Партньори** — B2B контрагенти, ЕИК, ДДС номер, адреси за доставка
 5. **Аналитика** — справки за продажби, наличности, тенденции
-6. **Доставки** — интеграция с Еконт калкулатор
+6. **Доставки** — интеграция с Еконт (товарителници, проследяване, калкулатор)
+7. **Входящи** — OCR на фактури от доставчици, auto-match на продукти
+
+## Важно за MERT-M
+
+- **НЯМА** срокове на годност — стоката е дълготрайна
+- **НЯМА** партиди — не е FMCG
+- Валута: BGN (лева)
+- ДДС: 20%
+- Времева зона: Europe/Sofia
+- Dates: ISO 8601
 
 ## Технологии
 
-- Frontend: React + Vite + Tailwind CSS
-- Backend: Node.js + Express + PostgreSQL
-- Хостинг: Cloudflare Pages (frontend) + Railway (backend)
+- Frontend: React 19 + Vite + Tailwind v4 + TanStack Query
+- Backend: Fastify + TypeScript + PostgreSQL 16
+- AI Service: Python + FastAPI (OCR на входящи документи)
+- Telegram Bot: Node.js + node-telegram-bot-api + OpenRouter (Claude 3.5 Haiku)
+- Хостинг: self-hosted на Mac Mini M4 в офиса на МЕРТ-М

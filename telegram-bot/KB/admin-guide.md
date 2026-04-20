@@ -2,8 +2,8 @@
 
 ## Вход в системата
 
-1. Отворете https://mert-m-demo.pages.dev
-2. Въведете: admin@mertm.bg / mertm2024!
+1. Отворете http://localhost:5173 (dev) или вътрешния адрес на офиса
+2. Въведете: admin@mertm.bg / (паролата е в `.env` на backend-а като `API_PASSWORD` на bot-а)
 3. Натиснете "Вход"
 
 ## Управление на продукти
