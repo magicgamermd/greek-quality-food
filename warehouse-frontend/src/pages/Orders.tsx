@@ -34,6 +34,9 @@ import {
   X as XIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
+import { EcontShippingPicker } from "@/components/EcontShippingPicker";
+import { EcontShipmentActions } from "@/components/EcontShipmentActions";
 import type { Order, OrderItem, Partner, PartnerOrderObject } from "@/types";
 import { formatDate, formatCurrency, isoDateToday } from "@/lib/utils";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
@@ -408,9 +411,14 @@ function OrderDetailModal({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const { token: authToken } = useAuth();
 
   // Fetch full order with items
-  const { data: fullOrder, isLoading: detailLoading } = useQuery<Order>({
+  const {
+    data: fullOrder,
+    isLoading: detailLoading,
+    refetch: refetchDetail,
+  } = useQuery<Order>({
     queryKey: ["order-detail", order?.id],
     queryFn: () =>
       api.get(`/orders/${order!.id}`).then((r) => r.data?.data ?? r.data),
@@ -723,6 +731,17 @@ function OrderDetailModal({
             <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-800">
               <span className="font-medium">Бележки:</span> {detail.notes}
             </div>
+          )}
+
+          {detail && authToken && (
+            <EcontShipmentActions
+              order={detail}
+              token={authToken}
+              onOrderUpdated={() => {
+                refetchDetail();
+                qc.invalidateQueries({ queryKey: ["orders"] });
+              }}
+            />
           )}
 
           {/* Items table */}
@@ -1694,7 +1713,18 @@ function CreateOrderModal({
     object_name: "",
     object_code: "",
     notes: "",
+    econt_delivery_type: "office" as "office" | "address",
+    econt_receiver_name: "",
+    econt_receiver_phone: "",
+    econt_city: "",
+    econt_office_code: "",
+    econt_office_name: "",
+    econt_street: "",
+    econt_street_num: "",
+    econt_weight: 1,
+    econt_cod_amount: 0,
   });
+  const { token: authToken } = useAuth();
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
   const [stockWarnings, setStockWarnings] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -1751,6 +1781,16 @@ function CreateOrderModal({
         object_name: "",
         object_code: "",
         notes: "",
+        econt_delivery_type: "office",
+        econt_receiver_name: "",
+        econt_receiver_phone: "",
+        econt_city: "",
+        econt_office_code: "",
+        econt_office_name: "",
+        econt_street: "",
+        econt_street_num: "",
+        econt_weight: 1,
+        econt_cod_amount: 0,
       });
       setItems([emptyItem()]);
       setStockWarnings([]);
@@ -1903,6 +1943,18 @@ function CreateOrderModal({
         object_name: form.object_name.trim() || undefined,
         object_code: form.object_code.trim() || undefined,
         notes: form.notes || undefined,
+        econt_receiver_name: form.econt_receiver_name.trim() || undefined,
+        econt_receiver_phone: form.econt_receiver_phone.trim() || undefined,
+        econt_delivery_type: form.econt_city
+          ? form.econt_delivery_type
+          : undefined,
+        econt_city: form.econt_city.trim() || undefined,
+        econt_office_code: form.econt_office_code || undefined,
+        econt_office_name: form.econt_office_name || undefined,
+        econt_street: form.econt_street.trim() || undefined,
+        econt_street_num: form.econt_street_num.trim() || undefined,
+        econt_weight: form.econt_weight || undefined,
+        econt_cod_amount: form.econt_cod_amount || undefined,
         items: validItems.map((i) => ({
           product_id: Number(i.product_id),
           quantity: Number(i.quantity),
@@ -2408,6 +2460,30 @@ function CreateOrderModal({
               rows={2}
             />
           </div>
+
+          {authToken && (
+            <EcontShippingPicker
+              value={{
+                econt_delivery_type: form.econt_delivery_type,
+                econt_receiver_name: form.econt_receiver_name,
+                econt_receiver_phone: form.econt_receiver_phone,
+                econt_city: form.econt_city,
+                econt_office_code: form.econt_office_code || undefined,
+                econt_office_name: form.econt_office_name || undefined,
+                econt_street: form.econt_street || undefined,
+                econt_street_num: form.econt_street_num || undefined,
+                econt_weight: form.econt_weight,
+                econt_cod_amount: form.econt_cod_amount,
+              }}
+              onChange={(patch) =>
+                setForm((f) => ({
+                  ...f,
+                  ...(patch as Partial<typeof f>),
+                }))
+              }
+              token={authToken}
+            />
+          )}
         </div>
 
         {/* Order total */}
