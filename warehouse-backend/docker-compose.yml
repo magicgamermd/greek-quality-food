@@ -12,9 +12,14 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-warehouse}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-mertm_warehouse}
+      # Explicitly pin container-internal Postgres port to 5432 so the
+      # host-side PGPORT value (5433 to avoid a local Postgres conflict)
+      # does not leak into the container via env_file.
+      PGPORT: 5432
     ports:
       # NOTE: remove this line for production (keep DB internal-only)
-      - "5432:5432"
+      # Host uses 5433 to avoid clashing with a local macOS Postgres on 5432
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
