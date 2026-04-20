@@ -310,6 +310,116 @@ export default async function econtRoutes(app: FastifyInstance) {
     },
   );
 
-  // Routes /update-shipment, /label-pdf, /track, /label-pdf-download
-  // land in later tasks.
+  // POST /econt/update-shipment
+  app.post(
+    "/update-shipment",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+      const body = request.body as { order_id: number; description?: string };
+
+      const {
+        rows: [order],
+      } = await query("SELECT * FROM orders WHERE id = $1", [body.order_id]);
+      if (!order) {
+        return reply.status(404).send({ error: "Поръчката не е намерена" });
+      }
+      if (!order.econt_shipment_number) {
+        return reply
+          .status(400)
+          .send({ error: "Няма товарителница за обновяване" });
+      }
+
+      // Delete old label — swallow errors (might already be processed by Econt)
+      try {
+        await econtPost("Shipments/LabelService.deleteLabels.json", {
+          shipmentNumbers: [order.econt_shipment_number],
+        });
+      } catch {
+        /* ignore */
+      }
+
+      // Recalculate COD from current order items (with VAT)
+      const { rows: items } = await query(
+        "SELECT SUM(total_price) as total FROM order_items WHERE order_id = $1",
+        [body.order_id],
+      );
+      const totalNet = parseFloat(items[0]?.total || "0");
+      const totalWithVat = totalNet * 1.2;
+
+      // Recalculate total weight from items (quantity × weight_kg)
+      const {
+        rows: [w],
+      } = await query(
+        "SELECT COALESCE(SUM(oi.quantity * COALESCE(p.weight_kg, 0)), 1)::numeric AS tw FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE oi.order_id = $1",
+        [body.order_id],
+      );
+      const weight = parseFloat(w.tw) || 1;
+
+      const label: any = {
+        ...getSender(),
+        receiverClient: {
+          name: order.econt_receiver_name,
+          phones: [order.econt_receiver_phone],
+        },
+        shipmentType:
+          weight <= 50 ? "pack" : weight <= 500 ? "cargo" : "pallet",
+        weight,
+        packCount: 1,
+        shipmentDescription: body.description || "Кухненско оборудване",
+      };
+
+      if (order.econt_office_code) {
+        label.receiverOfficeCode = order.econt_office_code;
+      } else if (order.econt_street) {
+        label.receiverAddress = {
+          city: { name: order.econt_city },
+          street: order.econt_street,
+          num: order.econt_street_num || "",
+        };
+      }
+
+      if (totalWithVat > 0) {
+        label.services = {
+          cdAmount: Math.round(totalWithVat * 1.95583 * 100) / 100,
+          cdType: "get",
+          cdCurrency: "BGN",
+        };
+      }
+
+      const result = await econtPost(
+        "Shipments/LabelService.createLabel.json",
+        {
+          mode: "create",
+          label,
+        },
+      );
+      const shipmentNumber = result.label?.shipmentNumber;
+      const pdfURL = result.label?.pdfURL;
+      const trackingUrl = shipmentNumber
+        ? `https://www.econt.com/services/track-shipment/${shipmentNumber}`
+        : null;
+
+      await query(
+        `UPDATE orders SET econt_shipment_number = $1, econt_tracking_url = $2, econt_pdf_url = $3,
+           econt_cod_amount = $4, econt_weight = $5, updated_at = NOW() WHERE id = $6`,
+        [
+          shipmentNumber,
+          trackingUrl,
+          pdfURL,
+          totalWithVat,
+          weight,
+          body.order_id,
+        ],
+      );
+
+      return reply.send({
+        shipmentNumber,
+        trackingUrl,
+        pdfURL,
+        codAmount: totalWithVat,
+        weight,
+      });
+    },
+  );
 }
