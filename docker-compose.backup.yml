@@ -8,7 +8,7 @@
 services:
   pg-backup:
     image: postgres:16-alpine
-    container_name: greekfoods-pg-backup
+    container_name: mertm-pg-backup
     restart: unless-stopped
     depends_on:
       - postgres

@@ -1,7 +1,7 @@
 {
-  "name": "greek-foods-warehouse-backend",
+  "name": "mertm-warehouse-backend",
   "version": "1.0.0",
-  "description": "Greek Foods Warehouse Management System — Backend API",
+  "description": "MERT-M Warehouse Management System — Backend API",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
