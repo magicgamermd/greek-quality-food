@@ -34,6 +34,10 @@ const methodVariants: Record<string, "success" | "info" | "default"> = {
 
 export function Payments() {
   const [modalOpen, setModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"invoice" | "razpiska">("invoice");
+  const [razpiskaUnlocked, setRazpiskaUnlocked] = useState<boolean>(
+    () => sessionStorage.getItem("razpiska_tab_unlocked") === "true",
+  );
   const [filters, setFilters] = useState({
     search: "",
     payment_method: "all",
@@ -41,15 +45,30 @@ export function Payments() {
     date_to: "",
   });
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isCombo =
+        (e.metaKey && e.altKey && e.key.toLowerCase() === "p") ||
+        (e.ctrlKey && e.altKey && e.key.toLowerCase() === "p");
+      if (!isCombo) return;
+      e.preventDefault();
+      sessionStorage.setItem("razpiska_tab_unlocked", "true");
+      setRazpiskaUnlocked(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const {
     data: payments = [],
     isLoading,
     error,
   } = useQuery<Payment[]>({
-    queryKey: ["payments", filters],
+    queryKey: ["payments", activeTab, filters],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("limit", "100");
+      params.set("type", activeTab);
       if (filters.search.trim()) params.set("q", filters.search.trim());
       if (filters.payment_method !== "all") {
         params.set("payment_method", filters.payment_method);
@@ -90,11 +109,40 @@ export function Payments() {
           <h1 className="text-2xl font-bold text-gray-900">Плащания</h1>
           <p className="text-gray-500 text-sm mt-1">История на плащанията</p>
         </div>
-        <Button onClick={() => setModalOpen(true)}>
-          <Plus className="h-4 w-4" />
-          Запиши плащане
-        </Button>
+        {activeTab === "invoice" && (
+          <Button onClick={() => setModalOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Запиши плащане
+          </Button>
+        )}
       </div>
+
+      {razpiskaUnlocked && (
+        <div className="border-b border-gray-200">
+          <nav className="flex gap-6">
+            <button
+              className={`py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "invoice"
+                  ? "border-[#f97316] text-[#f97316]"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+              onClick={() => setActiveTab("invoice")}
+            >
+              Фактурни
+            </button>
+            <button
+              className={`py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "razpiska"
+                  ? "border-[#f97316] text-[#f97316]"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+              onClick={() => setActiveTab("razpiska")}
+            >
+              По разписки
+            </button>
+          </nav>
+        </div>
+      )}
 
       {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -204,7 +252,9 @@ export function Payments() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Фактура</TableHead>
+                  <TableHead>
+                    {activeTab === "razpiska" ? "Поръчка" : "Фактура"}
+                  </TableHead>
                   <TableHead>Партньор</TableHead>
                   <TableHead>Дата</TableHead>
                   <TableHead>Начин</TableHead>
@@ -228,9 +278,11 @@ export function Payments() {
                   payments.map((p) => (
                     <TableRow key={p.id}>
                       <TableCell className="font-mono text-[#f97316]">
-                        {p.invoice?.invoice_number ??
-                          p.invoice_number ??
-                          `#${p.invoice_id}`}
+                        {activeTab === "razpiska"
+                          ? `#${p.order_number ?? p.order_id}`
+                          : (p.invoice?.invoice_number ??
+                            p.invoice_number ??
+                            `#${p.invoice_id}`)}
                       </TableCell>
                       <TableCell>
                         {p.invoice?.partner?.name ?? p.partner_name ?? "—"}
@@ -254,9 +306,16 @@ export function Payments() {
                       <TableCell>
                         {(() => {
                           const total = safeAmount(
-                            p.invoice_total_gross ?? p.invoice?.total_gross,
+                            activeTab === "razpiska"
+                              ? p.order_total
+                              : (p.invoice_total_gross ??
+                                  p.invoice?.total_gross),
                           );
-                          const paid = safeAmount(p.invoice_paid_total);
+                          const paid = safeAmount(
+                            activeTab === "razpiska"
+                              ? p.order_paid_total
+                              : p.invoice_paid_total,
+                          );
                           if (total <= 0 || paid <= 0) return null;
                           if (paid + 0.01 < total) {
                             const remaining = total - paid;
