@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Invoice, Order } from "@/types";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -46,6 +46,25 @@ const getOrderGross = (order: Order): number =>
 
 export function RecordPaymentModal({ open, onClose, context }: Props) {
   const qc = useQueryClient();
+  const orderId = context.kind === "order-fixed" ? context.order.id : null;
+
+  const { data: orderPayments } = useQuery<{ amount: number | string }[]>({
+    queryKey: ["order-razpiska-payments", orderId],
+    queryFn: () =>
+      api
+        .get(`/payments?type=razpiska&order_id=${orderId}&limit=100`)
+        .then((r) => {
+          const d = r.data;
+          return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+        }),
+    enabled: open && orderId !== null,
+  });
+
+  const alreadyPaidOnOrder = (orderPayments ?? []).reduce(
+    (sum, p) => sum + Number(p.amount),
+    0,
+  );
+
   const [form, setForm] = useState({
     invoice_id: "",
     amount: "",
@@ -54,8 +73,12 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
     paid_at: new Date().toISOString().split("T")[0],
   });
 
+  const didFillOrderRef = useRef(false);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      didFillOrderRef.current = false;
+      return;
+    }
     const today = new Date().toISOString().split("T")[0];
     if (context.kind === "invoice-fixed") {
       setForm({
@@ -66,13 +89,17 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
         paid_at: today,
       });
     } else if (context.kind === "order-fixed") {
+      if (orderPayments === undefined || didFillOrderRef.current) return;
+      const gross = getOrderGross(context.order);
+      const remaining = Math.max(0, gross - alreadyPaidOnOrder);
       setForm({
         invoice_id: "",
-        amount: getOrderGross(context.order).toFixed(2),
+        amount: remaining.toFixed(2),
         payment_method: "bank",
         bank_reference: "",
         paid_at: today,
       });
+      didFillOrderRef.current = true;
     } else {
       setForm({
         invoice_id: "",
@@ -82,7 +109,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
         paid_at: today,
       });
     }
-  }, [open, context]);
+  }, [open, context, orderPayments, alreadyPaidOnOrder]);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -173,6 +200,8 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
               const net = Number(context.order.total_amount);
               const vat = net * VAT_RATE;
               const gross = net + vat;
+              const remaining = Math.max(0, gross - alreadyPaidOnOrder);
+              const hasPriorPayments = alreadyPaidOnOrder > 0;
               return (
                 <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm space-y-1">
                   <div className="flex justify-between">
@@ -203,10 +232,32 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
                   </div>
                   <div className="flex justify-between pt-1 border-t border-amber-200">
                     <span className="text-gray-500">Общо с ДДС:</span>
-                    <span className="font-bold text-[#f97316]">
+                    <span
+                      className={
+                        hasPriorPayments
+                          ? "font-medium"
+                          : "font-bold text-[#f97316]"
+                      }
+                    >
                       {formatCurrency(gross)}
                     </span>
                   </div>
+                  {hasPriorPayments && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Вече платено:</span>
+                        <span className="font-medium text-green-700">
+                          − {formatCurrency(alreadyPaidOnOrder)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between pt-1 border-t border-amber-200">
+                        <span className="text-gray-500">Остатък:</span>
+                        <span className="font-bold text-[#f97316]">
+                          {formatCurrency(remaining)}
+                        </span>
+                      </div>
+                    </>
+                  )}
                   <div className="text-xs text-amber-700 pt-1">
                     Плащане по стокова разписка (без фактура).
                   </div>

@@ -30,6 +30,7 @@ export default async function paymentRoutes(app: FastifyInstance) {
 
     const {
       invoice_id,
+      order_id,
       method,
       payment_method,
       date_from,
@@ -51,6 +52,10 @@ export default async function paymentRoutes(app: FastifyInstance) {
     if (invoice_id) {
       where += ` AND pay.invoice_id = $${paramIdx++}`;
       params.push(parseInt(invoice_id));
+    }
+    if (order_id) {
+      where += ` AND pay.order_id = $${paramIdx++}`;
+      params.push(parseInt(order_id));
     }
     const effectiveMethod = payment_method || method;
     if (effectiveMethod) {
