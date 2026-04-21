@@ -37,7 +37,9 @@ export default async function paymentRoutes(app: FastifyInstance) {
       q,
       page,
       limit,
+      type: rawType,
     } = request.query as any;
+    const type = rawType === "razpiska" ? "razpiska" : "invoice";
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
     const offset = (pageNum - 1) * pageSize;
@@ -64,16 +66,55 @@ export default async function paymentRoutes(app: FastifyInstance) {
       params.push(date_to);
     }
     if (q) {
-      // Translit-aware on partner name; raw ILIKE for invoice_number / bank_reference
-      where += ` AND (
-        i.invoice_number ILIKE $${paramIdx}
-        OR normalize_search(p.name) ILIKE '%' || normalize_search($${paramIdx + 1}) || '%'
-        OR COALESCE(pay.bank_reference, '') ILIKE $${paramIdx}
-      )`;
       const trimmed = String(q).trim();
+      if (type === "razpiska") {
+        // Razpiska search: order_number + partner name (translit) + bank_reference
+        where += ` AND (
+          o.order_number::text ILIKE $${paramIdx}
+          OR normalize_search(p.name) ILIKE '%' || normalize_search($${paramIdx + 1}) || '%'
+          OR COALESCE(pay.bank_reference, '') ILIKE $${paramIdx}
+        )`;
+      } else {
+        // Invoice search: invoice_number + partner name (translit) + bank_reference
+        where += ` AND (
+          i.invoice_number ILIKE $${paramIdx}
+          OR normalize_search(p.name) ILIKE '%' || normalize_search($${paramIdx + 1}) || '%'
+          OR COALESCE(pay.bank_reference, '') ILIKE $${paramIdx}
+        )`;
+      }
       params.push(`%${trimmed}%`, trimmed);
       paramIdx += 2;
     }
+
+    if (type === "razpiska") {
+      where += ` AND pay.invoice_id IS NULL AND pay.order_id IS NOT NULL`;
+      const sql = `
+        WITH pay_cum AS (
+          SELECT *,
+                 SUM(amount) OVER (
+                   PARTITION BY order_id
+                   ORDER BY paid_at ASC, id ASC
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                 ) AS cumulative_paid
+          FROM payments
+          WHERE order_id IS NOT NULL AND invoice_id IS NULL
+        )
+        SELECT pay.*, o.order_number, o.total_amount AS order_total,
+               p.name AS partner_name,
+               pay.cumulative_paid::numeric AS order_paid_total
+        FROM pay_cum pay
+        JOIN orders o ON o.id = pay.order_id
+        JOIN partners p ON p.id = o.partner_id
+        ${where}
+        ORDER BY pay.paid_at DESC, pay.id DESC
+        LIMIT $${paramIdx++} OFFSET $${paramIdx++}
+      `;
+      params.push(pageSize, offset);
+      const { rows } = await query(sql, params);
+      return { data: rows };
+    }
+
+    where += ` AND pay.invoice_id IS NOT NULL`;
 
     // `invoice_paid_total` е кумулативно платеното към МОМЕНТА на този ред
     // (не общото върху фактурата сега), за да може историята да отрази дали
@@ -87,6 +128,7 @@ export default async function paymentRoutes(app: FastifyInstance) {
                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                ) AS cumulative_paid
         FROM payments
+        WHERE invoice_id IS NOT NULL
       )
       SELECT pay.*, i.invoice_number, i.total_gross AS invoice_total_gross,
              p.name AS partner_name,
