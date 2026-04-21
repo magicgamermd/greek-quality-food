@@ -2,14 +2,19 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { query } from "../db.js";
 
-const createPaymentSchema = z.object({
-  invoice_id: z.number().int(),
-  amount: z.number().positive(),
-  payment_method: z.enum(["cash", "bank", "card"]).default("bank"),
-  bank_reference: z.string().optional(),
-  paid_at: z.string().optional(), // ISO date
-  matched_by_agent: z.boolean().default(false),
-});
+const createPaymentSchema = z
+  .object({
+    invoice_id: z.number().int().optional(),
+    order_id: z.number().int().optional(),
+    amount: z.number().positive(),
+    payment_method: z.enum(["cash", "bank", "card"]).default("bank"),
+    bank_reference: z.string().optional(),
+    paid_at: z.string().optional(), // ISO date
+    matched_by_agent: z.boolean().default(false),
+  })
+  .refine((d) => !!d.invoice_id !== !!d.order_id, {
+    message: "Must provide exactly one of invoice_id or order_id",
+  });
 
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   await request.jwtVerify();
@@ -245,6 +250,74 @@ export default async function paymentRoutes(app: FastifyInstance) {
     }
 
     const body = createPaymentSchema.parse(request.body);
+
+    // Razpiska branch — payment tied to an order without invoice
+    if (body.order_id) {
+      const {
+        rows: [order],
+      } = await query("SELECT * FROM orders WHERE id = $1", [body.order_id]);
+      if (!order) return reply.status(404).send({ error: "Order not found" });
+      if (order.status === "cancelled") {
+        return reply
+          .status(400)
+          .send({ error: "Cannot record payment for cancelled order" });
+      }
+      if (order.invoice_id) {
+        return reply.status(400).send({
+          error: "Order has invoice — use invoice_id instead of order_id",
+        });
+      }
+
+      const {
+        rows: [{ total: orderPaidTotal }],
+      } = await query(
+        "SELECT COALESCE(SUM(amount), 0)::numeric AS total FROM payments WHERE order_id = $1",
+        [body.order_id],
+      );
+      const alreadyPaidOrder = parseFloat(orderPaidTotal);
+      const orderTotal = parseFloat(order.total_amount);
+      if (alreadyPaidOrder + body.amount > orderTotal * 1.001) {
+        return reply.status(400).send({
+          error: "Payment exceeds order total",
+          order_total: orderTotal,
+          already_paid: alreadyPaidOrder,
+          attempted: body.amount,
+        });
+      }
+
+      const {
+        rows: [payment],
+      } = await query(
+        `INSERT INTO payments (order_id, amount, payment_method, bank_reference, paid_at, matched_by_agent)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [
+          body.order_id,
+          body.amount,
+          body.payment_method,
+          body.bank_reference,
+          body.paid_at || new Date().toISOString(),
+          body.matched_by_agent,
+        ],
+      );
+
+      const newOrderTotal = alreadyPaidOrder + body.amount;
+      const status =
+        newOrderTotal >= orderTotal ? "fully paid" : "partial payment";
+      await query(
+        `INSERT INTO notifications (type, message) VALUES ('payment_razpiska', $1)`,
+        [
+          `Плащане по СР ${body.amount} лв за поръчка #${order.order_number ?? order.id} (${status})`,
+        ],
+      );
+
+      return reply.status(201).send({
+        ...payment,
+        order_total: orderTotal,
+        total_paid: newOrderTotal,
+        remaining: orderTotal - newOrderTotal,
+      });
+    }
 
     // Verify invoice exists
     const {
