@@ -70,13 +70,27 @@ export default async function paymentRoutes(app: FastifyInstance) {
       paramIdx += 2;
     }
 
+    // `invoice_paid_total` е кумулативно платеното към МОМЕНТА на този ред
+    // (не общото върху фактурата сега), за да може историята да отрази дали
+    // при това плащане фактурата е била още частично, или вече напълно покрита.
     const sql = `
-      SELECT pay.*, i.invoice_number, p.name AS partner_name
-      FROM payments pay
+      WITH pay_cum AS (
+        SELECT *,
+               SUM(amount) OVER (
+                 PARTITION BY invoice_id
+                 ORDER BY paid_at ASC, id ASC
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+               ) AS cumulative_paid
+        FROM payments
+      )
+      SELECT pay.*, i.invoice_number, i.total_gross AS invoice_total_gross,
+             p.name AS partner_name,
+             pay.cumulative_paid::numeric AS invoice_paid_total
+      FROM pay_cum pay
       JOIN invoices i ON i.id = pay.invoice_id
       JOIN partners p ON p.id = i.partner_id
       ${where}
-      ORDER BY pay.paid_at DESC
+      ORDER BY pay.paid_at DESC, pay.id DESC
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
     `;
     params.push(pageSize, offset);

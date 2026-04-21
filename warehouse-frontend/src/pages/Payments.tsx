@@ -142,7 +142,7 @@ function RecordPaymentModal({
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Остатък:</span>
-                <span className="font-bold text-[#6c3dff]">
+                <span className="font-bold text-[#f97316]">
                   {formatCurrency(getInvoiceRemaining(selectedInvoice))}
                 </span>
               </div>
@@ -290,9 +290,9 @@ export function Payments() {
             {unpaidInvoices.length}
           </p>
         </div>
-        <div className="rounded-xl bg-purple-50 border border-purple-200 p-4">
-          <p className="text-sm text-purple-600">Общо транзакции</p>
-          <p className="text-2xl font-bold text-purple-700 mt-1">
+        <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
+          <p className="text-sm text-orange-600">Общо транзакции</p>
+          <p className="text-2xl font-bold text-orange-700 mt-1">
             {payments.length}
           </p>
         </div>
@@ -390,6 +390,7 @@ export function Payments() {
                   <TableHead>Начин</TableHead>
                   <TableHead>Референция</TableHead>
                   <TableHead>Сума</TableHead>
+                  <TableHead>Статус</TableHead>
                   <TableHead>Агент</TableHead>
                 </TableRow>
               </TableHeader>
@@ -397,7 +398,7 @@ export function Payments() {
                 {payments.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className="text-center text-gray-400 py-8"
                     >
                       Няма плащания
@@ -406,7 +407,7 @@ export function Payments() {
                 ) : (
                   payments.map((p) => (
                     <TableRow key={p.id}>
-                      <TableCell className="font-mono text-[#6c3dff]">
+                      <TableCell className="font-mono text-[#f97316]">
                         {p.invoice?.invoice_number ??
                           p.invoice_number ??
                           `#${p.invoice_id}`}
@@ -429,6 +430,27 @@ export function Payments() {
                       </TableCell>
                       <TableCell className="font-bold text-green-700">
                         {formatCurrency(p.amount)}
+                      </TableCell>
+                      <TableCell>
+                        {(() => {
+                          const total = safeAmount(
+                            p.invoice_total_gross ?? p.invoice?.total_gross,
+                          );
+                          const paid = safeAmount(p.invoice_paid_total);
+                          if (total <= 0 || paid <= 0) return null;
+                          if (paid + 0.01 < total) {
+                            const remaining = total - paid;
+                            return (
+                              <Badge
+                                variant="warning"
+                                title={`Платено ${formatCurrency(paid)} от ${formatCurrency(total)} · остават ${formatCurrency(remaining)}`}
+                              >
+                                Частично
+                              </Badge>
+                            );
+                          }
+                          return <Badge variant="success">Платена</Badge>;
+                        })()}
                       </TableCell>
                       <TableCell>
                         {p.matched_by_agent && (

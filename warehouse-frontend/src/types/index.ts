@@ -217,6 +217,7 @@ export interface Order {
   econt_cod_amount?: number | null;
   econt_weight?: number | null;
   econt_shipping_cost?: number | null;
+  econt_payer?: "sender" | "receiver" | null;
   econt_shipment_number?: string | null;
   econt_tracking_url?: string | null;
   econt_pdf_url?: string | null;
@@ -233,6 +234,7 @@ export interface OrderItem {
   name_bg?: string;
   name_en?: string;
   sku?: string;
+  unit?: string;
 }
 
 export interface Invoice {
@@ -275,6 +277,8 @@ export interface Payment {
   invoice?: Invoice;
   invoice_number?: string;
   partner_name?: string;
+  invoice_total_gross?: number | string;
+  invoice_paid_total?: number | string;
 }
 
 export interface Notification {
