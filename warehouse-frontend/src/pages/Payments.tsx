@@ -104,10 +104,22 @@ export function Payments() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const isCombo =
-        (e.metaKey && e.altKey && e.key.toLowerCase() === "p") ||
-        (e.ctrlKey && e.altKey && e.key.toLowerCase() === "p");
-      if (!isCombo) return;
+      if (
+        !e.shiftKey ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey ||
+        e.key.toLowerCase() !== "p"
+      )
+        return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      )
+        return;
       e.preventDefault();
       setRazpiskaUnlocked((prev) => {
         const next = !prev;
