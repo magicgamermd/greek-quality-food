@@ -112,15 +112,8 @@ export function Payments() {
         e.key.toLowerCase() !== "p"
       )
         return;
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      )
-        return;
       e.preventDefault();
+      e.stopPropagation();
       setRazpiskaUnlocked((prev) => {
         const next = !prev;
         if (next) {
@@ -132,8 +125,8 @@ export function Payments() {
         return next;
       });
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   const {
