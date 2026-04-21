@@ -57,8 +57,6 @@ const SERIF_FONT_BOLD =
     path.resolve(process.cwd(), "src", "fonts", "Georgia Bold.ttf"),
   ]) || FONT_BOLD;
 
-const EUR_TO_BGN_RATE = 1.95583;
-
 // ── Helpers ────────────────────────────────────────────────────────
 // mapUnit is imported from ./units — shared with invoice-pdf.ts
 
@@ -83,11 +81,8 @@ function formatQty(num: number): string {
 }
 
 function formatDiscount(num: number): string {
-  return num > 0 ? num.toFixed(1) : "";
-}
-
-function convertEurToBgn(num: number): number {
-  return num * EUR_TO_BGN_RATE;
+  if (num <= 0) return "";
+  return Number.isInteger(num) ? `${num.toFixed(0)}%` : `${num.toFixed(1)}%`;
 }
 
 function normalizeAddress(addr: string): string {
@@ -261,6 +256,9 @@ interface StockDispatchData {
   warehouse_name?: string;
   items: DocItem[];
   vat_rate: number;
+  // "net" (default): prices in table are without VAT, totals show Сума + ДДС + Общо
+  // "gross": prices in table already include VAT, totals show only Общо (no VAT line)
+  pricing_mode?: "net" | "gross";
   outputPath: string;
 }
 
@@ -1256,50 +1254,40 @@ function drawStockDispatchTotalsBlock(
   subtotalEur: number,
   vatEur: number,
   totalEur: number,
+  pricingMode: "net" | "gross" = "net",
 ) {
-  const blockWidth = 210;
+  const blockWidth = 140;
   const x = leftCol + pageWidth - blockWidth;
-  const labelWidth = 56;
-  const bgnWidth = 82;
-  const eurWidth = blockWidth - labelWidth - bgnWidth;
+  const labelWidth = 70;
+  const valueWidth = blockWidth - labelWidth;
   const rowHeight = 13;
   let y = doc.y;
-
-  doc.font("StockSerifBold").fontSize(8.4);
-  doc.text("", x, y, { width: labelWidth });
-  doc.text("BGN", x + labelWidth, y, { width: bgnWidth, align: "center" });
-  doc.text("EUR", x + labelWidth + bgnWidth, y, {
-    width: eurWidth,
-    align: "center",
-  });
-  y += 11;
 
   const drawRow = (label: string, eurValue: number, bold = false) => {
     const fontName = bold ? "StockSerifBold" : "StockSerif";
     const fontSize = bold ? 9 : 8.4;
-    const bgnValue = convertEurToBgn(eurValue);
     doc.font(fontName).fontSize(fontSize);
     doc.text(label, x, y, { width: labelWidth, align: "left" });
-    doc.text(`${formatEUR(bgnValue)} лв.`, x + labelWidth, y, {
-      width: bgnWidth,
-      align: "right",
-    });
-    doc.text(`${formatEUR(eurValue)} €`, x + labelWidth + bgnWidth, y, {
-      width: eurWidth,
+    doc.text(`${formatEUR(eurValue)} €`, x + labelWidth, y, {
+      width: valueWidth,
       align: "right",
     });
     y += rowHeight;
   };
 
-  drawRow("Сума", subtotalEur);
-  drawRow("ДДС", vatEur);
-  doc
-    .moveTo(x, y - 1)
-    .lineTo(x + blockWidth, y - 1)
-    .lineWidth(0.35)
-    .strokeColor("#000")
-    .stroke();
-  drawRow("Общо", totalEur, true);
+  if (pricingMode === "gross") {
+    drawRow("Общо", totalEur, true);
+  } else {
+    drawRow("Сума", subtotalEur);
+    drawRow("ДДС", vatEur);
+    doc
+      .moveTo(x, y - 1)
+      .lineTo(x + blockWidth, y - 1)
+      .lineWidth(0.35)
+      .strokeColor("#000")
+      .stroke();
+    drawRow("Общо", totalEur, true);
+  }
   doc.y = y + 2;
 }
 
@@ -1400,6 +1388,8 @@ export async function generateStockDispatchPdf(
       data.warehouse_name,
     );
 
+    const pricingMode: "net" | "gross" = data.pricing_mode ?? "net";
+    const vatMultiplier = 1 + data.vat_rate / 100;
     let subtotalEur = 0;
     const rows: string[][] = [];
     for (let idx = 0; idx < data.items.length; idx += 1) {
@@ -1419,16 +1409,21 @@ export async function generateStockDispatchPdf(
           : inferredDiscount;
       subtotalEur += lineTotal;
 
+      const displayPrice =
+        pricingMode === "gross" ? price * vatMultiplier : price;
+      const displayLineTotal =
+        pricingMode === "gross" ? lineTotal * vatMultiplier : lineTotal;
+
       rows.push([
         String(idx + 1),
         item.sku || "",
         item.name_bg || item.name_en || "—",
         mapUnit(item.unit || "бр"),
         formatQty(qty),
-        formatEUR(price),
+        formatEUR(displayPrice),
         (item.currency || "EUR").toUpperCase(),
         formatDiscount(discount),
-        formatEUR(lineTotal),
+        formatEUR(displayLineTotal),
       ]);
     }
 
@@ -1485,6 +1480,7 @@ export async function generateStockDispatchPdf(
       subtotalEur,
       vatAmountEur,
       totalGrossEur,
+      pricingMode,
     );
 
     doc.font("StockSerif").fontSize(8.5);

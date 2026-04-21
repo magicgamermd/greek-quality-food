@@ -136,7 +136,11 @@ export function Invoices() {
           Boolean(inv.credit_note_id) || inv.document_type === "credit_note",
       );
     }
-    if (statusFilter === "paid" || statusFilter === "unpaid") {
+    if (
+      statusFilter === "paid" ||
+      statusFilter === "unpaid" ||
+      statusFilter === "partial"
+    ) {
       return allInvoices.filter(
         (inv) => !inv.credit_note_id && inv.document_type !== "credit_note",
       );
@@ -435,6 +439,7 @@ export function Invoices() {
             {[
               { value: "", label: "Всички" },
               { value: "unpaid", label: "Неплатени" },
+              { value: "partial", label: "Частично платени" },
               { value: "paid", label: "Платени" },
               { value: "storno", label: "Сторнирани" },
               { value: "cancelled", label: "Анулирани" },
@@ -444,7 +449,7 @@ export function Invoices() {
                 onClick={() => setStatusFilter(f.value)}
                 className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                   statusFilter === f.value
-                    ? "bg-[#6c3dff] text-white"
+                    ? "bg-[#f97316] text-white"
                     : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                 }`}
               >
@@ -461,7 +466,7 @@ export function Invoices() {
               onChange={(e) =>
                 setFilters((prev) => ({ ...prev, search: e.target.value }))
               }
-              className="pl-9 pr-3 py-1.5 text-sm border rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-[#6c3dff]/30 focus:border-[#6c3dff]"
+              className="pl-9 pr-3 py-1.5 text-sm border rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-[#f97316]/30 focus:border-[#f97316]"
             />
           </div>
         </div>
@@ -474,7 +479,7 @@ export function Invoices() {
               onChange={(e) =>
                 setFilters((prev) => ({ ...prev, date_from: e.target.value }))
               }
-              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6c3dff]/30 focus:border-[#6c3dff]"
+              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f97316]/30 focus:border-[#f97316]"
             />
           </div>
           <div className="space-y-1">
@@ -485,7 +490,7 @@ export function Invoices() {
               onChange={(e) =>
                 setFilters((prev) => ({ ...prev, date_to: e.target.value }))
               }
-              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6c3dff]/30 focus:border-[#6c3dff]"
+              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f97316]/30 focus:border-[#f97316]"
             />
           </div>
           {(filters.search ||
@@ -664,7 +669,7 @@ export function Invoices() {
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1">
-                            <div className="font-mono font-medium text-[#6c3dff]">
+                            <div className="font-mono font-medium text-[#f97316]">
                               {inv.invoice_number}
                             </div>
                             {isCancelled && (
@@ -741,7 +746,7 @@ export function Invoices() {
                             <button
                               onClick={() => markSentMutation.mutate(inv.id)}
                               disabled={markSentMutation.isPending}
-                              className="flex items-center gap-1 text-gray-400 hover:text-[#6c3dff] text-sm transition-colors"
+                              className="flex items-center gap-1 text-gray-400 hover:text-[#f97316] text-sm transition-colors"
                               title="Маркирай като изпратена"
                             >
                               <span className="text-gray-300">—</span>

@@ -320,10 +320,14 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           { statusCode: 409 },
         );
       }
-      if (order.status !== "fulfilled") {
+      if (
+        order.status !== "confirmed" &&
+        order.status !== "processing" &&
+        order.status !== "fulfilled"
+      ) {
         throw Object.assign(
           new Error(
-            "Поръчката трябва да е изпълнена преди генериране на фактура",
+            "Поръчката трябва да е потвърдена, в обработка или изпълнена преди генериране на фактура",
           ),
           { statusCode: 400 },
         );
@@ -375,9 +379,12 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         ],
       );
 
-      // Link order to invoice and update status to invoiced
+      // Link order to invoice. Do NOT auto-change status — invoicing is
+      // orthogonal to the warehouse flow (pending → confirmed → processing →
+      // fulfilled). "Фактурирана" is now a flag (invoice_id IS NOT NULL), not
+      // a linear status.
       await client.query(
-        "UPDATE orders SET invoice_id = $1, status = 'invoiced', updated_at = NOW() WHERE id = $2",
+        "UPDATE orders SET invoice_id = $1, updated_at = NOW() WHERE id = $2",
         [invoice.id, body.order_id],
       );
 
@@ -713,11 +720,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           : invoice.id;
 
         if (isCreditNote && !invoice.related_invoice_id) {
-          return reply
-            .status(404)
-            .send({
-              error: "PDF not yet generated (credit note has no parent)",
-            });
+          return reply.status(404).send({
+            error: "PDF not yet generated (credit note has no parent)",
+          });
         }
 
         const {
