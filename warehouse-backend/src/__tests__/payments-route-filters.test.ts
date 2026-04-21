@@ -57,6 +57,7 @@ describe("payments route filters", () => {
       expect(sql).toContain("DATE(pay.paid_at) <= $3");
       expect(sql).toContain("i.invoice_number ILIKE $4");
       expect(sql).toContain("COALESCE(pay.bank_reference, '') ILIKE $4");
+      expect(sql).toContain("pay.invoice_id IS NOT NULL");
       expect(params).toEqual([
         "bank",
         "2026-04-01",
