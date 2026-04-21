@@ -1,6 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { query } from "../db.js";
-import { getSender } from "./econt-sender.js";
+import {
+  resolveSender,
+  __primeSenderFromEnv,
+  __resetSenderCache,
+} from "./econt-sender.js";
 
 const ECONT_BASE = "http://ee.econt.com/services";
 
@@ -12,6 +16,8 @@ let officesCache: any[] | null = null;
 export function __resetEcontCaches() {
   citiesCache = null;
   officesCache = null;
+  __resetSenderCache();
+  __primeSenderFromEnv();
 }
 
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
@@ -55,6 +61,26 @@ async function econtPost(
 }
 
 export default async function econtRoutes(app: FastifyInstance) {
+  // GET /econt/sender-info — non-sensitive origin city/address for UI display
+  app.get(
+    "/sender-info",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+      try {
+        const s = await resolveSender();
+        return reply.send({
+          city: s.senderAddress.city.name,
+          quarter: s.senderAddress.quarter ?? null,
+          street: s.senderAddress.street ?? null,
+          num: s.senderAddress.num ?? null,
+        });
+      } catch {
+        return reply.send({ city: null });
+      }
+    },
+  );
+
   // GET /econt/cities?q=…
   app.get("/cities", async (request: FastifyRequest, reply: FastifyReply) => {
     const authRes = await requireAuth(request, reply);
@@ -148,7 +174,7 @@ export default async function econtRoutes(app: FastifyInstance) {
         weight > 500 ? "pallet" : weight > 50 ? "cargo" : "pack";
 
       const label: any = {
-        ...getSender(),
+        ...(await resolveSender()),
         receiverClient: { name: "Калкулация", phones: ["0000000000"] },
         shipmentType,
         weight,
@@ -216,6 +242,7 @@ export default async function econtRoutes(app: FastifyInstance) {
         weight: number;
         codAmount?: number;
         shipmentDescription?: string;
+        servicesPayer?: "SENDER" | "RECEIVER";
       };
 
       const weight = body.weight || 1;
@@ -223,7 +250,7 @@ export default async function econtRoutes(app: FastifyInstance) {
         weight > 500 ? "pallet" : weight > 50 ? "cargo" : "pack";
 
       const label: any = {
-        ...getSender(),
+        ...(await resolveSender()),
         receiverClient: {
           name: body.receiverName,
           phones: [body.receiverPhone],
@@ -283,6 +310,10 @@ export default async function econtRoutes(app: FastifyInstance) {
           cdCurrency: "BGN",
         };
       }
+
+      const servicesPayer = body.servicesPayer || "SENDER";
+      label.servicesPayer = servicesPayer;
+      label.shipmentPayer = servicesPayer;
 
       const result = await econtPost(
         "Shipments/LabelService.createLabel.json",
@@ -357,7 +388,7 @@ export default async function econtRoutes(app: FastifyInstance) {
       const weight = parseFloat(w.tw) || 1;
 
       const label: any = {
-        ...getSender(),
+        ...(await resolveSender()),
         receiverClient: {
           name: order.econt_receiver_name,
           phones: [order.econt_receiver_phone],

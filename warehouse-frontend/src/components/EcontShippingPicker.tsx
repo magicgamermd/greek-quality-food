@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { Truck, ChevronDown, ChevronUp } from "lucide-react";
 
 interface City {
   id: number;
@@ -25,6 +26,8 @@ export interface EcontShippingValue {
   econt_street_num?: string;
   econt_weight: number;
   econt_cod_amount?: number;
+  econt_payer?: "sender" | "receiver";
+  econt_has_cod?: boolean;
 }
 
 export interface EcontShippingPickerProps {
@@ -32,6 +35,8 @@ export interface EcontShippingPickerProps {
   onChange: (patch: Partial<EcontShippingValue>) => void;
   apiBaseUrl?: string;
   token: string;
+  defaultOpen?: boolean;
+  defaultCodAmount?: number;
 }
 
 function useDebouncedValue<T>(value: T, ms = 250): T {
@@ -78,10 +83,15 @@ export function EcontShippingPicker({
   onChange,
   apiBaseUrl = "/api",
   token,
+  defaultOpen = true,
+  defaultCodAmount,
 }: EcontShippingPickerProps) {
+  const [open, setOpen] = useState(defaultOpen);
   const deliveryType = value.econt_delivery_type || "office";
   const cityInput = value.econt_city ?? "";
   const debouncedCity = useDebouncedValue(cityInput);
+  const payer = value.econt_payer || "sender";
+  const hasCod = value.econt_has_cod ?? (value.econt_cod_amount || 0) > 0;
 
   const citiesQuery = useQuery({
     queryKey: ["econt-cities", debouncedCity],
@@ -112,6 +122,17 @@ export function EcontShippingPicker({
   const debouncedWeight = useDebouncedValue(weight);
   const debouncedCod = useDebouncedValue(cod);
 
+  const senderInfoQuery = useQuery({
+    queryKey: ["econt-sender-info"],
+    queryFn: () =>
+      apiGet<{
+        city: string | null;
+        street?: string | null;
+        num?: string | null;
+      }>(apiBaseUrl, token, "/econt/sender-info"),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const priceQuery = useQuery({
     queryKey: [
       "econt-price",
@@ -120,6 +141,7 @@ export function EcontShippingPicker({
       value.econt_street,
       debouncedWeight,
       debouncedCod,
+      payer,
     ],
     queryFn: () =>
       apiPost<{ price: number; priceBGN: number }>(
@@ -132,7 +154,8 @@ export function EcontShippingPicker({
           receiverStreet: value.econt_street,
           receiverNum: value.econt_street_num,
           weight: debouncedWeight,
-          codAmount: debouncedCod || undefined,
+          codAmount: hasCod ? debouncedCod || undefined : undefined,
+          servicesPayer: payer === "sender" ? "SENDER" : "RECEIVER",
         },
       ),
     enabled:
@@ -144,136 +167,299 @@ export function EcontShippingPicker({
   });
 
   return (
-    <div className="space-y-3 border border-accent-light rounded-md p-3 bg-accent-light/20">
-      <div className="font-semibold text-sm">Еконт доставка</div>
-
-      <div className="flex gap-2 text-sm">
-        <label className="flex items-center gap-1">
-          <input
-            type="radio"
-            checked={deliveryType === "office"}
-            onChange={() => onChange({ econt_delivery_type: "office" })}
-          />
-          Офис
-        </label>
-        <label className="flex items-center gap-1">
-          <input
-            type="radio"
-            checked={deliveryType === "address"}
-            onChange={() => onChange({ econt_delivery_type: "address" })}
-          />
-          Адрес
-        </label>
-      </div>
-
-      <input
-        className="w-full border rounded px-2 py-1 text-sm"
-        placeholder="Име на получател"
-        value={value.econt_receiver_name ?? ""}
-        onChange={(e) => onChange({ econt_receiver_name: e.target.value })}
-      />
-      <input
-        className="w-full border rounded px-2 py-1 text-sm"
-        placeholder="Телефон"
-        value={value.econt_receiver_phone ?? ""}
-        onChange={(e) => onChange({ econt_receiver_phone: e.target.value })}
-      />
-
-      <input
-        className="w-full border rounded px-2 py-1 text-sm"
-        placeholder="Град"
-        value={cityInput}
-        onChange={(e) => onChange({ econt_city: e.target.value })}
-        list="econt-city-list"
-      />
-      <datalist id="econt-city-list">
-        {(citiesQuery.data?.data || []).map((c) => (
-          <option key={c.id} value={c.name} />
-        ))}
-      </datalist>
-
-      {deliveryType === "office" ? (
-        <select
-          className="w-full border rounded px-2 py-1 text-sm"
-          value={value.econt_office_code ?? ""}
-          onChange={(e) => {
-            const code = e.target.value;
-            const office = (officesQuery.data?.data || []).find(
-              (o) => o.code === code,
-            );
-            onChange({
-              econt_office_code: code || undefined,
-              econt_office_name: office?.name,
-            });
-          }}
-        >
-          <option value="">— изберете офис —</option>
-          {(officesQuery.data?.data || []).map((o) => (
-            <option key={o.code} value={o.code}>
-              {o.name}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <div className="grid grid-cols-[3fr_1fr] gap-2">
-          <input
-            className="border rounded px-2 py-1 text-sm"
-            placeholder="Улица"
-            value={value.econt_street ?? ""}
-            onChange={(e) => onChange({ econt_street: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 text-sm"
-            placeholder="№"
-            value={value.econt_street_num ?? ""}
-            onChange={(e) => onChange({ econt_street_num: e.target.value })}
-          />
+    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden border-l-4 border-l-[#f97316]">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <Truck className="h-5 w-5 text-[#f97316]" />
+          <span className="font-medium text-gray-900">Доставка с Еконт</span>
         </div>
-      )}
+        {open ? (
+          <ChevronUp className="h-5 w-5 text-gray-400" />
+        ) : (
+          <ChevronDown className="h-5 w-5 text-gray-400" />
+        )}
+      </button>
 
-      <div className="grid grid-cols-2 gap-2">
-        <label className="text-xs">
-          Тегло (кг)
-          <input
-            type="number"
-            min="0.1"
-            step="0.1"
-            className="w-full border rounded px-2 py-1 text-sm"
-            value={value.econt_weight ?? ""}
-            onChange={(e) =>
-              onChange({ econt_weight: parseFloat(e.target.value) || 0 })
-            }
-          />
-        </label>
-        <label className="text-xs">
-          Наложен платеж (€)
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            className="w-full border rounded px-2 py-1 text-sm"
-            value={value.econt_cod_amount ?? ""}
-            onChange={(e) =>
-              onChange({
-                econt_cod_amount: parseFloat(e.target.value) || 0,
-              })
-            }
-          />
-        </label>
-      </div>
+      {open && (
+        <div className="px-4 pb-4 pt-1 space-y-4">
+          {/* Row 1: Получател / Телефон */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Получател
+              </label>
+              <input
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                placeholder="Име на получател"
+                value={value.econt_receiver_name ?? ""}
+                onChange={(e) =>
+                  onChange({ econt_receiver_name: e.target.value })
+                }
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Телефон
+              </label>
+              <input
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                placeholder="0888 123 456"
+                value={value.econt_receiver_phone ?? ""}
+                onChange={(e) =>
+                  onChange({ econt_receiver_phone: e.target.value })
+                }
+              />
+            </div>
+          </div>
 
-      {priceQuery.isFetching && (
-        <div className="text-xs text-muted-foreground">Калкулация…</div>
-      )}
-      {priceQuery.data && (
-        <div className="text-sm font-semibold">
-          Цена: {priceQuery.data.price.toFixed(2)} € (
-          {priceQuery.data.priceBGN.toFixed(2)} лв.)
-        </div>
-      )}
-      {priceQuery.error && (
-        <div className="text-xs text-red-600">
-          Грешка при калкулация: {(priceQuery.error as Error).message}
+          {/* Row 2: Тип доставка / Град */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Тип доставка
+              </label>
+              <select
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                value={deliveryType}
+                onChange={(e) =>
+                  onChange({
+                    econt_delivery_type: e.target.value as "office" | "address",
+                  })
+                }
+              >
+                <option value="office">До офис на Еконт</option>
+                <option value="address">До адрес</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Град
+              </label>
+              <input
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                placeholder="Започнете да пишете..."
+                value={cityInput}
+                onChange={(e) => onChange({ econt_city: e.target.value })}
+                list="econt-city-list"
+              />
+              <datalist id="econt-city-list">
+                {(citiesQuery.data?.data || []).map((c) => (
+                  <option key={c.id} value={c.name} />
+                ))}
+              </datalist>
+            </div>
+          </div>
+
+          {/* Row 3: Офис или Адрес */}
+          {deliveryType === "office" ? (
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Офис на Еконт
+              </label>
+              <select
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400"
+                value={value.econt_office_code ?? ""}
+                disabled={!cityInput}
+                onChange={(e) => {
+                  const code = e.target.value;
+                  const office = (officesQuery.data?.data || []).find(
+                    (o) => o.code === code,
+                  );
+                  onChange({
+                    econt_office_code: code || undefined,
+                    econt_office_name: office?.name,
+                  });
+                }}
+              >
+                <option value="">
+                  {cityInput ? "— изберете офис —" : "Първо изберете град"}
+                </option>
+                {(officesQuery.data?.data || []).map((o) => (
+                  <option key={o.code} value={o.code}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="grid grid-cols-[3fr_1fr] gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Улица
+                </label>
+                <input
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                  placeholder="Улица"
+                  value={value.econt_street ?? ""}
+                  onChange={(e) => onChange({ econt_street: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  №
+                </label>
+                <input
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                  placeholder="№"
+                  value={value.econt_street_num ?? ""}
+                  onChange={(e) =>
+                    onChange({ econt_street_num: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Row 4: Тежест / Доставка за сметка на */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Тежест (кг)
+              </label>
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                placeholder="0.0"
+                value={value.econt_weight ?? ""}
+                onChange={(e) =>
+                  onChange({ econt_weight: parseFloat(e.target.value) || 0 })
+                }
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Доставка за сметка на:
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => onChange({ econt_payer: "sender" })}
+                  className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors border ${
+                    payer === "sender"
+                      ? "bg-[#f97316] border-[#f97316] text-white"
+                      : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <span>💳</span>
+                  <span>Подател (ние)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChange({ econt_payer: "receiver" })}
+                  className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors border ${
+                    payer === "receiver"
+                      ? "bg-[#f97316] border-[#f97316] text-white"
+                      : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <span>🏪</span>
+                  <span>Получател (клиент)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Row 5: Наложен платеж */}
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={hasCod}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  const existing = value.econt_cod_amount ?? 0;
+                  onChange({
+                    econt_has_cod: checked,
+                    econt_cod_amount: checked
+                      ? existing > 0
+                        ? existing
+                        : (defaultCodAmount ?? 0)
+                      : 0,
+                  });
+                }}
+                className="h-4 w-4 rounded border-gray-300 text-[#f97316] focus:ring-[#f97316]"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                Наложен платеж
+              </span>
+            </label>
+            {hasCod && (
+              <div className="mt-2">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                  placeholder="Сума (€)"
+                  value={value.econt_cod_amount ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      econt_cod_amount: parseFloat(e.target.value) || 0,
+                    })
+                  }
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Калкулация */}
+          {priceQuery.isFetching && (
+            <div className="text-xs text-gray-500">Калкулация…</div>
+          )}
+          {priceQuery.data && !priceQuery.isFetching && (
+            <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm">
+              <div className="flex items-center gap-2 font-semibold text-[#f97316] mb-1">
+                <Truck className="h-4 w-4" />
+                Доставка с Еконт
+              </div>
+              <div className="text-xs text-orange-900/80 leading-relaxed">
+                {senderInfoQuery.data?.city && (
+                  <>
+                    {senderInfoQuery.data.city}
+                    <span className="mx-1">→</span>
+                  </>
+                )}
+                <span className="font-medium">{cityInput}</span>
+                {deliveryType === "office" && value.econt_office_name && (
+                  <>
+                    <span className="mx-1">—</span>
+                    {value.econt_office_name}
+                  </>
+                )}
+                {deliveryType === "address" && value.econt_street && (
+                  <>
+                    <span className="mx-1">—</span>
+                    {value.econt_street}
+                    {value.econt_street_num
+                      ? ` №${value.econt_street_num}`
+                      : ""}
+                  </>
+                )}
+              </div>
+              <div className="text-xs text-orange-900/80">
+                Тегло: {Number(weight).toFixed(1)} кг
+              </div>
+              <div className="text-base font-bold text-gray-900 mt-2">
+                Цена доставка: {priceQuery.data.price.toFixed(2)} €
+              </div>
+              {hasCod && Number(cod) > 0 && (
+                <div className="text-sm text-red-600 mt-1">
+                  Наложен платеж: {Number(cod).toFixed(2)} EUR
+                </div>
+              )}
+            </div>
+          )}
+          {priceQuery.error && (
+            <div className="text-xs text-red-600">
+              Грешка при калкулация: {(priceQuery.error as Error).message}
+            </div>
+          )}
         </div>
       )}
     </div>
