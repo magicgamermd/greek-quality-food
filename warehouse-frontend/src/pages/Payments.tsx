@@ -269,24 +269,29 @@ export function Payments() {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Дата от</Label>
-              <Input
-                type="date"
-                value={filters.date_from}
-                onChange={(e) =>
-                  setFilters((prev) => ({ ...prev, date_from: e.target.value }))
-                }
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Дата до</Label>
-              <Input
-                type="date"
-                value={filters.date_to}
-                onChange={(e) =>
-                  setFilters((prev) => ({ ...prev, date_to: e.target.value }))
-                }
-              />
+              <Label className="text-xs">Период</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  type="date"
+                  value={filters.date_from}
+                  onChange={(e) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      date_from: e.target.value,
+                    }))
+                  }
+                />
+                <Input
+                  type="date"
+                  value={filters.date_to}
+                  onChange={(e) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      date_to: e.target.value,
+                    }))
+                  }
+                />
+              </div>
             </div>
           </div>
           <div className="mt-3 flex justify-end gap-2">
