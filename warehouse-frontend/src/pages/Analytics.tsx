@@ -314,7 +314,7 @@ export function Analytics() {
         <Card className="w-full xl:max-w-sm shadow-none">
           <CardContent className="flex flex-col gap-3 p-4">
             <div className="flex items-center gap-2 text-sm font-medium text-gray-600">
-              <CalendarRange className="h-4 w-4 text-[#6c3dff]" />
+              <CalendarRange className="h-4 w-4 text-[#f97316]" />
               Избран период
             </div>
             <Select value={period} onChange={(e) => setPeriod(e.target.value as PeriodOption)}>
@@ -334,7 +334,7 @@ export function Analytics() {
       <Card className="border-[#e7ddff] bg-gradient-to-br from-white via-white to-[#f7f3ff] shadow-none">
         <CardContent className="grid gap-4 p-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(280px,1fr)] lg:items-center">
           <div className="space-y-3">
-            <Badge variant="secondary" className="w-fit bg-[#efe8ff] text-[#6c3dff]">
+            <Badge variant="secondary" className="w-fit bg-[#fff7ed] text-[#f97316]">
               Обобщение за {selectedPeriodLabel.toLowerCase()}
             </Badge>
             <div>
@@ -392,7 +392,7 @@ export function Analytics() {
                   {formatCurrency(salesSummary.totalRevenue)}
                 </p>
               </div>
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-purple-50 text-[#6c3dff]">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-50 text-[#f97316]">
                 <TrendingUp className="h-5 w-5" />
               </div>
             </div>
@@ -522,7 +522,7 @@ export function Analytics() {
                     className="rounded-2xl border border-gray-200 bg-white p-4"
                   >
                     <div className="flex items-start gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#efe8ff] text-sm font-bold text-[#6c3dff]">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fff7ed] text-sm font-bold text-[#f97316]">
                         #{product.rank}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -546,7 +546,7 @@ export function Analytics() {
                         </div>
                         <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-100">
                           <div
-                            className="h-full rounded-full bg-[#6c3dff]"
+                            className="h-full rounded-full bg-[#f97316]"
                             style={{ width: `${Math.max(product.revenueShare, 6)}%` }}
                           />
                         </div>

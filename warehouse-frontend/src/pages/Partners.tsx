@@ -506,7 +506,7 @@ function PriceGroupSelect({
       // actionable; the native caret keeps it keyboard-accessible.
       className={
         "px-2 py-0.5 rounded-full border text-xs font-semibold cursor-pointer " +
-        "focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:ring-offset-1 " +
+        "focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:ring-offset-1 " +
         (isEmpty
           ? "border-gray-200 bg-gray-50 text-gray-400"
           : "border-transparent bg-blue-100 text-blue-700")
@@ -749,7 +749,7 @@ export function Partners() {
                         {p.phone ? (
                           <a
                             href={`tel:${p.phone}`}
-                            className="flex items-center gap-1 text-sm text-[#6c3dff] hover:underline"
+                            className="flex items-center gap-1 text-sm text-[#f97316] hover:underline"
                           >
                             <Phone className="h-3.5 w-3.5" />
                             {p.phone}
@@ -762,7 +762,7 @@ export function Partners() {
                         {p.email ? (
                           <a
                             href={`mailto:${p.email}`}
-                            className="flex items-center gap-1 text-sm text-[#6c3dff] hover:underline"
+                            className="flex items-center gap-1 text-sm text-[#f97316] hover:underline"
                           >
                             <Mail className="h-3.5 w-3.5" />
                             {p.email}
@@ -773,7 +773,7 @@ export function Partners() {
                       </TableCell>
                       <TableCell className="text-center">
                         {orderCounts[p.id] ? (
-                          <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-semibold bg-[#6c3dff]/10 text-[#6c3dff]">
+                          <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-semibold bg-[#f97316]/10 text-[#f97316]">
                             {orderCounts[p.id]}
                           </span>
                         ) : (

@@ -57,7 +57,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
               <button
                 type="button"
                 onClick={this.handleReload}
-                className="px-4 py-2 rounded-md bg-[#6c3dff] text-white hover:bg-[#5a2de6] text-sm font-medium"
+                className="px-4 py-2 rounded-md bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium"
               >
                 Презареди страницата
               </button>
