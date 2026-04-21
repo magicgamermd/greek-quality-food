@@ -39,6 +39,8 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
+import { OrderActionsMenu } from "@/components/OrderActionsMenu";
+import { RecordPaymentModal } from "@/components/RecordPaymentModal";
 import type { Order, OrderItem, Partner } from "@/types";
 import { formatDate, formatCurrency, isoDateToday } from "@/lib/utils";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
@@ -2685,6 +2687,7 @@ export function Orders() {
   const activeDateTo = showHistory ? dateTo : todayIso;
   const [createOpen, setCreateOpen] = useState(false);
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
+  const [paymentOrder, setPaymentOrder] = useState<Order | null>(null);
 
   const {
     data: orders = [],
@@ -3448,6 +3451,11 @@ export function Orders() {
                                 <Trash2 className="h-3.5 w-3.5" />
                               </Button>
                             )}
+
+                          <OrderActionsMenu
+                            order={order}
+                            onRecordPayment={(o) => setPaymentOrder(o)}
+                          />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -3470,6 +3478,27 @@ export function Orders() {
         order={detailOrder}
         onClose={() => setDetailOrder(null)}
       />
+
+      {paymentOrder && (
+        <RecordPaymentModal
+          open
+          onClose={() => setPaymentOrder(null)}
+          context={
+            paymentOrder.invoice_id
+              ? {
+                  kind: "invoice-fixed",
+                  invoice_id: paymentOrder.invoice_id,
+                  invoice_number: paymentOrder.invoice_number ?? undefined,
+                  partner_name:
+                    paymentOrder.partner?.name ??
+                    paymentOrder.partner_name ??
+                    undefined,
+                  total: Number(paymentOrder.total_amount),
+                }
+              : { kind: "order-fixed", order: paymentOrder }
+          }
+        />
+      )}
     </div>
   );
 }
