@@ -8,6 +8,7 @@ import {
   generateCommercialDocPdf,
 } from "../services/document-pdf.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
+import { generateWarrantyCardPdf } from "../services/warranty-pdf.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -115,6 +116,7 @@ const createOrderSchema = z.object({
   econt_cod_amount: z.coerce.number().nonnegative().optional(),
   econt_weight: z.coerce.number().positive().optional(),
   econt_shipping_cost: z.coerce.number().nonnegative().optional(),
+  econt_payer: z.enum(["sender", "receiver"]).optional(),
   items: z.array(orderItemSchema).min(1),
 });
 
@@ -136,6 +138,18 @@ const updateOrderSchema = z.object({
   partner_object_id: z.number().int().positive().nullish(),
   object_name: z.string().nullish(),
   object_code: z.string().nullish(),
+
+  econt_receiver_name: z.string().trim().max(255).nullish(),
+  econt_receiver_phone: z.string().trim().max(50).nullish(),
+  econt_delivery_type: z.enum(["office", "address"]).nullish(),
+  econt_city: z.string().trim().max(255).nullish(),
+  econt_office_code: z.string().trim().max(50).nullish(),
+  econt_office_name: z.string().trim().max(500).nullish(),
+  econt_street: z.string().trim().max(255).nullish(),
+  econt_street_num: z.string().trim().max(50).nullish(),
+  econt_cod_amount: z.coerce.number().nonnegative().nullish(),
+  econt_weight: z.coerce.number().positive().nullish(),
+  econt_payer: z.enum(["sender", "receiver"]).nullish(),
 
   items: z.array(orderItemSchema).min(1).optional(),
 });
@@ -329,7 +343,7 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const sql = `
       SELECT p.id, p.name_bg, p.name_en, p.sku, p.unit, p.brand, p.selling_price,
-             p.purchase_price,
+             p.purchase_price, p.weight_kg,
              p.${groupPriceCol} AS group_price,
              COALESCE(SUM(inv.quantity), 0)::numeric AS total_stock
              ${priceListId ? `, pli.price AS partner_price` : `, NULL::numeric AS partner_price`}
@@ -560,7 +574,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       `SELECT oi.*,
               COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
               COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand
+              pr.sku, pr.unit, pr.brand, pr.weight_kg
        FROM order_items oi
        LEFT JOIN products pr ON pr.id = oi.product_id
        WHERE oi.order_id = $1
@@ -658,11 +672,11 @@ export default async function orderRoutes(app: FastifyInstance) {
            econt_receiver_name, econt_receiver_phone, econt_delivery_type,
            econt_city, econt_office_code, econt_office_name,
            econt_street, econt_street_num, econt_cod_amount,
-           econt_weight, econt_shipping_cost,
+           econt_weight, econt_shipping_cost, econt_payer,
            status, order_number
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                 $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                 $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  'pending', nextval('order_number_seq'))
          RETURNING *`,
         [
@@ -685,6 +699,7 @@ export default async function orderRoutes(app: FastifyInstance) {
           body.econt_cod_amount ?? null,
           body.econt_weight ?? null,
           body.econt_shipping_cost ?? null,
+          body.econt_payer ?? null,
         ],
       );
 
@@ -995,6 +1010,26 @@ export default async function orderRoutes(app: FastifyInstance) {
         sets.push(`object_code = $${paramIdx++}`);
         params.push(objectSelection.objectCode);
       }
+
+      const econtFields: Array<keyof typeof body> = [
+        "econt_receiver_name",
+        "econt_receiver_phone",
+        "econt_delivery_type",
+        "econt_city",
+        "econt_office_code",
+        "econt_office_name",
+        "econt_street",
+        "econt_street_num",
+        "econt_cod_amount",
+        "econt_weight",
+        "econt_payer",
+      ];
+      for (const field of econtFields) {
+        if (body[field] !== undefined) {
+          sets.push(`${field} = $${paramIdx++}`);
+          params.push(body[field] ?? null);
+        }
+      }
       params.push(id);
       const {
         rows: [updated],
@@ -1171,8 +1206,9 @@ export default async function orderRoutes(app: FastifyInstance) {
           return reply.status(404).send({ error: "Order not found" });
         }
 
-        // Block cancellation of invoiced orders — must go through credit note
-        if (status === "cancelled" && current.status === "invoiced") {
+        // Block cancellation of invoiced orders — must go through credit note.
+        // After the flow refactor "Фактурирана" is a flag, so check invoice_id.
+        if (status === "cancelled" && current.invoice_id) {
           return reply.status(400).send({
             error:
               "Не може да се отмени фактурирана поръчка. Първо анулирайте фактурата (или издайте Кредитно известие).",
@@ -1321,8 +1357,9 @@ export default async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Order not found" });
     }
 
-    // Invoiced orders can't be cancelled — use credit note instead
-    if (order.status === "invoiced") {
+    // Invoiced orders can't be cancelled — use credit note instead.
+    // After the flow refactor "Фактурирана" is a flag, so check invoice_id.
+    if (order.invoice_id) {
       return reply.status(400).send({
         error:
           "Не може да се отмени фактурирана поръчка директно. Първо анулирайте фактурата от секция Фактури.",
@@ -1788,7 +1825,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { include_vat?: string };
+        Querystring: { include_vat?: string; pricing_mode?: string };
       }>,
       reply: FastifyReply,
     ) => {
@@ -1802,10 +1839,14 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!data) return reply.status(404).send({ error: "Order not found" });
 
       const { order, items } = data;
-      if (order.status !== "fulfilled" && order.status !== "invoiced") {
+      if (
+        order.status !== "processing" &&
+        order.status !== "fulfilled" &&
+        order.status !== "invoiced"
+      ) {
         return reply.status(400).send({
           error:
-            "Стокова разписка може да се генерира само за изпълнени поръчки",
+            "Стокова разписка може да се генерира само за поръчки в обработка или изпълнени",
         });
       }
 
@@ -1822,13 +1863,19 @@ export default async function orderRoutes(app: FastifyInstance) {
         includeVat = (request.query as any).include_vat !== "false";
       }
 
+      const pricingMode: "net" | "gross" =
+        (request.query as any).pricing_mode === "gross" ? "gross" : "net";
+
       const company = await getCompanySettings();
       const docNumber = `SR-${String(order.order_number || order.id).padStart(7, "0")}`;
 
       // Generate PDF in temp dir
       const pdfDir = path.resolve(process.cwd(), "data", "documents");
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
-      const outputPath = path.join(pdfDir, `stock-dispatch-${id}.pdf`);
+      const outputPath = path.join(
+        pdfDir,
+        `stock-dispatch-${id}-${pricingMode}.pdf`,
+      );
 
       await generateStockDispatchPdf({
         doc_number: docNumber,
@@ -1858,11 +1905,13 @@ export default async function orderRoutes(app: FastifyInstance) {
           expiry_date: i.expiry_date,
         })),
         vat_rate: includeVat ? 20 : 0,
+        pricing_mode: pricingMode,
         outputPath,
       });
 
       const stream = fs.createReadStream(outputPath);
-      const filename = `Стокова_разписка_${docNumber}.pdf`;
+      const suffix = pricingMode === "gross" ? "_с_ДДС" : "";
+      const filename = `Стокова_разписка_${docNumber}${suffix}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
 
       return reply
@@ -1894,10 +1943,14 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!data) return reply.status(404).send({ error: "Order not found" });
 
       const { order, items } = data;
-      if (order.status !== "fulfilled" && order.status !== "invoiced") {
+      if (
+        order.status !== "processing" &&
+        order.status !== "fulfilled" &&
+        order.status !== "invoiced"
+      ) {
         return reply.status(400).send({
           error:
-            "Търговски документ може да се генерира само за изпълнени поръчки",
+            "Търговски документ може да се генерира само за поръчки в обработка или изпълнени",
         });
       }
 
@@ -1936,6 +1989,57 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const stream = fs.createReadStream(outputPath);
       const filename = `Търговски_документ_${docNumber}.pdf`;
+      const encodedFilename = encodeURIComponent(filename);
+
+      return reply
+        .header("Content-Type", "application/pdf")
+        .header(
+          "Content-Disposition",
+          `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+        )
+        .send(stream);
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // GET /:id/warranty-pdf — Гаранционна карта
+  // ════════════════════════════════════════════════════════════════════
+  // Serial number = WR-<order_number padded to 7 digits>, so the warranty
+  // can be traced back to the source order / invoice. All other fields are
+  // filled by hand.
+  app.get(
+    "/:id/warranty-pdf",
+    async (
+      request: FastifyRequest<{ Params: { id: string } }>,
+      reply: FastifyReply,
+    ) => {
+      await requireAuth(request, reply);
+      if (request.user.role !== "admin" && request.user.role !== "warehouse") {
+        return reply.status(403).send({ error: "Insufficient permissions" });
+      }
+
+      const id = Number(request.params.id);
+      const { rows } = await query(
+        "SELECT id, order_number FROM orders WHERE id = $1",
+        [id],
+      );
+      if (!rows.length)
+        return reply.status(404).send({ error: "Order not found" });
+
+      const order = rows[0];
+      const serialNumber = `WR-${String(order.order_number || order.id).padStart(7, "0")}`;
+
+      const pdfDir = path.resolve(process.cwd(), "data", "documents");
+      if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+      const outputPath = path.join(pdfDir, `warranty-${id}.pdf`);
+
+      await generateWarrantyCardPdf({
+        serial_number: serialNumber,
+        outputPath,
+      });
+
+      const stream = fs.createReadStream(outputPath);
+      const filename = `Гаранционна_карта_${serialNumber}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
 
       return reply

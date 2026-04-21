@@ -32,12 +32,14 @@ import {
   XCircle,
   Search,
   X as XIcon,
+  Truck,
+  ShieldCheck,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
-import type { Order, OrderItem, Partner, PartnerOrderObject } from "@/types";
+import type { Order, OrderItem, Partner } from "@/types";
 import { formatDate, formatCurrency, isoDateToday } from "@/lib/utils";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch } from "@/lib/highlight";
@@ -104,6 +106,7 @@ interface OrderProduct {
   group_price: number | null;
   /** Last known purchase price — used as a "not below cost" guard. */
   purchase_price: number | null;
+  weight_kg: number | null;
   total_stock: number;
   partner_price: number | null;
 }
@@ -122,6 +125,11 @@ interface OrderItemRow {
   /** Snapshot of the product's purchase_price at pick time — used to
    *  warn the cashier when the typed selling price dips below cost. */
   cost_price: number;
+  /** Weight in kg for this line (stored string so the input can be empty). */
+  weight_kg: string;
+  /** Product's stored weight at pick time. If the user edits weight_kg
+   *  and this snapshot differs, we PATCH it back to the product on save. */
+  original_weight_kg: number | null;
 }
 
 let orderItemRowSeq = 0;
@@ -138,6 +146,8 @@ const makeOrderItemRow = (
   unit: "",
   stock: 0,
   cost_price: 0,
+  weight_kg: "",
+  original_weight_kg: null,
   ...overrides,
 });
 
@@ -512,12 +522,11 @@ function OrderDetailModal({
     },
   });
 
-  // Combined confirm + fulfill — one click goes from pending → fulfilled
-  const confirmAndFulfillMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await api.put(`/orders/${id}/status`, { status: "confirmed" });
-      await api.post(`/orders/${id}/fulfill`);
-    },
+  // Confirm only — pending → confirmed. Fulfill happens later via the
+  // warehouse flow ("Изпрати към склад" → warehouse picks → "Изпълни").
+  const confirmOrderMutation = useMutation({
+    mutationFn: (id: number) =>
+      api.put(`/orders/${id}/status`, { status: "confirmed" }),
     onSuccess: () => {
       invalidateAllOrderRelated();
     },
@@ -564,16 +573,17 @@ function OrderDetailModal({
   // Document PDF download + print
   const handleDocDownload = async (
     orderId: number,
-    docType: "stock-dispatch" | "commercial-doc",
+    docType: "stock-dispatch" | "commercial-doc" | "warranty",
+    options?: { pricingMode?: "net" | "gross" },
   ) => {
     try {
       // For invoiced orders, backend reads VAT from invoice; for fulfilled, use toggle
-      const vatParam =
-        (detail?.invoice_id ?? generatedInvoiceId)
-          ? ""
-          : includeVat
-            ? ""
-            : "?include_vat=false";
+      const params = new URLSearchParams();
+      const invoiced = detail?.invoice_id ?? generatedInvoiceId;
+      if (!invoiced && !includeVat) params.set("include_vat", "false");
+      if (options?.pricingMode === "gross") params.set("pricing_mode", "gross");
+      const queryString = params.toString();
+      const vatParam = queryString ? `?${queryString}` : "";
       const res = await api.get(
         `/orders/${orderId}/${docType}-pdf${vatParam}`,
         { responseType: "blob" },
@@ -841,16 +851,17 @@ function OrderDetailModal({
                 { key: "confirmed", label: "Потвърдена" },
                 { key: "processing", label: "В обработка" },
                 { key: "fulfilled", label: "Изпълнена" },
-                { key: "invoiced", label: "Фактурирана" },
               ].map((step, idx, arr) => {
                 const statusOrder = [
                   "pending",
                   "confirmed",
                   "processing",
                   "fulfilled",
-                  "invoiced",
                 ];
-                const currentIdx = statusOrder.indexOf(detail.status);
+                // Legacy "invoiced" status — treat as fulfilled for the stepper.
+                const normalizedStatus =
+                  detail.status === "invoiced" ? "fulfilled" : detail.status;
+                const currentIdx = statusOrder.indexOf(normalizedStatus);
                 const stepIdx = statusOrder.indexOf(step.key);
                 const isDone = stepIdx < currentIdx;
                 const isCurrent = stepIdx === currentIdx;
@@ -862,14 +873,14 @@ function OrderDetailModal({
                           isDone
                             ? "bg-green-500 text-white"
                             : isCurrent
-                              ? "bg-[#6c3dff] text-white ring-2 ring-[#6c3dff]/30"
+                              ? "bg-[#f97316] text-white ring-2 ring-[#f97316]/30"
                               : "bg-gray-200 text-gray-400"
                         }`}
                       >
                         {isDone ? "✓" : idx + 1}
                       </div>
                       <div
-                        className={`text-[10px] mt-0.5 ${isCurrent ? "font-bold text-[#6c3dff]" : isDone ? "text-green-600" : "text-gray-400"}`}
+                        className={`text-[10px] mt-0.5 ${isCurrent ? "font-bold text-[#f97316]" : isDone ? "text-green-600" : "text-gray-400"}`}
                       >
                         {step.label}
                       </div>
@@ -919,11 +930,11 @@ function OrderDetailModal({
 
             {detail.status === "pending" && (
               <Button
-                onClick={() => confirmAndFulfillMutation.mutate(detail.id)}
-                disabled={confirmAndFulfillMutation.isPending}
+                onClick={() => confirmOrderMutation.mutate(detail.id)}
+                disabled={confirmOrderMutation.isPending}
                 className="bg-green-600 hover:bg-green-700"
               >
-                {confirmAndFulfillMutation.isPending ? (
+                {confirmOrderMutation.isPending ? (
                   <Spinner size="sm" />
                 ) : (
                   <CheckCircle className="h-4 w-4" />
@@ -931,8 +942,26 @@ function OrderDetailModal({
                 Потвърди поръчка
               </Button>
             )}
-            {(detail.status === "confirmed" ||
-              detail.status === "processing") && (
+            {detail.status === "confirmed" && (
+              <Button
+                onClick={() =>
+                  statusMutation.mutate({
+                    id: detail.id,
+                    status: "processing",
+                  })
+                }
+                disabled={statusMutation.isPending}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                {statusMutation.isPending ? (
+                  <Spinner size="sm" />
+                ) : (
+                  <Truck className="h-4 w-4" />
+                )}
+                Изпрати към склад
+              </Button>
+            )}
+            {detail.status === "processing" && (
               <Button
                 onClick={() => fulfillMutation.mutate(detail.id)}
                 disabled={fulfillMutation.isPending}
@@ -948,8 +977,8 @@ function OrderDetailModal({
             )}
           </div>
 
-          {/* Row 2 — Invoice group (only after fulfilled) */}
-          {(detail.status === "fulfilled" || detail.status === "invoiced") && (
+          {/* Row 2 — Invoice group (available from confirmed onwards) */}
+          {detail.status !== "pending" && detail.status !== "cancelled" && (
             <div className="flex flex-wrap gap-2 items-center border-t pt-2">
               <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
                 Фактура:
@@ -964,7 +993,7 @@ function OrderDetailModal({
                     onClick={() => setIncludeVat(true)}
                     className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
                       includeVat
-                        ? "bg-[#6c3dff] text-white"
+                        ? "bg-[#f97316] text-white"
                         : "bg-white text-gray-600 border hover:bg-gray-100"
                     }`}
                   >
@@ -988,7 +1017,7 @@ function OrderDetailModal({
                   <span
                     className={`px-2.5 py-1 text-xs font-medium rounded-md ${
                       invoiceIncludesVat !== false
-                        ? "bg-[#6c3dff]/10 text-[#6c3dff] border border-[#6c3dff]/20"
+                        ? "bg-[#f97316]/10 text-[#f97316] border border-[#f97316]/20"
                         : "bg-orange-50 text-orange-600 border border-orange-200"
                     }`}
                   >
@@ -1001,7 +1030,7 @@ function OrderDetailModal({
                 <Button
                   onClick={() => invoiceMutation.mutate(detail.id)}
                   disabled={invoiceMutation.isPending}
-                  className="bg-[#6c3dff] hover:bg-[#5a2de6]"
+                  className="bg-[#f97316] hover:bg-[#ea580c]"
                 >
                   {invoiceMutation.isPending ? (
                     <Spinner size="sm" />
@@ -1015,7 +1044,7 @@ function OrderDetailModal({
                   <Button
                     variant="outline"
                     onClick={() => void openInvoicePdf(effectiveInvoiceId!)}
-                    className="border-[#6c3dff]/40 text-[#6c3dff] hover:bg-[#6c3dff]/5"
+                    className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5"
                   >
                     <FileText className="h-4 w-4" />
                     Отвори
@@ -1139,8 +1168,10 @@ function OrderDetailModal({
             </div>
           )}
 
-          {/* Row 3 — Document downloads */}
-          {(detail.status === "fulfilled" || detail.status === "invoiced") && (
+          {/* Row 3 — Document downloads (available from processing onwards) */}
+          {(detail.status === "processing" ||
+            detail.status === "fulfilled" ||
+            detail.status === "invoiced") && (
             <div className="flex flex-wrap gap-2 items-center border-t pt-2">
               <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
                 Документи:
@@ -1155,11 +1186,32 @@ function OrderDetailModal({
               </Button>
               <Button
                 variant="outline"
+                onClick={() =>
+                  handleDocDownload(detail.id, "stock-dispatch", {
+                    pricingMode: "gross",
+                  })
+                }
+                className="text-emerald-700 border-emerald-400 hover:bg-emerald-50"
+              >
+                <ClipboardList className="h-4 w-4" />
+                Стокова разписка (с ДДС)
+              </Button>
+              <Button
+                variant="outline"
                 onClick={() => handleDocDownload(detail.id, "commercial-doc")}
                 className="text-blue-600 border-blue-300 hover:bg-blue-50"
               >
                 <ScrollText className="h-4 w-4" />
                 Търговски документ
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => handleDocDownload(detail.id, "warranty")}
+                className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                title="Гаранционна карта (сериен номер = номер на поръчката)"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Гаранция
               </Button>
             </div>
           )}
@@ -1349,8 +1401,12 @@ function EditOrderItemsModal({
     setNotes(order.notes || "");
 
     const mappedItems =
-      order.items?.map((item) =>
-        makeOrderItemRow({
+      order.items?.map((item) => {
+        const rawW =
+          (item as any).weight_kg ?? (item as any).product?.weight_kg ?? null;
+        const w = rawW != null ? parseFloat(String(rawW)) : NaN;
+        const productWeight = Number.isFinite(w) && w > 0 ? w : null;
+        return makeOrderItemRow({
           product_id: String(item.product_id),
           product_name:
             item.product?.name_bg ||
@@ -1364,8 +1420,10 @@ function EditOrderItemsModal({
           discount_percent: String((item as any).discount_percent ?? "0"),
           unit: item.product?.unit || (item as any).unit || "бр.",
           stock: -1, // unknown until product is re-selected from search
-        }),
-      ) || [];
+          weight_kg: productWeight != null ? String(productWeight) : "",
+          original_weight_kg: productWeight,
+        });
+      }) || [];
 
     setItems(mappedItems.length > 0 ? mappedItems : [emptyItem()]);
     setErrorMsg("");
@@ -1378,6 +1436,9 @@ function EditOrderItemsModal({
         product.partner_price ?? product.group_price ?? product.selling_price;
       const price = rawPrice != null ? parseFloat(String(rawPrice)) : null;
       const stock = parseFloat(String(product.total_stock || 0));
+      const wRaw =
+        product.weight_kg != null ? parseFloat(String(product.weight_kg)) : NaN;
+      const productWeight = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : null;
       setItems((prev) =>
         prev.map((item, i) =>
           i === idx
@@ -1390,6 +1451,8 @@ function EditOrderItemsModal({
                   item.unit_price || (price != null ? String(price) : ""),
                 unit: product.unit || "бр.",
                 stock,
+                weight_kg: productWeight != null ? String(productWeight) : "",
+                original_weight_kg: productWeight,
               }
             : item,
         ),
@@ -1424,8 +1487,8 @@ function EditOrderItemsModal({
   );
 
   const mutation = useMutation({
-    mutationFn: () =>
-      api.put(`/orders/${order.id}`, {
+    mutationFn: async () => {
+      const res = await api.put(`/orders/${order.id}`, {
         delivery_date: deliveryDate || undefined,
         notes: notes || undefined,
         items: validItems.map((i) => ({
@@ -1434,7 +1497,31 @@ function EditOrderItemsModal({
           unit_price: Number(i.unit_price),
           discount_percent: Number(i.discount_percent) || 0,
         })),
-      }),
+      });
+
+      // Persist edited weights back to the product catalog.
+      const weightUpdates = validItems
+        .map((i) => {
+          const w = Number(i.weight_kg);
+          if (!Number.isFinite(w) || w <= 0) return null;
+          if (
+            i.original_weight_kg != null &&
+            Math.abs(w - i.original_weight_kg) < 0.001
+          )
+            return null;
+          return { id: Number(i.product_id), weight_kg: w };
+        })
+        .filter((u): u is { id: number; weight_kg: number } => u !== null);
+      if (weightUpdates.length > 0) {
+        await Promise.allSettled(
+          weightUpdates.map((u) =>
+            api.put(`/products/${u.id}`, { weight_kg: u.weight_kg }),
+          ),
+        );
+        qc.invalidateQueries({ queryKey: ["products"] });
+      }
+      return res;
+    },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["order-detail", order.id] });
@@ -1511,6 +1598,7 @@ function EditOrderItemsModal({
                     <TableHead className="min-w-[320px]">Продукт</TableHead>
                     <TableHead className="w-24">Наличност</TableHead>
                     <TableHead className="w-28">Количество</TableHead>
+                    <TableHead className="w-24">Кг</TableHead>
                     <TableHead className="w-32">Ед. цена</TableHead>
                     <TableHead className="w-20">Отст. %</TableHead>
                     <TableHead className="w-28">Сума</TableHead>
@@ -1596,6 +1684,21 @@ function EditOrderItemsModal({
                             type="number"
                             step="0.01"
                             min="0"
+                            value={item.weight_kg}
+                            onChange={(e) =>
+                              setItem(i, "weight_kg", e.target.value)
+                            }
+                            className="w-20"
+                            disabled={!item.product_id}
+                            placeholder="0"
+                            title="Тегло (кг)"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
                             value={item.unit_price}
                             onChange={(e) =>
                               setItem(i, "unit_price", e.target.value)
@@ -1639,6 +1742,28 @@ function EditOrderItemsModal({
             <Button variant="outline" size="sm" onClick={addItem} type="button">
               + Добави артикул
             </Button>
+            {(() => {
+              const total = validItems.reduce(
+                (s, i) =>
+                  s + (Number(i.quantity) || 0) * (Number(i.weight_kg) || 0),
+                0,
+              );
+              return total > 0 ? (
+                <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  <Package className="h-4 w-4" />
+                  <span>
+                    Общо тегло:{" "}
+                    <span className="font-semibold">
+                      {(Math.round(total * 100) / 100).toLocaleString("bg-BG", {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      кг
+                    </span>
+                  </span>
+                </div>
+              ) : null;
+            })()}
           </div>
 
           <div className="space-y-1.5">
@@ -1708,10 +1833,6 @@ function CreateOrderModal({
   const [form, setForm] = useState({
     partner_id: "",
     delivery_date: today,
-    request_number: "",
-    partner_object_id: "",
-    object_name: "",
-    object_code: "",
     notes: "",
     econt_delivery_type: "office" as "office" | "address",
     econt_receiver_name: "",
@@ -1723,6 +1844,8 @@ function CreateOrderModal({
     econt_street_num: "",
     econt_weight: 1,
     econt_cod_amount: 0,
+    econt_payer: "sender" as "sender" | "receiver",
+    econt_has_cod: false,
   });
   const { token: authToken } = useAuth();
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
@@ -1738,14 +1861,9 @@ function CreateOrderModal({
   const qtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const priceRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const discountRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  // Full "top-of-form" keyboard flow: партньор → дата → № заявка →
-  // обект → (име/код ако нов) → първи продукт.
+  // Full "top-of-form" keyboard flow: партньор → дата → първи продукт.
   const partnerInputRef = useRef<HTMLInputElement | null>(null);
   const dateInputRef = useRef<HTMLInputElement | null>(null);
-  const requestNumberRef = useRef<HTMLInputElement | null>(null);
-  const objectComboRef = useRef<HTMLInputElement | null>(null);
-  const objectNameRef = useRef<HTMLInputElement | null>(null);
-  const objectCodeRef = useRef<HTMLInputElement | null>(null);
   const productSearchRefs = useRef<Record<string, ProductSearchHandle | null>>(
     {},
   );
@@ -1776,10 +1894,6 @@ function CreateOrderModal({
       setForm({
         partner_id: "",
         delivery_date: today,
-        request_number: "",
-        partner_object_id: "",
-        object_name: "",
-        object_code: "",
         notes: "",
         econt_delivery_type: "office",
         econt_receiver_name: "",
@@ -1791,6 +1905,8 @@ function CreateOrderModal({
         econt_street_num: "",
         econt_weight: 1,
         econt_cod_amount: 0,
+        econt_payer: "sender",
+        econt_has_cod: false,
       });
       setItems([emptyItem()]);
       setStockWarnings([]);
@@ -1826,22 +1942,6 @@ function CreateOrderModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
-  const { data: partnerObjects = [], isLoading: partnerObjectsLoading } =
-    useQuery<PartnerOrderObject[]>({
-      queryKey: ["partner-order-objects", form.partner_id],
-      queryFn: () =>
-        api.get(`/partners/${form.partner_id}/order-objects`).then((r) => {
-          const d = r.data;
-          return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
-        }),
-      enabled: open && Boolean(form.partner_id),
-      staleTime: 60_000,
-    });
-
-  const selectedPartnerObject = partnerObjects.find(
-    (obj) => String(obj.id) === form.partner_object_id,
-  );
-
   const handleProductSelect = useCallback(
     (idx: number, product: OrderProduct) => {
       const rawPrice =
@@ -1853,6 +1953,9 @@ function CreateOrderModal({
         product.purchase_price != null
           ? parseFloat(String(product.purchase_price))
           : 0;
+      const wRaw =
+        product.weight_kg != null ? parseFloat(String(product.weight_kg)) : NaN;
+      const productWeight = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : null;
       setItems((prev) =>
         prev.map((item, i) => {
           if (i !== idx) return item;
@@ -1869,6 +1972,8 @@ function CreateOrderModal({
             unit: product.unit || "бр.",
             stock,
             cost_price: Number.isFinite(cost) && cost > 0 ? cost : 0,
+            weight_kg: productWeight != null ? String(productWeight) : "",
+            original_weight_kg: productWeight,
           };
         }),
       );
@@ -1931,17 +2036,29 @@ function CreateOrderModal({
     if (!hasBelowCost && confirmBelowCost) setConfirmBelowCost(false);
   }, [hasBelowCost, confirmBelowCost]);
 
+  // Auto-fill Еконт teglo from sum(qty × weight_kg) whenever items change.
+  // Еконт min е 0.1 кг; ако няма никакви тегла, държим минимум 0.1.
+  const totalItemsWeight = validItems.reduce((sum, i) => {
+    const q = Number(i.quantity) || 0;
+    const w = Number(i.weight_kg) || 0;
+    return sum + q * w;
+  }, 0);
+  useEffect(() => {
+    const rounded = Math.round(totalItemsWeight * 100) / 100;
+    const next = rounded > 0 ? rounded : 0.1;
+    setForm((f) =>
+      Math.abs((f.econt_weight || 0) - next) < 0.0001
+        ? f
+        : { ...f, econt_weight: next },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalItemsWeight]);
+
   const mutation = useMutation({
-    mutationFn: () =>
-      api.post("/orders", {
+    mutationFn: async () => {
+      const res = await api.post("/orders", {
         partner_id: Number(form.partner_id),
         delivery_date: form.delivery_date || undefined,
-        request_number: form.request_number.trim() || undefined,
-        partner_object_id: form.partner_object_id
-          ? Number(form.partner_object_id)
-          : undefined,
-        object_name: form.object_name.trim() || undefined,
-        object_code: form.object_code.trim() || undefined,
         notes: form.notes || undefined,
         econt_receiver_name: form.econt_receiver_name.trim() || undefined,
         econt_receiver_phone: form.econt_receiver_phone.trim() || undefined,
@@ -1954,19 +2071,45 @@ function CreateOrderModal({
         econt_street: form.econt_street.trim() || undefined,
         econt_street_num: form.econt_street_num.trim() || undefined,
         econt_weight: form.econt_weight || undefined,
-        econt_cod_amount: form.econt_cod_amount || undefined,
+        econt_cod_amount:
+          form.econt_has_cod && form.econt_cod_amount
+            ? form.econt_cod_amount
+            : undefined,
+        econt_payer: form.econt_city ? form.econt_payer : undefined,
         items: validItems.map((i) => ({
           product_id: Number(i.product_id),
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price) || undefined,
           discount_percent: Number(i.discount_percent) || 0,
         })),
-      }),
+      });
+
+      // Persist any edited weights back to the product catalog so
+      // future orders inherit the corrected weight automatically.
+      const weightUpdates = validItems
+        .map((i) => {
+          const w = Number(i.weight_kg);
+          if (!Number.isFinite(w) || w <= 0) return null;
+          if (
+            i.original_weight_kg != null &&
+            Math.abs(w - i.original_weight_kg) < 0.001
+          )
+            return null;
+          return { id: Number(i.product_id), weight_kg: w };
+        })
+        .filter((u): u is { id: number; weight_kg: number } => u !== null);
+      if (weightUpdates.length > 0) {
+        await Promise.allSettled(
+          weightUpdates.map((u) =>
+            api.put(`/products/${u.id}`, { weight_kg: u.weight_kg }),
+          ),
+        );
+        qc.invalidateQueries({ queryKey: ["products"] });
+      }
+      return res;
+    },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
-      qc.invalidateQueries({
-        queryKey: ["partner-order-objects", form.partner_id],
-      });
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       if (onCreated && createdOrder && createdOrder.id) {
@@ -1990,7 +2133,6 @@ function CreateOrderModal({
   const canSubmit =
     form.partner_id &&
     validItems.length > 0 &&
-    !(form.object_code.trim() && !form.object_name.trim()) &&
     !mutation.isPending &&
     !orderCreated;
 
@@ -2040,18 +2182,12 @@ function CreateOrderModal({
                   setForm((f) => ({
                     ...f,
                     partner_id: val,
-                    partner_object_id: "",
-                    object_name: "",
-                    object_code: "",
                   }))
                 }
                 onClear={() =>
                   setForm((f) => ({
                     ...f,
                     partner_id: "",
-                    partner_object_id: "",
-                    object_name: "",
-                    object_code: "",
                   }))
                 }
                 onPickEnter={() =>
@@ -2075,160 +2211,12 @@ function CreateOrderModal({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    focusAndSelect(requestNumberRef.current);
+                    focusProductSearch(items[0]?.row_key);
                   }
                 }}
               />
             </div>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>Номер на заявка</Label>
-              <Input
-                ref={requestNumberRef}
-                value={form.request_number}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, request_number: e.target.value }))
-                }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    focusAndSelect(objectComboRef.current);
-                  }
-                }}
-                placeholder="напр. Z-2026-0412"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Обект / магазин</Label>
-              <Combobox
-                inputRef={objectComboRef}
-                items={[
-                  {
-                    value: "__new__",
-                    label: form.partner_id
-                      ? "+ Нов обект..."
-                      : "Избери партньор първо...",
-                  },
-                  ...partnerObjects.map((obj) => ({
-                    value: String(obj.id),
-                    label: obj.object_code
-                      ? `${obj.object_code} · ${obj.object_name}`
-                      : obj.object_name,
-                  })),
-                ]}
-                value={form.partner_object_id || "__new__"}
-                disabled={!form.partner_id || partnerObjectsLoading}
-                onChange={(val) => {
-                  if (val === "__new__") {
-                    setForm((f) => ({
-                      ...f,
-                      partner_object_id: "",
-                      object_name: "",
-                      object_code: "",
-                    }));
-                    return;
-                  }
-                  const selected = partnerObjects.find(
-                    (obj) => String(obj.id) === val,
-                  );
-                  setForm((f) => ({
-                    ...f,
-                    partner_object_id: val,
-                    object_name: selected?.object_name ?? "",
-                    object_code: selected?.object_code ?? "",
-                  }));
-                }}
-                onClear={() =>
-                  setForm((f) => ({
-                    ...f,
-                    partner_object_id: "",
-                    object_name: "",
-                    object_code: "",
-                  }))
-                }
-                onPickEnter={() => {
-                  // If user picked an existing object, skip the name/code
-                  // inputs (they stay hidden) and go straight to the
-                  // first product search. If they picked "+ Нов обект",
-                  // send them into Име на обект so they can type it.
-                  queueMicrotask(() => {
-                    const picked = form.partner_object_id;
-                    // NB: form.partner_object_id hasn't updated yet
-                    // inside the closure — use the ref's current check.
-                    // Safer: look at objectNameRef / first product ref.
-                    if (objectNameRef.current) {
-                      focusAndSelect(objectNameRef.current);
-                    } else {
-                      focusProductSearch(items[0]?.row_key);
-                    }
-                    void picked;
-                  });
-                }}
-                placeholder="Избери или потърси обект..."
-                emptyMessage="Няма намерени обекти."
-              />
-            </div>
-          </div>
-
-          {!form.partner_object_id && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Име на обект</Label>
-                <Input
-                  ref={objectNameRef}
-                  value={form.object_name}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, object_name: e.target.value }))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      focusAndSelect(objectCodeRef.current);
-                    }
-                  }}
-                  placeholder="напр. Kaufland Бургас 7"
-                  disabled={!form.partner_id}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Код на обект</Label>
-                <Input
-                  ref={objectCodeRef}
-                  value={form.object_code}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, object_code: e.target.value }))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      focusProductSearch(items[0]?.row_key);
-                    }
-                  }}
-                  placeholder="напр. BGS-007"
-                  disabled={!form.partner_id}
-                />
-              </div>
-            </div>
-          )}
-
-          {form.partner_object_id && selectedPartnerObject && (
-            <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded px-3 py-2">
-              Избран обект:{" "}
-              <span className="font-medium text-gray-700">
-                {selectedPartnerObject.object_code
-                  ? `${selectedPartnerObject.object_code} · ${selectedPartnerObject.object_name}`
-                  : selectedPartnerObject.object_name}
-              </span>
-            </div>
-          )}
-
-          {form.object_code.trim() && !form.object_name.trim() && (
-            <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
-              Въведете име на обекта, когато задавате код.
-            </div>
-          )}
 
           <div className="space-y-2">
             <Label>Артикули</Label>
@@ -2239,6 +2227,7 @@ function CreateOrderModal({
                     <TableHead className="min-w-[320px]">Продукт</TableHead>
                     <TableHead className="w-24">Наличност</TableHead>
                     <TableHead className="w-28">Количество</TableHead>
+                    <TableHead className="w-24">Кг</TableHead>
                     <TableHead className="w-32">Ед. цена</TableHead>
                     <TableHead className="w-20">Отст. %</TableHead>
                     <TableHead className="w-28">Сума</TableHead>
@@ -2340,6 +2329,21 @@ function CreateOrderModal({
                               max {availableStock}
                             </div>
                           )}
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={item.weight_kg}
+                            onChange={(e) =>
+                              setItem(i, "weight_kg", e.target.value)
+                            }
+                            className="w-20"
+                            disabled={!item.product_id}
+                            placeholder="0"
+                            title="Тегло (кг) — ще се запамети към продукта и ще се използва за Еконт"
+                          />
                         </TableCell>
                         <TableCell>
                           <Input
@@ -2448,6 +2452,21 @@ function CreateOrderModal({
             <Button variant="outline" size="sm" onClick={addItem} type="button">
               + Добави артикул
             </Button>
+            {totalItemsWeight > 0 && (
+              <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                <Package className="h-4 w-4" />
+                <span>
+                  Общо тегло:{" "}
+                  <span className="font-semibold">
+                    {(Math.round(totalItemsWeight * 100) / 100).toLocaleString(
+                      "bg-BG",
+                      { minimumFractionDigits: 1, maximumFractionDigits: 2 },
+                    )}{" "}
+                    кг
+                  </span>
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -2474,6 +2493,8 @@ function CreateOrderModal({
                 econt_street_num: form.econt_street_num || undefined,
                 econt_weight: form.econt_weight,
                 econt_cod_amount: form.econt_cod_amount,
+                econt_payer: form.econt_payer,
+                econt_has_cod: form.econt_has_cod,
               }}
               onChange={(patch) =>
                 setForm((f) => ({
@@ -2482,6 +2503,8 @@ function CreateOrderModal({
                 }))
               }
               token={authToken}
+              defaultOpen={false}
+              defaultCodAmount={orderTotal}
             />
           )}
         </div>
@@ -2649,7 +2672,6 @@ export function Orders() {
     invoice: "",
     stock_dispatch: "",
     commercial_doc: "",
-    request_number: "",
   });
   // Date range filter — same pattern as Приемане на стоки
   const todayIso = new Date().toISOString().split("T")[0];
@@ -2671,7 +2693,12 @@ export function Orders() {
   } = useQuery<Order[]>({
     queryKey: ["orders", statusFilter],
     queryFn: () => {
-      const params = statusFilter ? `?status=${statusFilter}` : "";
+      const params =
+        statusFilter === "invoiced"
+          ? "?invoiced=true"
+          : statusFilter
+            ? `?status=${statusFilter}`
+            : "";
       return api.get(`/orders${params}`).then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
@@ -2732,9 +2759,6 @@ export function Orders() {
         return false;
       // Commercial document
       if (!matchField(order.commercial_document_number, filters.commercial_doc))
-        return false;
-      // Request number
-      if (!matchField(order.request_number, filters.request_number))
         return false;
 
       // Date range — based on order_date
@@ -2889,14 +2913,13 @@ export function Orders() {
         { label: "Откажи", value: "cancelled" },
       ],
       confirmed: [
-        { label: "В обработка", value: "processing" },
+        { label: "Изпрати към склад", value: "processing" },
         { label: "Откажи", value: "cancelled" },
       ],
       processing: [
         { label: "Изпълни", value: "fulfilled" },
         { label: "Откажи", value: "cancelled" },
       ],
-      fulfilled: [{ label: "Фактурирай", value: "invoiced" }],
     };
 
   return (
@@ -2930,7 +2953,7 @@ export function Orders() {
             onClick={() => setStatusFilter(s)}
             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
               statusFilter === s
-                ? "bg-[#6c3dff] text-white"
+                ? "bg-[#f97316] text-white"
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
           >
@@ -3002,17 +3025,6 @@ export function Orders() {
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
           <Input
-            value={filters.request_number}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, request_number: e.target.value }))
-            }
-            placeholder="№ заявка"
-            className="pl-8 h-9 text-sm"
-          />
-        </div>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-          <Input
             value={filters.invoice}
             onChange={(e) =>
               setFilters((f) => ({ ...f, invoice: e.target.value }))
@@ -3063,7 +3075,6 @@ export function Orders() {
                 invoice: "",
                 stock_dispatch: "",
                 commercial_doc: "",
-                request_number: "",
               });
               setShowHistory(false);
             }}
@@ -3163,7 +3174,7 @@ export function Orders() {
                                     ? "text-amber-700 line-through decoration-amber-500/60"
                                     : order.invoice_status === "cancelled"
                                       ? "text-red-600 line-through"
-                                      : "text-[#6c3dff]"
+                                      : "text-[#f97316]"
                                 }`}
                                 title="Отвори в страница Фактури"
                               >
@@ -3178,7 +3189,7 @@ export function Orders() {
                                   );
                                 }}
                                 disabled={regenerateInvoiceMutation.isPending}
-                                className="text-gray-400 hover:text-[#6c3dff] p-0.5 rounded"
+                                className="text-gray-400 hover:text-[#f97316] p-0.5 rounded"
                                 title="Регенерирай фактура"
                               >
                                 <RefreshCw
@@ -3222,54 +3233,83 @@ export function Orders() {
                         )}
                       </TableCell>
                       <TableCell>
-                        {order.status === "fulfilled" ||
-                        order.status === "invoiced" ? (
-                          <div className="flex items-center gap-1.5 flex-wrap">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {order.econt_shipment_number ? (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleDocumentDownload(
-                                  order.id,
-                                  "stock-dispatch",
-                                );
+                                const url =
+                                  order.econt_pdf_url ||
+                                  order.econt_tracking_url ||
+                                  `https://www.econt.com/services/track-shipment/${order.econt_shipment_number}`;
+                                window.open(url, "_blank");
                               }}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition"
-                              title="Стокова разписка"
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 transition"
+                              title={`Товарителница ${order.econt_shipment_number}`}
                             >
-                              <ClipboardList className="h-3 w-3" />
-                              СР
+                              <Truck className="h-3 w-3" />
+                              {order.econt_shipment_number}
                             </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDocumentDownload(
-                                  order.id,
-                                  "commercial-doc",
-                                );
-                              }}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
-                              title="Търговски документ"
+                          ) : order.econt_city ? (
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-amber-50 text-amber-700 border border-amber-200"
+                              title="Econt доставка — чака товарителница"
                             >
-                              <ScrollText className="h-3 w-3" />
-                              ТД
-                            </button>
-                            {order.invoice_id && (
+                              <Truck className="h-3 w-3" />
+                              Econt
+                            </span>
+                          ) : null}
+                          {order.status === "processing" ||
+                          order.status === "fulfilled" ||
+                          order.status === "invoiced" ? (
+                            <>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleInvoicePrint(order.invoice_id!);
+                                  handleDocumentDownload(
+                                    order.id,
+                                    "stock-dispatch",
+                                  );
                                 }}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 transition"
-                                title="Печат фактура"
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition"
+                                title="Стокова разписка"
                               >
-                                <FileText className="h-3 w-3" />
-                                Фактура
+                                <ClipboardList className="h-3 w-3" />
+                                СР
                               </button>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDocumentDownload(
+                                    order.id,
+                                    "commercial-doc",
+                                  );
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
+                                title="Търговски документ"
+                              >
+                                <ScrollText className="h-3 w-3" />
+                                ТД
+                              </button>
+                              {order.invoice_id && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleInvoicePrint(order.invoice_id!);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition"
+                                  title="Печат фактура"
+                                >
+                                  <FileText className="h-3 w-3" />
+                                  Фактура
+                                </button>
+                              )}
+                            </>
+                          ) : !order.econt_city &&
+                            !order.econt_shipment_number ? (
+                            <span className="text-gray-300">—</span>
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">{order.source}</Badge>

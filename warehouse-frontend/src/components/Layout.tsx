@@ -21,6 +21,7 @@ import {
   CheckCheck,
   AlertTriangle,
   DollarSign,
+  Boxes,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
@@ -55,6 +56,12 @@ const allNavItems = [
     to: "/orders",
     icon: ShoppingCart,
     label: "Поръчки",
+    roles: ["admin", "warehouse"],
+  },
+  {
+    to: "/warehouse",
+    icon: Boxes,
+    label: "Склад пакетиране",
     roles: ["admin", "warehouse"],
   },
   {
@@ -115,6 +122,7 @@ const routeNames: Record<string, string> = {
   "/inventory": "Склад",
   "/incoming": "Приемане",
   "/orders": "Поръчки",
+  "/warehouse": "Склад пакетиране",
   "/partners": "Партньори",
   "/suppliers": "Доставчици",
   "/invoices": "Фактури",
@@ -202,7 +210,7 @@ export function Layout() {
       {/* Sidebar */}
       <aside
         className={cn(
-          "flex flex-col bg-[#1a1a2e] text-white transition-all duration-300 shrink-0",
+          "flex flex-col bg-[#0a1628] text-white transition-all duration-300 shrink-0",
           isMobile
             ? cn(
                 "fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300",
@@ -221,7 +229,7 @@ export function Layout() {
           {(sidebarOpen || isMobile) && (
             <div className="overflow-hidden">
               <p className="font-bold text-sm leading-tight">МЕРТ-М</p>
-              <p className="text-xs text-white/50">Склад</p>
+              <p className="text-xs text-white/50">Складова система</p>
             </div>
           )}
         </div>
@@ -242,7 +250,7 @@ export function Layout() {
                   cn(
                     "flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors group relative",
                     isActive
-                      ? "bg-[#6c3dff] text-white"
+                      ? "bg-[#f97316] text-white"
                       : "text-white/70 hover:bg-white/10 hover:text-white",
                   )
                 }
@@ -264,7 +272,7 @@ export function Layout() {
         <div className="border-t border-white/10 p-4">
           {sidebarOpen || isMobile ? (
             <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-full bg-[#6c3dff] flex items-center justify-center shrink-0">
+              <div className="h-8 w-8 rounded-full bg-[#f97316] flex items-center justify-center shrink-0">
                 <span className="text-xs font-bold">
                   {user?.name?.charAt(0)}
                 </span>
@@ -343,7 +351,7 @@ export function Layout() {
                   {unreadCount > 0 && (
                     <button
                       onClick={() => markAllReadMutation.mutate()}
-                      className="flex items-center gap-1 text-xs text-[#6c3dff] hover:underline"
+                      className="flex items-center gap-1 text-xs text-[#f97316] hover:underline"
                       disabled={markAllReadMutation.isPending}
                     >
                       <CheckCheck className="h-3.5 w-3.5" />
@@ -405,7 +413,7 @@ export function Layout() {
 
           {/* User */}
           <div className="flex items-center gap-2 text-sm">
-            <div className="h-8 w-8 rounded-full bg-[#6c3dff] flex items-center justify-center">
+            <div className="h-8 w-8 rounded-full bg-[#f97316] flex items-center justify-center">
               <span className="text-xs text-white font-bold">
                 {user?.name?.charAt(0)}
               </span>
