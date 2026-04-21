@@ -104,14 +104,12 @@ export function Payments() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (
-        !e.shiftKey ||
-        e.metaKey ||
-        e.ctrlKey ||
-        e.altKey ||
-        e.key.toLowerCase() !== "p"
-      )
-        return;
+      const isCombo =
+        e.altKey &&
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        e.code === "KeyR";
+      if (!isCombo) return;
       e.preventDefault();
       e.stopPropagation();
       setRazpiskaUnlocked((prev) => {
