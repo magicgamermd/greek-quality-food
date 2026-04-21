@@ -32,6 +32,63 @@ const methodVariants: Record<string, "success" | "info" | "default"> = {
   card: "default",
 };
 
+function exportCsv(payments: Payment[], tab: "invoice" | "razpiska") {
+  const headers =
+    tab === "razpiska"
+      ? ["Поръчка", "Партньор", "Дата", "Начин", "Референция", "Сума", "Статус"]
+      : [
+          "Фактура",
+          "Партньор",
+          "Дата",
+          "Начин",
+          "Референция",
+          "Сума",
+          "Статус",
+        ];
+
+  const rows = payments.map((p) => {
+    const amount = Number(p.amount).toFixed(2);
+    const totalRaw =
+      tab === "razpiska"
+        ? p.order_total
+        : (p.invoice_total_gross ?? p.invoice?.total_gross);
+    const paidRaw =
+      tab === "razpiska" ? p.order_paid_total : p.invoice_paid_total;
+    const total = Number(totalRaw ?? 0);
+    const paid = Number(paidRaw ?? 0);
+    const status = total > 0 && paid + 0.01 >= total ? "Платена" : "Частично";
+    const ref =
+      tab === "razpiska"
+        ? `#${p.order_number ?? p.order_id}`
+        : (p.invoice_number ?? `#${p.invoice_id}`);
+    return [
+      ref,
+      p.partner_name ?? "",
+      p.paid_at,
+      p.payment_method,
+      p.bank_reference ?? "",
+      amount,
+      status,
+    ];
+  });
+
+  const csv = [headers, ...rows]
+    .map((row) =>
+      row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","),
+    )
+    .join("\n");
+
+  const blob = new Blob(["\ufeff" + csv], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `payments-${tab}-${new Date().toISOString().split("T")[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function Payments() {
   const [modalOpen, setModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"invoice" | "razpiska">("invoice");
@@ -221,7 +278,15 @@ export function Payments() {
               />
             </div>
           </div>
-          <div className="mt-3 flex justify-end">
+          <div className="mt-3 flex justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => exportCsv(payments, activeTab)}
+              disabled={payments.length === 0}
+            >
+              Експорт CSV
+            </Button>
             <Button
               variant="outline"
               size="sm"
