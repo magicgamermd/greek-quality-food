@@ -60,7 +60,9 @@ function formatPrice(v: number | null | undefined): string {
   return Number.isFinite(n) ? n.toFixed(2) : "";
 }
 
-function buildFormState(product?: Product | null) {
+function buildFormState(
+  product?: (Product & { weight_kg?: number | null }) | null,
+) {
   return {
     name_bg: product?.name_bg ?? "",
     name_en: product?.name_en ?? "",
@@ -69,6 +71,7 @@ function buildFormState(product?: Product | null) {
     unit: product?.unit ?? "",
     description: product?.description ?? "",
     brand: product?.brand ?? "",
+    weight_kg: formatPrice(product?.weight_kg),
     purchase_price: formatPrice(product?.purchase_price),
     selling_price: formatPrice(product?.selling_price),
     retail_price: formatPrice(product?.retail_price),
@@ -140,6 +143,7 @@ function ProductModal({
         price_group_6: toNum(form.price_group_6),
         price_group_7: toNum(form.price_group_7),
         price_group_8: toNum(form.price_group_8),
+        weight_kg: toNum(form.weight_kg),
         brand: form.brand || null,
       };
       if (product) return api.put(`/products/${product.id}`, payload);
@@ -178,7 +182,7 @@ function ProductModal({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader className="shrink-0">
           <DialogTitle>
             {product ? "Редактиране на продукт" : "Нов продукт"}
@@ -241,7 +245,7 @@ function ProductModal({
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-[2fr_1fr_1fr] gap-4">
             <div className="space-y-1.5">
               <Label>Категория</Label>
               <Combobox
@@ -269,6 +273,17 @@ function ProductModal({
                   <option key={b} value={b} />
                 ))}
               </datalist>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Тегло (кг)</Label>
+              <Input
+                type="number"
+                step="0.001"
+                min="0"
+                value={form.weight_kg}
+                onChange={(e) => set("weight_kg", e.target.value)}
+                placeholder="0.000"
+              />
             </div>
           </div>
 
@@ -738,7 +753,7 @@ export function Products() {
           }}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             stockTab === "active"
-              ? "border-[#6c3dff] text-[#6c3dff]"
+              ? "border-[#f97316] text-[#f97316]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -746,7 +761,7 @@ export function Products() {
           <span
             className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
               stockTab === "active"
-                ? "bg-[#6c3dff]/10 text-[#6c3dff]"
+                ? "bg-[#f97316]/10 text-[#f97316]"
                 : "bg-gray-100 text-gray-500"
             }`}
           >
@@ -760,7 +775,7 @@ export function Products() {
           }}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             stockTab === "catalog"
-              ? "border-[#6c3dff] text-[#6c3dff]"
+              ? "border-[#f97316] text-[#f97316]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -768,7 +783,7 @@ export function Products() {
           <span
             className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
               stockTab === "catalog"
-                ? "bg-[#6c3dff]/10 text-[#6c3dff]"
+                ? "bg-[#f97316]/10 text-[#f97316]"
                 : "bg-gray-100 text-gray-500"
             }`}
           >
@@ -868,7 +883,7 @@ export function Products() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5 text-[#6c3dff]" />
+            <Package className="h-5 w-5 text-[#f97316]" />
             {pagination.total} продукта
           </CardTitle>
         </CardHeader>

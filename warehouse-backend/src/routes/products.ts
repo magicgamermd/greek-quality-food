@@ -89,6 +89,13 @@ const createProductSchema = z.object({
       return isNaN(n) ? null : n;
     }, z.number().nullable())
     .optional(),
+  weight_kg: z
+    .preprocess((val) => {
+      if (val === null || val === undefined || val === "") return null;
+      const n = parseFloat(String(val));
+      return isNaN(n) ? null : n;
+    }, z.number().nullable())
+    .optional(),
 });
 
 const updateProductSchema = createProductSchema.partial();
@@ -457,9 +464,9 @@ export default async function productRoutes(app: FastifyInstance) {
     try {
       const { rows } = await query(
         `INSERT INTO products (name_bg, name_en, sku, category_id, unit, description, image_url, low_stock_threshold, brand, purchase_price, selling_price,
-          retail_price, price_group_1, price_group_2, price_group_3, price_group_4, price_group_5, price_group_6, price_group_7, price_group_8)
+          retail_price, price_group_1, price_group_2, price_group_3, price_group_4, price_group_5, price_group_6, price_group_7, price_group_8, weight_kg)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-          $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
          RETURNING *`,
         [
           body.name_bg,
@@ -482,6 +489,7 @@ export default async function productRoutes(app: FastifyInstance) {
           body.price_group_6 ?? null,
           body.price_group_7 ?? null,
           body.price_group_8 ?? null,
+          body.weight_kg ?? null,
         ],
       );
 
