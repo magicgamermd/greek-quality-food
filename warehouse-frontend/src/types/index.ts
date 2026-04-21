@@ -268,7 +268,8 @@ export interface Invoice {
 
 export interface Payment {
   id: number;
-  invoice_id: number;
+  invoice_id?: number | null;
+  order_id?: number | null;
   amount: number;
   payment_method: "cash" | "bank" | "card";
   paid_at: string;
@@ -279,6 +280,9 @@ export interface Payment {
   partner_name?: string;
   invoice_total_gross?: number | string;
   invoice_paid_total?: number | string;
+  order_number?: number;
+  order_total?: number | string;
+  order_paid_total?: number | string;
 }
 
 export interface Notification {

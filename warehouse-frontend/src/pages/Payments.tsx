@@ -1,14 +1,13 @@
 import { useState, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, CreditCard, Search } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Plus, Search } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Payment, Invoice } from "@/types";
-import { formatDate, formatCurrency, formatDateTime } from "@/lib/utils";
+import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { Combobox } from "@/components/ui/combobox";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -19,14 +18,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
+import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
+import { RecordPaymentModal } from "@/components/RecordPaymentModal";
 
 const methodLabels: Record<string, string> = {
   cash: "В брой",
@@ -38,179 +31,6 @@ const methodVariants: Record<string, "success" | "info" | "default"> = {
   bank: "info",
   card: "default",
 };
-
-const getInvoiceRemaining = (invoice: Invoice): number => {
-  if (typeof invoice.remaining === "number") return invoice.remaining;
-  const paid = Number(invoice.paid_amount ?? 0);
-  return Number(invoice.total_gross) - paid;
-};
-
-function RecordPaymentModal({
-  open,
-  onClose,
-  unpaidInvoices,
-}: {
-  open: boolean;
-  onClose: () => void;
-  unpaidInvoices: Invoice[];
-}) {
-  const qc = useQueryClient();
-  const [form, setForm] = useState({
-    invoice_id: "",
-    amount: "",
-    payment_method: "bank",
-    bank_reference: "",
-    paid_at: new Date().toISOString().split("T")[0],
-  });
-
-  // Reset form (especially paid_at) to current date when dialog opens
-  useEffect(() => {
-    if (open) {
-      setForm({
-        invoice_id: "",
-        amount: "",
-        payment_method: "bank",
-        bank_reference: "",
-        paid_at: new Date().toISOString().split("T")[0],
-      });
-    }
-  }, [open]);
-
-  const selectedInvoice = unpaidInvoices.find(
-    (i) => i.id === Number(form.invoice_id),
-  );
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      api.post("/payments", {
-        invoice_id: Number(form.invoice_id),
-        amount: Number(form.amount),
-        payment_method: form.payment_method,
-        bank_reference: form.bank_reference || undefined,
-        paid_at: form.paid_at,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["payments"] });
-      qc.invalidateQueries({ queryKey: ["invoices"] });
-      qc.invalidateQueries({ queryKey: ["unpaid-invoices"] });
-      onClose();
-    },
-  });
-
-  const set = (f: string, v: string) =>
-    setForm((prev) => ({ ...prev, [f]: v }));
-
-  return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>Запиши плащане</DialogTitle>
-        </DialogHeader>
-        <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
-          <div className="space-y-1.5">
-            <Label>Фактура</Label>
-            <Combobox
-              items={unpaidInvoices.map((inv) => ({
-                value: String(inv.id),
-                label: `${inv.invoice_number} — ${inv.partner?.name ?? inv.partner_name ?? `#${inv.partner_id}`}`,
-                hint: `Остатък ${formatCurrency(getInvoiceRemaining(inv))}`,
-              }))}
-              value={form.invoice_id}
-              onChange={(val) => {
-                const inv = unpaidInvoices.find((i) => i.id === Number(val));
-                set("invoice_id", val);
-                if (inv) set("amount", getInvoiceRemaining(inv).toFixed(2));
-              }}
-              onClear={() => set("invoice_id", "")}
-              placeholder="Избери или потърси фактура..."
-              emptyMessage="Няма намерени неплатени фактури."
-            />
-          </div>
-          {selectedInvoice && (
-            <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Партньор:</span>
-                <span className="font-medium">
-                  {selectedInvoice.partner?.name ??
-                    selectedInvoice.partner_name ??
-                    `#${selectedInvoice.partner_id}`}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Дата:</span>
-                <span>{formatDate(selectedInvoice.invoice_date)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Остатък:</span>
-                <span className="font-bold text-[#f97316]">
-                  {formatCurrency(getInvoiceRemaining(selectedInvoice))}
-                </span>
-              </div>
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>Сума</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={form.amount}
-                onChange={(e) => set("amount", e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Дата</Label>
-              <Input
-                type="date"
-                value={form.paid_at}
-                onChange={(e) => set("paid_at", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Начин на плащане</Label>
-            <Select
-              value={form.payment_method}
-              onChange={(e) => set("payment_method", e.target.value)}
-            >
-              <option value="bank">Банков превод</option>
-              <option value="cash">В брой</option>
-              <option value="card">Карта</option>
-            </Select>
-          </div>
-          {form.payment_method === "bank" && (
-            <div className="space-y-1.5">
-              <Label>Банкова референция</Label>
-              <Input
-                value={form.bank_reference}
-                onChange={(e) => set("bank_reference", e.target.value)}
-              />
-            </div>
-          )}
-        </div>
-        {mutation.error && <ErrorMessage message="Грешка при запазване" />}
-        <DialogFooter className="gap-2 shrink-0">
-          <Button variant="outline" onClick={onClose}>
-            Отказ
-          </Button>
-          <Button
-            onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || !form.invoice_id || !form.amount}
-          >
-            {mutation.isPending ? (
-              <>
-                <Spinner size="sm" />
-                Запазване...
-              </>
-            ) : (
-              "Запиши плащане"
-            )}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 export function Payments() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -469,7 +289,7 @@ export function Payments() {
       <RecordPaymentModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        unpaidInvoices={unpaidInvoices}
+        context={{ kind: "invoice-select", invoices: unpaidInvoices }}
       />
     </div>
   );
