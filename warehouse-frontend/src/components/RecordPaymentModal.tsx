@@ -40,6 +40,10 @@ const getInvoiceRemaining = (inv: Invoice): number => {
   return Number(inv.total_gross) - paid;
 };
 
+const VAT_RATE = 0.2;
+const getOrderGross = (order: Order): number =>
+  Number(order.total_amount) * (1 + VAT_RATE);
+
 export function RecordPaymentModal({ open, onClose, context }: Props) {
   const qc = useQueryClient();
   const [form, setForm] = useState({
@@ -64,7 +68,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
     } else if (context.kind === "order-fixed") {
       setForm({
         invoice_id: "",
-        amount: Number(context.order.total_amount).toFixed(2),
+        amount: getOrderGross(context.order).toFixed(2),
         payment_method: "bank",
         bank_reference: "",
         paid_at: today,
@@ -164,37 +168,51 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
             </div>
           )}
 
-          {context.kind === "order-fixed" && (
-            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm space-y-1">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Поръчка:</span>
-                <span className="font-mono font-medium">
-                  #{context.order.order_number ?? context.order.id}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Партньор:</span>
-                <span className="font-medium">
-                  {context.order.partner?.name ??
-                    context.order.partner_name ??
-                    `#${context.order.partner_id}`}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Дата:</span>
-                <span>{formatDate(context.order.order_date)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Сума на поръчката:</span>
-                <span className="font-bold text-[#f97316]">
-                  {formatCurrency(context.order.total_amount)}
-                </span>
-              </div>
-              <div className="text-xs text-amber-700 pt-1">
-                Плащане по стокова разписка (без фактура).
-              </div>
-            </div>
-          )}
+          {context.kind === "order-fixed" &&
+            (() => {
+              const net = Number(context.order.total_amount);
+              const vat = net * VAT_RATE;
+              const gross = net + vat;
+              return (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Поръчка:</span>
+                    <span className="font-mono font-medium">
+                      #{context.order.order_number ?? context.order.id}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Партньор:</span>
+                    <span className="font-medium">
+                      {context.order.partner?.name ??
+                        context.order.partner_name ??
+                        `#${context.order.partner_id}`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Дата:</span>
+                    <span>{formatDate(context.order.order_date)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Нето:</span>
+                    <span>{formatCurrency(net)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">ДДС (20%):</span>
+                    <span>{formatCurrency(vat)}</span>
+                  </div>
+                  <div className="flex justify-between pt-1 border-t border-amber-200">
+                    <span className="text-gray-500">Общо с ДДС:</span>
+                    <span className="font-bold text-[#f97316]">
+                      {formatCurrency(gross)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-amber-700 pt-1">
+                    Плащане по стокова разписка (без фактура).
+                  </div>
+                </div>
+              );
+            })()}
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">

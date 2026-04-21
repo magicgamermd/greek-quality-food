@@ -109,8 +109,16 @@ export function Payments() {
         (e.ctrlKey && e.altKey && e.key.toLowerCase() === "p");
       if (!isCombo) return;
       e.preventDefault();
-      sessionStorage.setItem("razpiska_tab_unlocked", "true");
-      setRazpiskaUnlocked(true);
+      setRazpiskaUnlocked((prev) => {
+        const next = !prev;
+        if (next) {
+          sessionStorage.setItem("razpiska_tab_unlocked", "true");
+        } else {
+          sessionStorage.removeItem("razpiska_tab_unlocked");
+          setActiveTab("invoice");
+        }
+        return next;
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
