@@ -322,7 +322,8 @@ export default async function paymentRoutes(app: FastifyInstance) {
         [body.order_id],
       );
       const alreadyPaidOrder = parseFloat(orderPaidTotal);
-      const orderTotal = parseFloat(order.total_amount);
+      const orderNet = parseFloat(order.total_amount);
+      const orderTotal = orderNet * 1.2;
       if (alreadyPaidOrder + body.amount > orderTotal * 1.001) {
         return reply.status(400).send({
           error: "Payment exceeds order total",
