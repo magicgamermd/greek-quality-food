@@ -12,7 +12,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import type { StockLevel } from "@/types";
-import { formatUnit, getApiErrorMessage } from "@/lib/utils";
+import { formatUnit, getApiErrorMessage, stockColorClass } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
 
-type Tab = "available" | "all" | "zero" | "low-stock";
+type Tab = "available" | "all" | "zero" | "low-stock" | "negative";
 
 interface AdjustStockData {
   productId: number;
@@ -230,23 +230,30 @@ export function Inventory() {
 
       const params = new URLSearchParams();
       params.set("page", String(page));
-      params.set("limit", String(pageSize));
+      params.set("limit", String(tab === "negative" ? 500 : pageSize));
       if (search.trim()) params.set("search", search.trim());
 
-      // For the main inventory endpoint, add stock filters
       if (base === "/inventory") {
         if (tab === "available") params.set("has_stock", "true");
         else if (tab === "zero") params.set("has_stock", "zero");
+        // "negative" → no filter, we paginate client-side after filter
       }
 
       return api.get(`${base}?${params}`).then((r) => {
         const d = r.data;
         const arr = Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+        const normalized = arr.map((item: any) => normalizeInventoryItem(item));
+        if (tab === "negative") {
+          const onlyNegative = normalized
+            .filter((it) => Number(it.total_quantity ?? 0) < 0)
+            .sort(
+              (a, b) =>
+                Number(a.total_quantity ?? 0) - Number(b.total_quantity ?? 0),
+            );
+          return { items: onlyNegative, total: onlyNegative.length };
+        }
         const total = d?.pagination?.total ?? d?.count ?? arr.length;
-        return {
-          items: arr.map((item: any) => normalizeInventoryItem(item)),
-          total,
-        };
+        return { items: normalized, total };
       });
     },
     refetchInterval: 30000,
@@ -263,7 +270,9 @@ export function Inventory() {
         ? "Нулеви артикули"
         : tab === "low-stock"
           ? "Нисък запас"
-          : "Всички артикули";
+          : tab === "negative"
+            ? "Продукти на минус"
+            : "Всички артикули";
 
   const tabs: {
     key: Tab;
@@ -274,6 +283,7 @@ export function Inventory() {
     { key: "all", label: "Всички", icon: Warehouse },
     { key: "zero", label: "Нулеви", icon: PackageX },
     { key: "low-stock", label: "Нисък запас", icon: AlertTriangle },
+    { key: "negative", label: "На минус", icon: AlertTriangle },
   ];
 
   const openAdjust = (item: StockLevel) => {
@@ -409,20 +419,29 @@ export function Inventory() {
                         <TableCell>
                           <span
                             className={
-                              isLow
-                                ? "text-red-600 font-bold"
-                                : "text-gray-900 font-medium"
+                              item.total_quantity < 0
+                                ? "text-red-600 font-bold inline-flex items-center gap-1"
+                                : stockColorClass(
+                                    item.total_quantity,
+                                    item.low_stock_threshold,
+                                  )
                             }
                           >
+                            {item.total_quantity < 0 && (
+                              <AlertTriangle className="h-3.5 w-3.5" />
+                            )}
                             {item.total_quantity}
                           </span>
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1 flex-wrap">
+                            {item.total_quantity < 0 && (
+                              <Badge variant="destructive">На минус</Badge>
+                            )}
                             {isLow && (
                               <Badge variant="destructive">Нисък запас</Badge>
                             )}
-                            {!hasStock && (
+                            {item.total_quantity === 0 && (
                               <Badge variant="outline">Каталог</Badge>
                             )}
                             {hasStock && !isLow && (
