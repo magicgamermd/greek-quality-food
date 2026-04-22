@@ -2,8 +2,7 @@ import { z } from "zod";
 
 const EIK_REGEX = /^\d{9}$|^\d{13}$/;
 
-// Base schema shared by create and update. All partner fields are optional
-// at this layer except for the ones that `z.refine` enforces per partner_type.
+// Base schema — all fields optional here; create/update add their own requirements.
 const basePartnerObject = z.object({
   name: z.string().min(1),
   microinvest_code: z.string().optional(),
@@ -25,44 +24,55 @@ const basePartnerObject = z.object({
   category: z.string().optional().nullable(),
   partner_type: z
     .enum(["legal_entity", "individual", "customer", "supplier"])
-    .optional()
-    .default("legal_entity"),
+    .optional(),
 });
 
-function refineByPartnerType<T extends z.AnyZodObject>(schema: T) {
-  return schema.superRefine((data, ctx) => {
-    const type = (data as any).partner_type ?? "legal_entity";
-    const eik = (data as any).eik;
-    const hasEik = typeof eik === "string" && eik.length > 0;
+type PartnerBaseShape = z.infer<typeof basePartnerObject>;
 
-    if (type === "individual") {
-      if (hasEik) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["eik"],
-          message: "Физическо лице не може да има ЕИК",
-        });
-      }
-      return;
-    }
+function validatePartnerTypeRules(
+  data: Partial<PartnerBaseShape>,
+  ctx: z.RefinementCtx,
+): void {
+  const type = data.partner_type ?? "legal_entity";
+  const eik = data.eik;
+  const hasEik = typeof eik === "string" && eik.length > 0;
 
-    // legal_entity / customer / supplier — if an EIK is provided it must
-    // be 9 or 13 digits. Empty/missing EIK is tolerated at the schema
-    // level (some legacy partners have no EIK); UI enforces required-ness.
-    if (hasEik && !EIK_REGEX.test(eik)) {
+  if (type === "individual") {
+    if (hasEik) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["eik"],
-        message: "ЕИК трябва да е 9 или 13 цифри",
+        message: "Физическо лице не може да има ЕИК",
       });
     }
-  });
+    return;
+  }
+
+  // legal_entity / customer / supplier — EIK optional, but if present
+  // must be 9 or 13 digits. UI enforces required-ness.
+  if (hasEik && !EIK_REGEX.test(eik as string)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["eik"],
+      message: "ЕИК трябва да е 9 или 13 цифри",
+    });
+  }
 }
 
-export const partnerCreateSchema = refineByPartnerType(basePartnerObject);
-export const partnerUpdateSchema = refineByPartnerType(
-  basePartnerObject.partial(),
-);
+// Create: partner_type defaults to "legal_entity" (so the handler always
+// gets a concrete value to persist).
+export const partnerCreateSchema = basePartnerObject
+  .extend({
+    partner_type: z
+      .enum(["legal_entity", "individual", "customer", "supplier"])
+      .default("legal_entity"),
+  })
+  .superRefine(validatePartnerTypeRules);
+
+// Update: all fields optional; no default — absence means "don't change".
+export const partnerUpdateSchema = basePartnerObject
+  .partial()
+  .superRefine(validatePartnerTypeRules);
 
 export type PartnerCreateInput = z.infer<typeof partnerCreateSchema>;
 export type PartnerUpdateInput = z.infer<typeof partnerUpdateSchema>;

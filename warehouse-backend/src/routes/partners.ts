@@ -246,18 +246,20 @@ export default async function partnerRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = partnerUpdateSchema.parse(request.body);
 
-    // Force-null EIK/VAT if client switched the partner_type to individual
-    // in this update — keeps legacy values from sticking around.
+    // For individuals, force-null EIK/VAT so lingering legacy values don't
+    // persist when the client switches partner_type. Use a separate object
+    // instead of mutating the parsed result — cleaner types at the SET-builder.
+    const updatePayload: Record<string, unknown> = { ...body };
     if (body.partner_type === "individual") {
-      (body as any).eik = null;
-      (body as any).vat_number = null;
+      updatePayload.eik = null;
+      updatePayload.vat_number = null;
     }
 
     const fields: string[] = [];
     const values: any[] = [];
     let idx = 1;
 
-    for (const [key, val] of Object.entries(body)) {
+    for (const [key, val] of Object.entries(updatePayload)) {
       if (val !== undefined) {
         fields.push(`${key} = $${idx++}`);
         values.push(val);
