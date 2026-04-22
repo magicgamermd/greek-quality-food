@@ -13,10 +13,11 @@ vi.mock("../db.js", () => ({
   transaction: vi.fn(),
 }));
 
-import { transaction } from "../db.js";
+import { query, transaction } from "../db.js";
 import orderRoutes from "../routes/orders.js";
 
 const mockTransaction = vi.mocked(transaction);
+const mockQuery = vi.mocked(query);
 
 function rows<T>(list: T[]) {
   return { rows: list, rowCount: list.length } as any;
@@ -39,6 +40,8 @@ async function buildApp(): Promise<FastifyInstance> {
 describe("orders route — back-order / negative inventory", () => {
   beforeEach(() => {
     mockTransaction.mockReset();
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [] } as any);
   });
 
   it("fulfill allows inventory.quantity to go negative (UPDATE drops the >= guard)", async () => {
@@ -282,6 +285,158 @@ describe("orders route — back-order / negative inventory", () => {
           final_stock: -3,
         },
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("confirming incoming goods offsets a negative inventory balance", async () => {
+    // Inventory row for product 7 currently at -3. Incoming goods #99
+    // carries qty 10. After confirm, the row must go from -3 to 7 via
+    // the existing ON CONFLICT upsert — we only assert that the route
+    // does NOT emit any conditional that would filter negatives out
+    // (the upsert SQL is the same for all starting values).
+    //
+    // NOTE: This test lives in this file (not incoming-confirm-inventory.test.ts)
+    // because its purpose is to guard back-order semantics as a whole.
+    // We re-import the incoming route locally to avoid mutating the
+    // outer file's top-level registration.
+    const incomingRoutes = (await import("../routes/incoming.js")).default;
+    const app = Fastify();
+    app.addHook("onRequest", async (request) => {
+      (request as any).user = {
+        id: "u-warehouse",
+        email: "warehouse@test.local",
+        role: "warehouse",
+      };
+      (request as any).jwtVerify = async () => (request as any).user;
+    });
+    await app.register(incomingRoutes, { prefix: "/incoming" });
+
+    const clientQuery = vi
+      .fn()
+      // UPDATE incoming_goods → row returned (was pending)
+      .mockResolvedValueOnce(
+        rows([{ id: 99, status: "pending", invoice_number: "INV-99" }]),
+      )
+      // SELECT * FROM incoming_items
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 1,
+            product_id: 7,
+            batch_id: null,
+            quantity: 10,
+            unit_price: 5,
+          },
+        ]),
+      )
+      // INSERT INTO inventory ... ON CONFLICT DO UPDATE
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE products SET purchase_price
+      .mockResolvedValueOnce(rows([]))
+      // INSERT INTO notifications
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    try {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/incoming/99/confirm",
+      });
+      expect(res.statusCode).toBe(200);
+
+      const insertInv = clientQuery.mock.calls.find((call: any[]) =>
+        String(call[0]).includes("INSERT INTO inventory"),
+      );
+      expect(insertInv).toBeDefined();
+      const sql = String(insertInv![0]);
+      // The upsert must not gate on `quantity >= 0` anywhere — the
+      // math has to apply unconditionally so negatives get offset.
+      expect(sql).toMatch(/ON CONFLICT/);
+      expect(sql).not.toMatch(/WHERE\s+inventory\.quantity\s*>=\s*0/);
+      expect(sql).not.toMatch(/HAVING\s+.*quantity\s*>=\s*0/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("cancelling a fulfilled order adds the quantity back (may turn -1 into 2)", async () => {
+    // Order 50 was fulfilled with qty 3 of product 7. Inventory is -1.
+    // Cancelling it calls the inline restore loop in DELETE /orders/:id →
+    // the ON CONFLICT upsert adds 3 and the row becomes 2.
+    //
+    // The DELETE handler has two separate transaction() calls:
+    //   1st: SELECT * FROM orders WHERE id = $1 FOR UPDATE (lock check)
+    //   2nd: re-lock + restore items + UPDATE orders SET status='cancelled'
+    // Module-level query() handles the initial snapshot SELECT and the
+    // final notifications INSERT — those are covered by mockQuery default.
+
+    // 1st transaction: just the FOR UPDATE lock
+    const lockQuery = vi.fn().mockResolvedValueOnce(
+      rows([
+        {
+          id: 50,
+          status: "fulfilled",
+          partner_id: 1,
+          total_amount: "30",
+          invoice_id: null,
+        },
+      ]),
+    );
+
+    // 2nd transaction: re-lock + items + inventory upsert + cancel
+    const cancelQuery = vi
+      .fn()
+      // SELECT id FROM orders WHERE id = $1 FOR UPDATE (re-lock)
+      .mockResolvedValueOnce(rows([{ id: 50 }]))
+      // SELECT product_id, quantity FROM order_items
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 601,
+            order_id: 50,
+            product_id: 7,
+            quantity: "3",
+          },
+        ]),
+      )
+      // INSERT INTO inventory ON CONFLICT DO UPDATE (restore)
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE orders SET status='cancelled'
+      .mockResolvedValueOnce(rows([]));
+
+    let callCount = 0;
+    mockTransaction.mockImplementation(async (callback: any) => {
+      callCount++;
+      if (callCount === 1) return callback({ query: lockQuery });
+      return callback({ query: cancelQuery });
+    });
+
+    // Module-level query: first call is the snapshot SELECT (returns row),
+    // subsequent call is notifications INSERT (default empty rows is fine).
+    mockQuery
+      .mockResolvedValueOnce(rows([{ id: 50 }]))
+      .mockResolvedValueOnce(rows([]));
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "DELETE",
+        url: "/orders/50",
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      const upsert = cancelQuery.mock.calls.find((call: any[]) =>
+        String(call[0]).includes("INSERT INTO inventory"),
+      );
+      expect(upsert).toBeDefined();
+      // The restore path must not filter on quantity sign either.
+      expect(String(upsert![0])).not.toMatch(/quantity\s*>=\s*0/);
     } finally {
       await app.close();
     }
