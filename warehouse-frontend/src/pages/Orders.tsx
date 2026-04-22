@@ -1832,6 +1832,14 @@ function CreateOrderModal({
 }) {
   const qc = useQueryClient();
   const today = isoDateToday();
+  const anonymousIndividual = partners.find(
+    (p) =>
+      (p as any).partner_type === "individual" &&
+      p.name === "Физическо лице — краен потребител",
+  );
+  const [customerMode, setCustomerMode] = useState<"legal" | "individual">(
+    "legal",
+  );
   const [form, setForm] = useState({
     partner_id: "",
     delivery_date: today,
@@ -1890,9 +1898,29 @@ function CreateOrderModal({
     handle?.focus();
   };
 
+  // Sync partner_id with customerMode
+  useEffect(() => {
+    if (customerMode === "individual") {
+      if (anonymousIndividual) {
+        setForm((f) => ({ ...f, partner_id: String(anonymousIndividual.id) }));
+      }
+    } else {
+      // When switching back to "фирма", clear partner_id so the combobox
+      // re-engages (keeps the user in control — they must pick explicitly).
+      setForm((f) =>
+        f.partner_id &&
+        anonymousIndividual &&
+        f.partner_id === String(anonymousIndividual.id)
+          ? { ...f, partner_id: "" }
+          : f,
+      );
+    }
+  }, [customerMode, anonymousIndividual]);
+
   // Reset on open
   useEffect(() => {
     if (open) {
+      setCustomerMode("legal");
       setForm({
         partner_id: "",
         delivery_date: today,
@@ -2165,39 +2193,90 @@ function CreateOrderModal({
           </p>
         </DialogHeader>
         <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
+          {/* Тип клиент (сегмент) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Label className="mr-2">Тип клиент:</Label>
+            <div className="inline-flex rounded-lg border bg-gray-50 p-1">
+              <button
+                type="button"
+                onClick={() => setCustomerMode("legal")}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                  customerMode === "legal"
+                    ? "bg-white shadow text-gray-900"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
+                🏢 Фирма (с ЕИК)
+              </button>
+              <button
+                type="button"
+                onClick={() => setCustomerMode("individual")}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                  customerMode === "individual"
+                    ? "bg-white shadow text-gray-900"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+                disabled={!anonymousIndividual}
+                title={
+                  anonymousIndividual
+                    ? "Физическо лице — без ЕИК, без лични данни"
+                    : "Seed партньорът липсва — изпълнете миграцията"
+                }
+              >
+                👤 Физическо лице
+              </button>
+            </div>
+            {customerMode === "individual" && (
+              <span className="text-xs text-gray-500">
+                Продажба на краен потребител. Касовата бележка излиза от
+                фискалния апарат.
+              </span>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>Партньор *</Label>
-              <Combobox
-                inputRef={partnerInputRef}
-                items={partners.map((p) => ({
-                  value: String(p.id),
-                  label: p.name,
-                  hint: p.microinvest_code
-                    ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
-                    : p.eik
-                      ? `ЕИК: ${p.eik}`
-                      : undefined,
-                }))}
-                value={form.partner_id}
-                onChange={(val) =>
-                  setForm((f) => ({
-                    ...f,
-                    partner_id: val,
-                  }))
-                }
-                onClear={() =>
-                  setForm((f) => ({
-                    ...f,
-                    partner_id: "",
-                  }))
-                }
-                onPickEnter={() =>
-                  queueMicrotask(() => focusAndSelect(dateInputRef.current))
-                }
-                placeholder="Избери или потърси по код, име или ЕИК..."
-                emptyMessage="Няма намерени партньори."
-              />
+              <Label>
+                {customerMode === "individual" ? "Клиент" : "Партньор *"}
+              </Label>
+              {customerMode === "individual" ? (
+                <div className="h-9 flex items-center px-3 rounded-md border bg-gray-50 text-sm text-gray-700">
+                  👤 Физическо лице — краен потребител
+                </div>
+              ) : (
+                <Combobox
+                  inputRef={partnerInputRef}
+                  items={partners
+                    .filter((p) => (p as any).partner_type !== "individual")
+                    .map((p) => ({
+                      value: String(p.id),
+                      label: p.name,
+                      hint: p.microinvest_code
+                        ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
+                        : p.eik
+                          ? `ЕИК: ${p.eik}`
+                          : undefined,
+                    }))}
+                  value={form.partner_id}
+                  onChange={(val) =>
+                    setForm((f) => ({
+                      ...f,
+                      partner_id: val,
+                    }))
+                  }
+                  onClear={() =>
+                    setForm((f) => ({
+                      ...f,
+                      partner_id: "",
+                    }))
+                  }
+                  onPickEnter={() =>
+                    queueMicrotask(() => focusAndSelect(dateInputRef.current))
+                  }
+                  placeholder="Избери или потърси по код, име или ЕИК..."
+                  emptyMessage="Няма намерени партньори."
+                />
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Дата на доставка</Label>
