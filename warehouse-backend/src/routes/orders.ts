@@ -156,6 +156,12 @@ const updateOrderSchema = z.object({
 
 const STOCK_DISPATCH_NUMBER_SQL = `('SR-' || LPAD(COALESCE(o.order_number, o.id)::text, 7, '0'))`;
 const COMMERCIAL_DOC_NUMBER_SQL = `('TD-' || LPAD(COALESCE(o.order_number, o.id)::text, 7, '0'))`;
+// Only emit a warranty number when one was actually issued. Until the
+// user downloads the warranty PDF, warranty_issued_at is NULL and the
+// column reads NULL so the UI can render "—".
+const WARRANTY_NUMBER_SQL = `CASE WHEN o.warranty_issued_at IS NOT NULL
+  THEN ('WR-' || LPAD(COALESCE(o.order_number, o.id)::text, 7, '0'))
+  ELSE NULL END`;
 const ORDER_OBJECT_NAME_SQL = `COALESCE(NULLIF(o.object_name, ''), po.object_name)`;
 const ORDER_OBJECT_CODE_SQL = `NULLIF(COALESCE(NULLIF(o.object_code, ''), po.object_code, ''), '')`;
 
@@ -552,6 +558,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               cn.invoice_number AS credit_note_number,
               ${STOCK_DISPATCH_NUMBER_SQL} AS stock_dispatch_number,
               ${COMMERCIAL_DOC_NUMBER_SQL} AS commercial_document_number,
+              ${WARRANTY_NUMBER_SQL} AS warranty_number,
               ${ORDER_OBJECT_NAME_SQL} AS object_name,
               ${ORDER_OBJECT_CODE_SQL} AS object_code,
               (o.invoice_id IS NOT NULL) AS invoiced
@@ -2037,6 +2044,16 @@ export default async function orderRoutes(app: FastifyInstance) {
         serial_number: serialNumber,
         outputPath,
       });
+
+      // Record first-issuance so the order detail view can show the
+      // warranty number. Idempotent: re-downloads don't shift the
+      // timestamp once set.
+      await query(
+        `UPDATE orders
+           SET warranty_issued_at = NOW()
+         WHERE id = $1 AND warranty_issued_at IS NULL`,
+        [id],
+      );
 
       const stream = fs.createReadStream(outputPath);
       const filename = `Гаранционна_карта_${serialNumber}.pdf`;

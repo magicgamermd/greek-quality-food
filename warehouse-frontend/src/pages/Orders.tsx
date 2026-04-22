@@ -627,6 +627,12 @@ function OrderDetailModal({
         URL.revokeObjectURL(url);
         if (iframe.parentNode) document.body.removeChild(iframe);
       }, 60000);
+
+      // Issuing a warranty stamps warranty_issued_at on the server; refresh
+      // the detail so the "Гаранция №" field in the header shows up.
+      if (docType === "warranty") {
+        invalidateAllOrderRelated();
+      }
     } catch {
       toast.error("Грешка при генериране на документ");
     }
@@ -725,6 +731,10 @@ function OrderDetailModal({
               <div className="text-sm">
                 {detail.commercial_document_number || "—"}
               </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Гаранция №</div>
+              <div className="text-sm">{detail.warranty_number || "—"}</div>
             </div>
           </div>
 
