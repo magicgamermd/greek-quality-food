@@ -3,11 +3,21 @@ import { loadConfig, PRICING_USD_PER_MTOK } from "../src/config.js";
 
 describe("loadConfig", () => {
   beforeEach(() => {
+    // Point mergeDotenv() at a non-existent path so tests are isolated from
+    // any real telegram-bot-tester/.env a developer may have on disk.
+    process.env.TESTER_DOTENV_PATH =
+      "/tmp/nonexistent-tester-env-do-not-create";
     delete process.env.TG_API_ID;
     delete process.env.TG_API_HASH;
     delete process.env.TG_PHONE;
     delete process.env.TG_BOT_USERNAME;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ACTOR_MODEL;
+    delete process.env.JUDGE_MODEL;
+    delete process.env.MAX_TURNS;
+    delete process.env.PER_TURN_TIMEOUT_MS;
+    delete process.env.SCENARIO_TIMEOUT_MS;
+    delete process.env.COST_CAP_USD;
   });
 
   it("fails with missing required vars", () => {
@@ -46,6 +56,16 @@ describe("loadConfig", () => {
     process.env.ANTHROPIC_API_KEY = "k";
     process.env.MAX_TURNS = "not-a-number";
     expect(() => loadConfig()).toThrow(/MAX_TURNS/);
+  });
+
+  it("strips leading @ from TG_BOT_USERNAME", () => {
+    process.env.TG_API_ID = "12345";
+    process.env.TG_API_HASH = "abc";
+    process.env.TG_PHONE = "+359";
+    process.env.TG_BOT_USERNAME = "@mertm_sklad_bot";
+    process.env.ANTHROPIC_API_KEY = "k";
+    const cfg = loadConfig();
+    expect(cfg.tg.botUsername).toBe("mertm_sklad_bot");
   });
 });
 

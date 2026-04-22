@@ -4,7 +4,6 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ENV_PATH = join(__dirname, "..", ".env");
 
 const RawEnvSchema = z.object({
   TG_API_ID: z.string().regex(/^\d+$/, "must be integer"),
@@ -52,8 +51,10 @@ export const PRICING_USD_PER_MTOK: Record<
 };
 
 function mergeDotenv(): void {
-  if (!existsSync(ENV_PATH)) return;
-  const raw = readFileSync(ENV_PATH, "utf-8");
+  const envPath =
+    process.env.TESTER_DOTENV_PATH ?? join(__dirname, "..", ".env");
+  if (!existsSync(envPath)) return;
+  const raw = readFileSync(envPath, "utf-8");
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
