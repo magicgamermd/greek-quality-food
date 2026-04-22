@@ -107,4 +107,102 @@ describe("orders route — back-order / negative inventory", () => {
       await app.close();
     }
   });
+
+  it("fulfill falls back to INSERT when inventory row is missing entirely", async () => {
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          { id: 43, status: "pending", partner_id: 1, total_amount: "20" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 510,
+            order_id: 43,
+            product_id: 8,
+            quantity: "2",
+            unit_price: "10",
+          },
+        ]),
+      )
+      // UPDATE inventory ... RETURNING quantity → 0 rows (no match)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      // INSERT INTO inventory ... VALUES ($1, 1, $2, NULL)
+      .mockResolvedValueOnce(rows([]))
+      // SELECT purchase_price
+      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
+      // UPDATE order_items SET cost_unit_price
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE orders SET status='fulfilled'
+      .mockResolvedValueOnce(rows([]))
+      // INSERT INTO notifications
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders/43/fulfill",
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      const insertCall = clientQuery.mock.calls.find((call: any[]) =>
+        String(call[0]).includes("INSERT INTO inventory"),
+      );
+      expect(insertCall).toBeDefined();
+      expect(insertCall![1]).toEqual([8, -2]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("insufficient_stock error is no longer thrown on fulfillment", async () => {
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          { id: 44, status: "pending", partner_id: 1, total_amount: "100" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 520,
+            order_id: 44,
+            product_id: 9,
+            quantity: "10",
+            unit_price: "10",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(rows([{ quantity: "-10" }]))
+      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
+      .mockResolvedValueOnce(rows([]))
+      .mockResolvedValueOnce(rows([]))
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders/44/fulfill",
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).not.toHaveProperty("error", "insufficient_stock");
+    } finally {
+      await app.close();
+    }
+  });
 });

@@ -1523,16 +1523,18 @@ export default async function orderRoutes(app: FastifyInstance) {
   }
 
   /**
-   * MERT-M per-product stock deduction. Replaces the old FEFO allocator
-   * (which chose batches by expiry date). For durable goods there is a
-   * single inventory row per (product_id, warehouse_id) with batch_id
-   * NULL, enforced by the partial unique index
-   * inventory_product_warehouse_nobatch_uidx (migration 045).
+   * MERT-M per-product stock deduction — back-order aware.
    *
-   * Uses a single atomic UPDATE with a quantity guard — if the row does
-   * not exist or lacks stock, no row is returned and we raise
-   * `insufficient_stock`. Returns the COGS unit price snapshotted from
-   * products.purchase_price for later profit reporting.
+   * First attempts an atomic UPDATE without a quantity guard so the
+   * inventory row is allowed to go negative (sells into the red). If
+   * no row exists for this product/warehouse yet, fall back to an
+   * INSERT with a negative quantity; the partial unique index
+   * `inventory_product_warehouse_nobatch_uidx` (migration 045) keeps
+   * this safe against concurrent inserts because there is only one
+   * batch_id-NULL row per product/warehouse.
+   *
+   * Returns the COGS unit price snapshotted from products.purchase_price
+   * for later profit reporting (unchanged from the old behaviour).
    */
   async function deductProductStock(
     db: DbExecutor,
@@ -1546,17 +1548,17 @@ export default async function orderRoutes(app: FastifyInstance) {
        WHERE product_id = $2
          AND warehouse_id = 1
          AND batch_id IS NULL
-         AND quantity >= $1
        RETURNING quantity`,
       [quantity, productId],
     );
 
     if (!rowCount) {
-      throw Object.assign(
-        new Error(
-          `insufficient_stock: product #${productId} requires ${quantity} unit(s) on hand`,
-        ),
-        { statusCode: 400 },
+      // No inventory row at all — a product that has never been
+      // delivered yet is being sold. Create a row starting at -qty.
+      await db.query(
+        `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+         VALUES ($1, 1, $2, NULL)`,
+        [productId, -quantity],
       );
     }
 
