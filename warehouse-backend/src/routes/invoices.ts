@@ -357,6 +357,14 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         order.partner_id,
       ]);
 
+      // Only accept a display-name override when the buyer is an individual.
+      // Storing it on legal-entity invoices would make the DB state misleading
+      // even though the PDF ignores it.
+      const clientDisplayName =
+        partner?.partner_type === "individual"
+          ? (body.client_display_name ?? null)
+          : null;
+
       // Calculate totals
       const totalNet = items.reduce(
         (sum: number, i: any) => sum + parseFloat(i.total_price),
@@ -388,7 +396,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           totalVat,
           totalGross,
           body.include_vat,
-          body.client_display_name ?? null,
+          clientDisplayName,
         ],
       );
 
