@@ -44,34 +44,34 @@ export type Scenario = z.infer<typeof ScenarioSchema>;
 export const TranscriptTurnSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("actor_thought"),
-    at: z.string(),
+    at: z.string().datetime(),
     content: z.string(),
   }),
   z.object({
     kind: z.literal("actor_tool_call"),
-    at: z.string(),
+    at: z.string().datetime(),
     tool: z.string(),
     args: z.unknown(),
   }),
   z.object({
     kind: z.literal("sent_to_bot"),
-    at: z.string(),
+    at: z.string().datetime(),
     text: z.string(),
   }),
   z.object({
     kind: z.literal("bot_reply"),
-    at: z.string(),
+    at: z.string().datetime(),
     text: z.string(),
     messageId: z.number(),
   }),
   z.object({
     kind: z.literal("timeout"),
-    at: z.string(),
+    at: z.string().datetime(),
     waitedMs: z.number(),
   }),
   z.object({
     kind: z.literal("error"),
-    at: z.string(),
+    at: z.string().datetime(),
     error: z.string(),
   }),
 ]);
@@ -82,7 +82,7 @@ export const VerdictSchema = z.object({
   turns_used: z.number().int().nonnegative(),
   criteria: z.array(
     z.object({
-      text: z.string(),
+      text: z.string().min(1),
       met: z.boolean(),
       evidence: z.string(),
     }),
@@ -105,8 +105,8 @@ export const VerdictSchema = z.object({
 export type Verdict = z.infer<typeof VerdictSchema>;
 
 export const ScenarioResultSchema = z.object({
-  scenarioId: z.string(),
-  personaId: z.string(),
+  scenarioId: z.string().min(1),
+  personaId: z.string().min(1),
   endedBy: z.enum(["goal_achieved", "give_up", "max_turns", "error"]),
   endReason: z.string().optional(),
   turnsUsed: z.number().int().nonnegative(),
@@ -118,8 +118,8 @@ export type ScenarioResult = z.infer<typeof ScenarioResultSchema>;
 
 export const RunReportSchema = z.object({
   runId: z.string(),
-  startedAt: z.string(),
-  finishedAt: z.string(),
+  startedAt: z.string().datetime(),
+  finishedAt: z.string().datetime(),
   totalCostUsd: z.number().nonnegative(),
   scenarios: z.array(ScenarioResultSchema),
   summary: z.object({
@@ -128,10 +128,10 @@ export const RunReportSchema = z.object({
     partial: z.number().int().nonnegative(),
     failed: z.number().int().nonnegative(),
     topFrustrations: z.array(
-      z.object({ text: z.string(), count: z.number().int() }),
+      z.object({ text: z.string(), count: z.number().int().nonnegative() }),
     ),
     topBotBugs: z.array(
-      z.object({ text: z.string(), count: z.number().int() }),
+      z.object({ text: z.string(), count: z.number().int().nonnegative() }),
     ),
   }),
 });
