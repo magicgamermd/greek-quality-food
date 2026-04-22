@@ -442,6 +442,10 @@ function OrderDetailModal({
 
   // VAT toggle for invoice/documents
   const [includeVat, setIncludeVat] = useState(true);
+  // Optional override of the buyer name on the printed invoice. Only
+  // exposed when the order's partner is an individual (физ. лице). When
+  // empty we fall back to partner.name server-side.
+  const [clientDisplayName, setClientDisplayName] = useState("");
   const [generatedInvoiceId, setGeneratedInvoiceId] = useState<number | null>(
     null,
   );
@@ -464,6 +468,7 @@ function OrderDetailModal({
     setCreditNoteReason("");
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
+    setClientDisplayName("");
   }, [order?.id]);
 
   const statusMutation = useMutation({
@@ -504,7 +509,11 @@ function OrderDetailModal({
 
   const invoiceMutation = useMutation({
     mutationFn: (id: number) =>
-      api.post("/invoices", { order_id: id, include_vat: includeVat }),
+      api.post("/invoices", {
+        order_id: id,
+        include_vat: includeVat,
+        client_display_name: clientDisplayName.trim() || undefined,
+      }),
     onSuccess: (res) => {
       const newInvoiceId = res.data?.id ?? null;
       setGeneratedInvoiceId(newInvoiceId);
@@ -1029,18 +1038,29 @@ function OrderDetailModal({
               )}
 
               {!hasInvoice ? (
-                <Button
-                  onClick={() => invoiceMutation.mutate(detail.id)}
-                  disabled={invoiceMutation.isPending}
-                  className="bg-[#f97316] hover:bg-[#ea580c]"
-                >
-                  {invoiceMutation.isPending ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <FileText className="h-4 w-4" />
+                <div className="flex items-center gap-2">
+                  {(detail as any)?.partner_partner_type === "individual" && (
+                    <Input
+                      value={clientDisplayName}
+                      onChange={(e) => setClientDisplayName(e.target.value)}
+                      placeholder="Име на клиента (по желание)"
+                      className="w-60 h-9"
+                      title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
+                    />
                   )}
-                  Генерирай фактура {!includeVat && "(без ДДС)"}
-                </Button>
+                  <Button
+                    onClick={() => invoiceMutation.mutate(detail.id)}
+                    disabled={invoiceMutation.isPending}
+                    className="bg-[#f97316] hover:bg-[#ea580c]"
+                  >
+                    {invoiceMutation.isPending ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <FileText className="h-4 w-4" />
+                    )}
+                    Генерирай фактура {!includeVat && "(без ДДС)"}
+                  </Button>
+                </div>
               ) : (
                 <>
                   <Button

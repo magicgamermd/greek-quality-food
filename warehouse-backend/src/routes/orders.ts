@@ -543,7 +543,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     const {
       rows: [order],
     } = await query(
-      `SELECT o.*, p.name AS partner_name,
+      `SELECT o.*, p.name AS partner_name, p.partner_type AS partner_partner_type,
               inv.include_vat AS invoice_include_vat,
               inv.invoice_number,
               inv.invoice_date,
