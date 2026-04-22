@@ -205,4 +205,146 @@ describe("orders route — back-order / negative inventory", () => {
       await app.close();
     }
   });
+
+  it("POST /orders succeeds with warnings.oversell when stock is insufficient", async () => {
+    const clientQuery = vi
+      .fn()
+      // 1. SELECT * FROM partners
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 1,
+            name: "Test Partner",
+            price_group: null,
+            price_list_id: null,
+          },
+        ]),
+      )
+      // 2. SELECT id, selling_price, group_price, name_bg FROM products
+      .mockResolvedValueOnce(
+        rows([{ id: 7, selling_price: "10", name_bg: "Test Product" }]),
+      )
+      // 3. validateRequestedStock → SELECT COALESCE(SUM(quantity), 0)
+      .mockResolvedValueOnce(rows([{ total: "0" }]))
+      // 4. INSERT INTO orders ... RETURNING *
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 101,
+            partner_id: 1,
+            status: "pending",
+            order_number: 101,
+          },
+        ]),
+      )
+      // 5. INSERT INTO order_items ... RETURNING *
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 1001,
+            order_id: 101,
+            product_id: 7,
+            quantity: "3",
+            unit_price: "10",
+            discount_percent: "0",
+            total_price: "30",
+          },
+        ]),
+      )
+      // 6. UPDATE orders SET total_amount
+      .mockResolvedValueOnce(rows([]))
+      // 7. INSERT INTO notifications
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders",
+        payload: {
+          partner_id: 1,
+          items: [{ product_id: 7, quantity: 3, unit_price: 10 }],
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.warnings?.oversell).toBeDefined();
+      expect(body.warnings.oversell).toEqual([
+        {
+          product_id: 7,
+          available: 0,
+          requested: 3,
+          final_stock: -3,
+        },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("POST /orders omits warnings.oversell when all items have sufficient stock", async () => {
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 1,
+            name: "Test Partner",
+            price_group: null,
+            price_list_id: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([{ id: 7, selling_price: "10", name_bg: "Test Product" }]),
+      )
+      .mockResolvedValueOnce(rows([{ total: "10" }])) // plenty of stock
+      .mockResolvedValueOnce(
+        rows([
+          { id: 102, partner_id: 1, status: "pending", order_number: 102 },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 1002,
+            order_id: 102,
+            product_id: 7,
+            quantity: "3",
+            unit_price: "10",
+            discount_percent: "0",
+            total_price: "30",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(rows([]))
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders",
+        payload: {
+          partner_id: 1,
+          items: [{ product_id: 7, quantity: 3, unit_price: 10 }],
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.warnings?.oversell).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
 });

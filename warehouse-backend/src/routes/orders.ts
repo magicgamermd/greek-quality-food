@@ -674,7 +674,11 @@ export default async function orderRoutes(app: FastifyInstance) {
         );
       }
 
-      await validateRequestedStock(client, body.items, productMap);
+      const { oversell_items } = await validateRequestedStock(
+        client,
+        body.items,
+        productMap,
+      );
 
       // Create order with sequential order_number
       const {
@@ -772,10 +776,17 @@ export default async function orderRoutes(app: FastifyInstance) {
         ...order,
         total_amount: totalAmount,
         items,
+        oversell_items,
       };
     });
 
-    return reply.status(201).send(result);
+    const response: any = { ...result };
+    const { oversell_items: oversellItems, ...orderData } = response;
+    const finalResponse: any = { ...orderData };
+    if (oversellItems && oversellItems.length > 0) {
+      finalResponse.warnings = { oversell: oversellItems };
+    }
+    return reply.status(201).send(finalResponse);
   });
 
   // POST /orders/from-comarch — create order from Comarch ERP sync
@@ -1099,7 +1110,11 @@ export default async function orderRoutes(app: FastifyInstance) {
         }
 
         await client.query("DELETE FROM order_items WHERE order_id = $1", [id]);
-        await validateRequestedStock(client, body.items, productMap);
+        const { oversell_items } = await validateRequestedStock(
+          client,
+          body.items,
+          productMap,
+        );
 
         let totalAmount = 0;
         const items = [];
@@ -1175,13 +1190,17 @@ export default async function orderRoutes(app: FastifyInstance) {
           ],
         );
 
-        return {
+        const putResponse: any = {
           ...updated,
           total_amount: totalAmount,
           items,
           regenerated_invoice_id: regeneratedInvoiceId,
           regenerated_documents: mustReconcileStock,
         };
+        if (oversell_items.length > 0) {
+          putResponse.warnings = { oversell: oversell_items };
+        }
+        return putResponse;
       }
 
       return updated;
@@ -1479,16 +1498,22 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
+  interface OversellInfo {
+    product_id: number;
+    available: number;
+    requested: number;
+    final_stock: number;
+  }
+
   async function validateRequestedStock(
     db: DbExecutor,
     items: Array<{
       product_id: number;
       quantity: number;
     }>,
-    productMap: Map<number, any>,
-  ) {
+    _productMap: Map<number, any>,
+  ): Promise<{ oversell_items: OversellInfo[] }> {
     const requestedByProduct = new Map<number, number>();
-
     for (const item of items) {
       requestedByProduct.set(
         item.product_id,
@@ -1496,7 +1521,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       );
     }
 
-    const stockErrors: string[] = [];
+    const oversell_items: OversellInfo[] = [];
     for (const [productId, requestedQty] of requestedByProduct.entries()) {
       const {
         rows: [stockRow],
@@ -1506,20 +1531,16 @@ export default async function orderRoutes(app: FastifyInstance) {
       );
       const available = parseFloat(stockRow.total);
       if (available + EPSILON < requestedQty) {
-        const productName =
-          productMap.get(productId)?.name_bg || `Продукт #${productId}`;
-        stockErrors.push(
-          `${productName}: налични ${available}, поръчани ${requestedQty}`,
-        );
+        oversell_items.push({
+          product_id: productId,
+          available,
+          requested: requestedQty,
+          final_stock: available - requestedQty,
+        });
       }
     }
 
-    if (stockErrors.length > 0) {
-      throw Object.assign(
-        new Error(`Недостатъчна наличност:\n${stockErrors.join("\n")}`),
-        { statusCode: 400 },
-      );
-    }
+    return { oversell_items };
   }
 
   /**
