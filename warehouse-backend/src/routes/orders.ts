@@ -608,6 +608,8 @@ export default async function orderRoutes(app: FastifyInstance) {
 
     const body = createOrderSchema.parse(request.body);
 
+    let oversell_items: OversellInfo[] = [];
+
     const result = await transaction(async (client) => {
       // Get partner's price list for default pricing
       const {
@@ -674,11 +676,12 @@ export default async function orderRoutes(app: FastifyInstance) {
         );
       }
 
-      const { oversell_items } = await validateRequestedStock(
+      const validationResult = await validateRequestedStock(
         client,
         body.items,
         productMap,
       );
+      oversell_items = validationResult.oversell_items;
 
       // Create order with sequential order_number
       const {
@@ -776,17 +779,14 @@ export default async function orderRoutes(app: FastifyInstance) {
         ...order,
         total_amount: totalAmount,
         items,
-        oversell_items,
       };
     });
 
     const response: any = { ...result };
-    const { oversell_items: oversellItems, ...orderData } = response;
-    const finalResponse: any = { ...orderData };
-    if (oversellItems && oversellItems.length > 0) {
-      finalResponse.warnings = { oversell: oversellItems };
+    if (oversell_items.length > 0) {
+      response.warnings = { oversell: oversell_items };
     }
-    return reply.status(201).send(finalResponse);
+    return reply.status(201).send(response);
   });
 
   // POST /orders/from-comarch — create order from Comarch ERP sync
