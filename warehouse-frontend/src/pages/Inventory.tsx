@@ -216,7 +216,10 @@ export function Inventory() {
   // Sync tab from URL when navigating from dashboard
   useEffect(() => {
     const urlTab = searchParams.get("tab") as Tab;
-    if (urlTab && urlTab !== tab) setTab(urlTab);
+    if (urlTab && urlTab !== tab) {
+      setTab(urlTab);
+      setPage(1);
+    }
   }, [searchParams]);
 
   const {
@@ -475,7 +478,7 @@ export function Inventory() {
       </Card>
 
       {/* Pagination */}
-      {totalPages > 1 && (
+      {totalPages > 1 && tab !== "negative" && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-500">
             Показани {(page - 1) * pageSize + 1}–
