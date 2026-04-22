@@ -78,6 +78,8 @@ interface InvoiceData {
     transaction_place?: string | null;
     /** Legal basis for the transaction */
     transaction_basis?: string | null;
+    /** Buyer name override for individual customers who want the invoice on a specific name */
+    client_display_name?: string | null;
   };
   partner: {
     name: string;
@@ -91,6 +93,7 @@ interface InvoiceData {
     bank_name?: string;
     bic?: string;
     iban?: string;
+    partner_type?: string | null;
   };
   company: CompanySettings;
   items: InvoiceItem[];
@@ -494,31 +497,47 @@ function drawPartyBox(
 function buildInvoicePartyFields(
   party: InvoiceData["partner"],
   company: InvoiceData["company"],
+  clientDisplayName?: string | null,
 ): { buyerFields: InvoicePartyField[]; supplierFields: InvoicePartyField[] } {
   const buyerAddressParts = [
     party.city ? `гр. ${party.city}` : "",
     party.address ? normalizeAddress(party.address) : "",
   ].filter(Boolean);
 
+  const isIndividualBuyer = party.partner_type === "individual";
+  const buyerName =
+    (clientDisplayName && clientDisplayName.trim().length > 0
+      ? clientDisplayName.trim()
+      : party.name) || "Физическо лице — краен потребител";
+  const buyerLabel = isIndividualBuyer ? "Клиент:" : "МП:";
+
   const buyerFields: InvoicePartyField[] = [
-    { label: "МП:", value: party.name, bold: true },
-    ...(party.eik ? [{ label: "ЕИК:", value: party.eik }] : []),
-    ...(party.vat_number
+    { label: buyerLabel, value: buyerName, bold: true },
+    ...(!isIndividualBuyer && party.eik
+      ? [{ label: "ЕИК:", value: party.eik }]
+      : []),
+    ...(!isIndividualBuyer && party.vat_number
       ? [{ label: "ДДС номер:", value: party.vat_number }]
       : []),
     ...(buyerAddressParts.length
       ? [{ label: "Адрес:", value: buyerAddressParts.join("\n") }]
       : []),
-    ...(party.contact_person
+    ...(!isIndividualBuyer && party.contact_person
       ? [{ label: "МОЛ:", value: party.contact_person }]
       : []),
     ...(party.phone ? [{ label: "Тел:", value: party.phone }] : []),
-    ...(party.card_number
+    ...(!isIndividualBuyer && party.card_number
       ? [{ label: "Кл.номер:", value: party.card_number }]
       : []),
-    ...(party.bank_name ? [{ label: "Банка:", value: party.bank_name }] : []),
-    ...(party.bic ? [{ label: "BIC:", value: party.bic }] : []),
-    ...(party.iban ? [{ label: "IBAN:", value: party.iban }] : []),
+    ...(!isIndividualBuyer && party.bank_name
+      ? [{ label: "Банка:", value: party.bank_name }]
+      : []),
+    ...(!isIndividualBuyer && party.bic
+      ? [{ label: "BIC:", value: party.bic }]
+      : []),
+    ...(!isIndividualBuyer && party.iban
+      ? [{ label: "IBAN:", value: party.iban }]
+      : []),
   ];
 
   const supplierAddress = normalizeAddress(company.address);
@@ -665,6 +684,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     const { buyerFields, supplierFields } = buildInvoicePartyFields(
       partner,
       co,
+      data.invoice.client_display_name ?? null,
     );
 
     const drawPageHeader = (
