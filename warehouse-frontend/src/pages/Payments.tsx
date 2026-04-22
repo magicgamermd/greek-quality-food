@@ -21,6 +21,13 @@ import {
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { RecordPaymentModal } from "@/components/RecordPaymentModal";
 
+/** Return today's date in ISO 8601 format (YYYY-MM-DD) in Europe/Sofia timezone. */
+function todayIso(): string {
+  return new Date().toLocaleDateString("sv-SE", {
+    timeZone: "Europe/Sofia",
+  });
+}
+
 const methodLabels: Record<string, string> = {
   cash: "В брой",
   bank: "Банков превод",
@@ -269,7 +276,23 @@ export function Payments() {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Период</Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Период</Label>
+                <button
+                  type="button"
+                  className="text-xs text-[#f97316] hover:underline"
+                  onClick={() => {
+                    const t = todayIso();
+                    setFilters((prev) => ({
+                      ...prev,
+                      date_from: t,
+                      date_to: t,
+                    }));
+                  }}
+                >
+                  Днес
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <Input
                   type="date"
