@@ -577,11 +577,18 @@ export default async function orderRoutes(app: FastifyInstance) {
     }
 
     // MERT-M: no batches — order items carry only product metadata.
+    // total_stock is included so the partner-history drawer can disable the
+    // "+" button for products that are currently out of stock.
     const { rows: items } = await query(
       `SELECT oi.*,
               COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
               COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand, pr.weight_kg
+              pr.sku, pr.unit, pr.brand, pr.weight_kg,
+              (
+                SELECT COALESCE(SUM(quantity), 0)
+                FROM inventory
+                WHERE product_id = oi.product_id
+              )::numeric AS total_stock
        FROM order_items oi
        LEFT JOIN products pr ON pr.id = oi.product_id
        WHERE oi.order_id = $1
