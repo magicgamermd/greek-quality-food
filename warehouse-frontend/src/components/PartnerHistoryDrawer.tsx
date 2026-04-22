@@ -1,6 +1,14 @@
-import { useMemo } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { AlertCircle, Package, PackageX, RefreshCw } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Package,
+  PackageX,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import type { Order } from "@/types";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -35,6 +43,27 @@ export interface PartnerHistoryDrawerProps {
 
 const PAGE_SIZE = 20;
 
+interface OrderDetailResponse {
+  id: number;
+  items: Array<{
+    product_id: number;
+    name_bg?: string;
+    name_en?: string;
+    unit?: string;
+    quantity: number | string;
+    unit_price: number | string;
+    discount_percent?: number | string;
+    total_stock?: number | string | null;
+    product_is_deleted?: boolean;
+  }>;
+}
+
+function parseNum(v: unknown): number {
+  if (typeof v === "number") return v;
+  const n = parseFloat(String(v ?? 0));
+  return Number.isFinite(n) ? n : 0;
+}
+
 interface HistoryPage {
   data: Order[];
   pagination: { page: number; limit: number; total: number };
@@ -63,10 +92,9 @@ export function PartnerHistoryDrawer({
   onOpenChange,
   partnerId,
   partnerName,
-  // Wired in Task 4/5:
-  currentProductIds: _currentProductIds,
-  onAddItem: _onAddItem,
-  onRepeatOrder: _onRepeatOrder,
+  currentProductIds,
+  onAddItem,
+  onRepeatOrder,
 }: PartnerHistoryDrawerProps) {
   const numericPartnerId = Number(partnerId);
   const enabled =
@@ -157,7 +185,15 @@ export function PartnerHistoryDrawer({
 
           {!isLoading &&
             !isError &&
-            orders.map((o) => <OrderCard key={o.id} order={o} />)}
+            orders.map((o) => (
+              <OrderCard
+                key={o.id}
+                order={o}
+                currentProductIds={currentProductIds}
+                onAddItem={onAddItem}
+                onRepeatOrder={onRepeatOrder}
+              />
+            ))}
 
           {hasNextPage && (
             <button
@@ -181,13 +217,58 @@ export function PartnerHistoryDrawer({
   );
 }
 
-function OrderCard({ order }: { order: Order }) {
+function OrderCard({
+  order,
+  currentProductIds,
+  onAddItem,
+  onRepeatOrder,
+}: {
+  order: Order;
+  currentProductIds: Set<number>;
+  onAddItem: (item: PartnerHistoryItem) => void;
+  onRepeatOrder: (items: PartnerHistoryItem[]) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
   const statusLabel = STATUS_LABEL[order.status] ?? order.status;
   const statusColor = STATUS_COLOR[order.status] ?? "bg-gray-100 text-gray-700";
+
+  const {
+    data: detail,
+    isLoading: detailLoading,
+    isError: detailError,
+  } = useQuery<OrderDetailResponse>({
+    queryKey: ["partner-history-detail", order.id],
+    queryFn: async () => {
+      const res = await api.get(`/orders/${order.id}`);
+      const raw = res.data?.data ?? res.data;
+      return raw as OrderDetailResponse;
+    },
+    enabled: expanded,
+    staleTime: 2 * 60_000,
+    gcTime: 10 * 60_000,
+  });
+
+  const items: PartnerHistoryItem[] = useMemo(() => {
+    if (!detail) return [];
+    return detail.items.map((it) => ({
+      product_id: it.product_id,
+      product_name: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
+      quantity: parseNum(it.quantity),
+      unit: it.unit || "бр.",
+      unit_price: parseNum(it.unit_price),
+      discount_percent: parseNum(it.discount_percent),
+      stock_now: parseNum(it.total_stock),
+    }));
+  }, [detail]);
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white">
-      <div className="px-4 py-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full px-4 py-3 flex items-start justify-between gap-3 text-left hover:bg-gray-50"
+      >
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
             <Package className="h-4 w-4 text-gray-400 shrink-0" />
             <span>
@@ -204,10 +285,105 @@ function OrderCard({ order }: { order: Order }) {
             </span>
           </div>
         </div>
-        <div className="text-sm font-semibold text-gray-900 whitespace-nowrap">
-          {formatCurrency(order.total_amount)}
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-gray-900 whitespace-nowrap">
+            {formatCurrency(order.total_amount)}
+          </span>
+          {expanded ? (
+            <ChevronUp className="h-4 w-4 text-gray-400" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-gray-400" />
+          )}
         </div>
-      </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-200 px-4 py-3 space-y-2">
+          {detailLoading && (
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <Spinner size="sm" />
+              Зареждане на артикули…
+            </div>
+          )}
+
+          {detailError && (
+            <div className="text-xs text-red-700">
+              Грешка при зареждане на артикулите.
+            </div>
+          )}
+
+          {!detailLoading && !detailError && items.length === 0 && (
+            <div className="text-xs text-gray-500">Няма артикули.</div>
+          )}
+
+          {!detailLoading && !detailError && items.length > 0 && (
+            <>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRepeatOrder(items);
+                  }}
+                  className="text-xs px-2.5 py-1 rounded-md border border-gray-300 hover:bg-gray-50"
+                >
+                  Повтори цялата поръчка
+                </button>
+              </div>
+              <ul className="space-y-2">
+                {items.map((it) => {
+                  const already = currentProductIds.has(it.product_id);
+                  const outOfStock = it.stock_now <= 0;
+                  const disabled = already || outOfStock;
+                  const disabledReason = already
+                    ? "Вече в поръчката"
+                    : outOfStock
+                      ? "Няма наличност"
+                      : "";
+                  return (
+                    <li
+                      key={it.product_id}
+                      className="flex items-start gap-2 text-sm"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-900 truncate">
+                          {it.product_name}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {it.quantity} {it.unit} ×{" "}
+                          {formatCurrency(it.unit_price)}
+                          {it.discount_percent > 0 && (
+                            <>
+                              {" "}
+                              · отст.{" "}
+                              {it.discount_percent.toFixed(
+                                it.discount_percent % 1 === 0 ? 0 : 2,
+                              )}
+                              %
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!disabled) onAddItem(it);
+                        }}
+                        disabled={disabled}
+                        title={disabledReason || "Добави в поръчката"}
+                        className="shrink-0 inline-flex items-center justify-center h-7 w-7 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
