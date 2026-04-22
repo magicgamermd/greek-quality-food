@@ -50,6 +50,15 @@ const createInvoiceSchema = z.object({
   order_id: z.number().int(),
   vat_rate: z.number().default(20), // Bulgarian VAT 20%
   include_vat: z.boolean().default(true),
+  // Optional — only meaningful when the order's partner is an individual.
+  // If set, this name is printed on the invoice PDF instead of the partner's
+  // generic name. Trim + normalise empty string → null so the DB stays clean.
+  client_display_name: z
+    .string()
+    .trim()
+    .max(255)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
 });
 
 const createCreditNoteSchema = z.object({
@@ -366,8 +375,11 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       const {
         rows: [invoice],
       } = await client.query(
-        `INSERT INTO invoices (invoice_number, invoice_date, partner_id, total_net, total_vat, total_gross, include_vat)
-         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6)
+        `INSERT INTO invoices
+           (invoice_number, invoice_date, partner_id,
+            total_net, total_vat, total_gross, include_vat,
+            client_display_name)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
         [
           invoiceNumber,
@@ -376,6 +388,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           totalVat,
           totalGross,
           body.include_vat,
+          body.client_display_name ?? null,
         ],
       );
 
