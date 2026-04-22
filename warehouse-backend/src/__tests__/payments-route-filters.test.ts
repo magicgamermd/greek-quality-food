@@ -72,4 +72,93 @@ describe("payments route filters", () => {
       await app.close();
     }
   });
+
+  it("accepts limit up to 500 without clipping to 100", async () => {
+    mockQuery.mockResolvedValueOnce(resultRows([]));
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/payments?limit=500&type=invoice",
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(Array.isArray(body.data)).toBe(true);
+
+      const [, params] = mockQuery.mock.calls[0] as [string, any[]];
+      // LIMIT is the second-to-last param, OFFSET is last. limit=500 must
+      // reach the query unclipped (previously capped to 100).
+      expect(params[params.length - 2]).toBe(500);
+      expect(params[params.length - 1]).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns invoice_status for invoice payments", async () => {
+    mockQuery.mockResolvedValueOnce(
+      resultRows([
+        {
+          id: 1,
+          invoice_id: 10,
+          invoice_number: "INV-1",
+          invoice_status: "active",
+          partner_name: "Acme",
+        },
+      ]),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/payments?type=invoice&limit=10",
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.data.length).toBeGreaterThan(0);
+      expect(body.data[0]).toHaveProperty("invoice_status");
+      expect(["active", "cancelled"]).toContain(body.data[0].invoice_status);
+
+      const [sql] = mockQuery.mock.calls[0] as [string, any[]];
+      expect(sql).toContain("i.status AS invoice_status");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns order_status for razpiska payments", async () => {
+    mockQuery.mockResolvedValueOnce(
+      resultRows([
+        {
+          id: 1,
+          order_id: 20,
+          order_number: 100,
+          order_status: "confirmed",
+          partner_name: "Acme",
+        },
+      ]),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/payments?type=razpiska&limit=10",
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.data.length).toBeGreaterThan(0);
+      expect(body.data[0]).toHaveProperty("order_status");
+
+      const [sql] = mockQuery.mock.calls[0] as [string, any[]];
+      expect(sql).toContain("o.status AS order_status");
+    } finally {
+      await app.close();
+    }
+  });
 });

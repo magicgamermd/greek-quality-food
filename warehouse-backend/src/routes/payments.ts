@@ -42,7 +42,7 @@ export default async function paymentRoutes(app: FastifyInstance) {
     } = request.query as any;
     const type = rawType === "razpiska" ? "razpiska" : "invoice";
     const pageNum = Math.max(1, parseInt(page) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
+    const pageSize = Math.min(500, Math.max(1, parseInt(limit) || 50));
     const offset = (pageNum - 1) * pageSize;
 
     let where = "WHERE 1=1";
@@ -105,6 +105,7 @@ export default async function paymentRoutes(app: FastifyInstance) {
           WHERE order_id IS NOT NULL AND invoice_id IS NULL
         )
         SELECT pay.*, o.order_number, o.total_amount AS order_total,
+               o.status AS order_status,
                p.name AS partner_name,
                pay.cumulative_paid::numeric AS order_paid_total
         FROM pay_cum pay
@@ -136,6 +137,7 @@ export default async function paymentRoutes(app: FastifyInstance) {
         WHERE invoice_id IS NOT NULL
       )
       SELECT pay.*, i.invoice_number, i.total_gross AS invoice_total_gross,
+             i.status AS invoice_status,
              p.name AS partner_name,
              pay.cumulative_paid::numeric AS invoice_paid_total
       FROM pay_cum pay
