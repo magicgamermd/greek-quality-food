@@ -302,7 +302,6 @@ const ProductSearch = forwardRef<
         const params = new URLSearchParams();
         if (partnerId) params.set("partner_id", partnerId);
         if (inputValue.trim()) params.set("search", inputValue.trim());
-        params.set("in_stock_only", "true");
         const res = await api.get(`/orders/products-for-order?${params}`);
         const raw = res.data;
         const data = Array.isArray(raw)
