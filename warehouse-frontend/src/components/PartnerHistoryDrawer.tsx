@@ -241,6 +241,9 @@ function OrderCard({
     queryFn: async () => {
       const res = await api.get(`/orders/${order.id}`);
       const raw = res.data?.data ?? res.data;
+      if (!raw || !Array.isArray(raw.items)) {
+        throw new Error("Невалиден отговор от сървъра (липсват артикули)");
+      }
       return raw as OrderDetailResponse;
     },
     enabled: expanded,
@@ -331,7 +334,7 @@ function OrderCard({
                 </button>
               </div>
               <ul className="space-y-2">
-                {items.map((it) => {
+                {items.map((it, idx) => {
                   const already = currentProductIds.has(it.product_id);
                   const outOfStock = it.stock_now <= 0;
                   const disabled = already || outOfStock;
@@ -342,7 +345,7 @@ function OrderCard({
                       : "";
                   return (
                     <li
-                      key={it.product_id}
+                      key={`${it.product_id}-${idx}`}
                       className="flex items-start gap-2 text-sm"
                     >
                       <div className="flex-1 min-w-0">
@@ -368,7 +371,7 @@ function OrderCard({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (!disabled) onAddItem(it);
+                          onAddItem(it);
                         }}
                         disabled={disabled}
                         title={disabledReason || "Добави в поръчката"}
