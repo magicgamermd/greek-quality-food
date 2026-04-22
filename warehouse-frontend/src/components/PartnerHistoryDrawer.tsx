@@ -104,6 +104,7 @@ export function PartnerHistoryDrawer({
     data,
     isLoading,
     isError,
+    isPaused,
     refetch,
     fetchNextPage,
     hasNextPage,
@@ -130,6 +131,11 @@ export function PartnerHistoryDrawer({
     const all = data?.pages.flatMap((p) => p.data) ?? [];
     return all.filter((o) => o.status !== "cancelled");
   }, [data]);
+
+  // TanStack Query pauses queries (fetchStatus: "paused") on network failures
+  // without transitioning to `isError`. Treat a paused-with-no-data state
+  // as an error so the retry banner still surfaces when backend is offline.
+  const showError = isError || (isPaused && !data);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -159,7 +165,7 @@ export function PartnerHistoryDrawer({
             </div>
           )}
 
-          {isError && (
+          {showError && (
             <div className="flex flex-col items-center text-center py-8">
               <AlertCircle className="h-10 w-10 text-red-400 mb-2" />
               <p className="text-sm text-red-700 mb-3">
@@ -176,7 +182,7 @@ export function PartnerHistoryDrawer({
             </div>
           )}
 
-          {!isLoading && !isError && orders.length === 0 && (
+          {!isLoading && !showError && orders.length === 0 && (
             <div className="flex flex-col items-center text-center py-12 text-gray-500">
               <PackageX className="h-12 w-12 mb-3 text-gray-300" />
               <p className="text-sm">Няма минали поръчки от този партньор.</p>
@@ -184,7 +190,7 @@ export function PartnerHistoryDrawer({
           )}
 
           {!isLoading &&
-            !isError &&
+            !showError &&
             orders.map((o) => (
               <OrderCard
                 key={o.id}
