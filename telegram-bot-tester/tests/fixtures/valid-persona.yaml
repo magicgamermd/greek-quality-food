@@ -1,0 +1,10 @@
+id: test-manager
+name: Тест
+description: Тест потребител
+style:
+  verbosity: short
+  tone: casual
+  typos: never
+  emoji: never
+example_utterances:
+  - hi

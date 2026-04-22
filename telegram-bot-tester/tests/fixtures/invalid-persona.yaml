@@ -1,0 +1,9 @@
+id: bad
+name: Bad
+description: Bad
+style:
+  verbosity: chatty
+  tone: casual
+  typos: never
+  emoji: never
+example_utterances: []
