@@ -187,7 +187,7 @@ export default async function analyticsRoutes(app: FastifyInstance) {
       for (const item of negativeStock) {
         anomalies.push({
           type: "negative_stock",
-          severity: "critical",
+          severity: "warning",
           ...item,
         });
       }
