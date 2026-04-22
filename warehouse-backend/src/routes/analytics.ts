@@ -283,7 +283,7 @@ export default async function analyticsRoutes(app: FastifyInstance) {
           `SELECT COALESCE(SUM(i.quantity * p.purchase_price),0) AS total FROM inventory i JOIN products p ON p.id = i.product_id`,
         ),
         query(
-          `SELECT COUNT(*) AS cnt FROM (SELECT p.id FROM products p LEFT JOIN inventory i ON i.product_id = p.id WHERE EXISTS (SELECT 1 FROM batches pb WHERE pb.product_id = p.id) OR EXISTS (SELECT 1 FROM inventory i2 WHERE i2.product_id = p.id AND i2.quantity > 0) GROUP BY p.id, p.low_stock_threshold HAVING COALESCE(SUM(i.quantity),0) < p.low_stock_threshold) sub`,
+          `SELECT COUNT(*) AS cnt FROM (SELECT p.id FROM products p LEFT JOIN inventory i ON i.product_id = p.id WHERE EXISTS (SELECT 1 FROM batches pb WHERE pb.product_id = p.id) OR EXISTS (SELECT 1 FROM inventory i2 WHERE i2.product_id = p.id AND i2.quantity <> 0) GROUP BY p.id, p.low_stock_threshold HAVING COALESCE(SUM(i.quantity),0) < p.low_stock_threshold) sub`,
         ),
         query(
           `SELECT COUNT(*) AS cnt, COALESCE(SUM(i.total_gross - COALESCE(p.paid,0)),0) AS total FROM invoices i LEFT JOIN (SELECT invoice_id, SUM(amount) AS paid FROM payments GROUP BY invoice_id) p ON p.invoice_id = i.id WHERE i.document_type = 'invoice' AND i.status = 'active' AND i.total_gross > COALESCE(p.paid,0)`,
