@@ -51,25 +51,33 @@ function PartnerModal({
 }) {
   const qc = useQueryClient();
 
-  const buildForm = (p?: Partner | null) => ({
-    name: p?.name ?? "",
-    microinvest_code: p?.microinvest_code ?? "",
-    eik: p?.eik ?? "",
-    vat_number: p?.vat_number ?? "",
-    address: p?.address ?? "",
-    contact_person: p?.contact_person ?? "",
-    phone: p?.phone ?? "",
-    email: p?.email ?? "",
-    city: (p as any)?.city ?? "",
-    print_name: (p as any)?.print_name ?? "",
-    client_type: (p as any)?.client_type ?? "",
-    price_group: (p as any)?.price_group ?? "",
-    discount_percent: String((p as any)?.discount_percent ?? "0"),
-    bank_name: (p as any)?.bank_name ?? "",
-    bic: (p as any)?.bic ?? "",
-    iban: (p as any)?.iban ?? "",
-    category: p?.category ?? "",
-  });
+  const buildForm = (p?: Partner | null) => {
+    // Normalise legacy values (e.g. "customer") to "legal_entity" so the
+    // UI can present a clean binary choice.
+    const rawType = (p as any)?.partner_type;
+    const partnerType: "legal_entity" | "individual" =
+      rawType === "individual" ? "individual" : "legal_entity";
+    return {
+      partner_type: partnerType,
+      name: p?.name ?? "",
+      microinvest_code: p?.microinvest_code ?? "",
+      eik: p?.eik ?? "",
+      vat_number: p?.vat_number ?? "",
+      address: p?.address ?? "",
+      contact_person: p?.contact_person ?? "",
+      phone: p?.phone ?? "",
+      email: p?.email ?? "",
+      city: (p as any)?.city ?? "",
+      print_name: (p as any)?.print_name ?? "",
+      client_type: (p as any)?.client_type ?? "",
+      price_group: (p as any)?.price_group ?? "",
+      discount_percent: String((p as any)?.discount_percent ?? "0"),
+      bank_name: (p as any)?.bank_name ?? "",
+      bic: (p as any)?.bic ?? "",
+      iban: (p as any)?.iban ?? "",
+      category: p?.category ?? "",
+    };
+  };
 
   const [form, setForm] = useState(buildForm(partner));
 
@@ -78,8 +86,12 @@ function PartnerModal({
     setForm(buildForm(partner));
   }, [partner]);
 
+  const isIndividual = form.partner_type === "individual";
   const eikValid =
-    !form.eik || /^\d{9}$/.test(form.eik) || /^\d{13}$/.test(form.eik);
+    isIndividual ||
+    !form.eik ||
+    /^\d{9}$/.test(form.eik) ||
+    /^\d{13}$/.test(form.eik);
   const [eikWarning, setEikWarning] = useState("");
   const [eikLoading, setEikLoading] = useState(false);
   const [eikAutoFilled, setEikAutoFilled] = useState(false);
@@ -109,10 +121,25 @@ function PartnerModal({
   };
 
   const mutation = useMutation({
-    mutationFn: () =>
-      partner
-        ? api.put(`/partners/${partner.id}`, form)
-        : api.post("/partners", form),
+    mutationFn: () => {
+      // Scrub EIK / VAT / bank fields when switching to individual, so the
+      // server's superRefine doesn't reject the payload because of lingering
+      // values from a previous legal_entity state.
+      const payload =
+        form.partner_type === "individual"
+          ? {
+              ...form,
+              eik: "",
+              vat_number: "",
+              bank_name: "",
+              bic: "",
+              iban: "",
+            }
+          : form;
+      return partner
+        ? api.put(`/partners/${partner.id}`, payload)
+        : api.post("/partners", payload);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["partners"] });
       onClose();
@@ -140,6 +167,40 @@ function PartnerModal({
           <DialogDescription>Данни за фирмата на партньора</DialogDescription>
         </DialogHeader>
         <div className="flex-1 overflow-y-auto min-h-0 grid gap-4 py-2 pr-1">
+          {/* Тип партньор (сегмент) */}
+          <div className="space-y-1.5">
+            <Label>Тип клиент</Label>
+            <div className="inline-flex rounded-lg border bg-gray-50 p-1">
+              <button
+                type="button"
+                onClick={() => set("partner_type", "legal_entity")}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                  form.partner_type === "legal_entity"
+                    ? "bg-white shadow text-gray-900"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
+                🏢 Юридическо лице
+              </button>
+              <button
+                type="button"
+                onClick={() => set("partner_type", "individual")}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                  form.partner_type === "individual"
+                    ? "bg-white shadow text-gray-900"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
+                👤 Физическо лице
+              </button>
+            </div>
+            {form.partner_type === "individual" && (
+              <p className="text-xs text-gray-500">
+                Физическите лица не изискват ЕИК и банкова информация.
+              </p>
+            )}
+          </div>
+
           {/* Основни данни */}
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
             Основни данни
@@ -187,38 +248,40 @@ function PartnerModal({
               </select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>ЕИК</Label>
-              <div className="relative">
-                <Input
-                  value={form.eik}
-                  onChange={(e) => set("eik", e.target.value)}
-                  onBlur={(e) => handleEikLookup(e.target.value)}
-                  className={eikWarning ? "border-orange-400" : ""}
-                />
-                {eikLoading && (
-                  <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-gray-400" />
+          {!isIndividual && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>ЕИК</Label>
+                <div className="relative">
+                  <Input
+                    value={form.eik}
+                    onChange={(e) => set("eik", e.target.value)}
+                    onBlur={(e) => handleEikLookup(e.target.value)}
+                    className={eikWarning ? "border-orange-400" : ""}
+                  />
+                  {eikLoading && (
+                    <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-gray-400" />
+                  )}
+                </div>
+                {eikWarning && (
+                  <p className="text-xs text-orange-500">{eikWarning}</p>
+                )}
+                {eikAutoFilled && (
+                  <p className="text-xs text-green-600 flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Данните са попълнени автоматично
+                  </p>
                 )}
               </div>
-              {eikWarning && (
-                <p className="text-xs text-orange-500">{eikWarning}</p>
-              )}
-              {eikAutoFilled && (
-                <p className="text-xs text-green-600 flex items-center gap-1">
-                  <CheckCircle2 className="h-3 w-3" />
-                  Данните са попълнени автоматично
-                </p>
-              )}
+              <div className="space-y-1.5">
+                <Label>ДДС номер</Label>
+                <Input
+                  value={form.vat_number}
+                  onChange={(e) => set("vat_number", e.target.value)}
+                />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label>ДДС номер</Label>
-              <Input
-                value={form.vat_number}
-                onChange={(e) => set("vat_number", e.target.value)}
-              />
-            </div>
-          </div>
+          )}
           <div className="space-y-1.5">
             <Label>Адрес</Label>
             <Input
@@ -293,33 +356,37 @@ function PartnerModal({
             </div>
           </div>
 
-          {/* Банкови данни */}
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mt-2">
-            Банкови данни
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>Банка</Label>
-              <Input
-                value={form.bank_name}
-                onChange={(e) => set("bank_name", e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>BIC</Label>
-              <Input
-                value={form.bic}
-                onChange={(e) => set("bic", e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5 col-span-2">
-              <Label>IBAN</Label>
-              <Input
-                value={form.iban}
-                onChange={(e) => set("iban", e.target.value)}
-              />
-            </div>
-          </div>
+          {!isIndividual && (
+            <>
+              {/* Банкови данни */}
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mt-2">
+                Банкови данни
+              </h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Банка</Label>
+                  <Input
+                    value={form.bank_name}
+                    onChange={(e) => set("bank_name", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>BIC</Label>
+                  <Input
+                    value={form.bic}
+                    onChange={(e) => set("bic", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5 col-span-2">
+                  <Label>IBAN</Label>
+                  <Input
+                    value={form.iban}
+                    onChange={(e) => set("iban", e.target.value)}
+                  />
+                </div>
+              </div>
+            </>
+          )}
         </div>
         {mutation.error && <ErrorMessage message="Грешка при запазване" />}
         <DialogFooter className="gap-2 shrink-0">
