@@ -4,6 +4,7 @@ import { Package, CheckCircle, Printer, Clock } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Order, OrderItem } from "@/types";
 import { Spinner } from "@/components/ui/spinner";
+import { confirm } from "@/components/ConfirmDialog";
 
 export function WarehousePacking() {
   const qc = useQueryClient();
@@ -283,12 +284,14 @@ export function WarehousePacking() {
                   </div>
                 )}
                 <button
-                  onClick={() => {
-                    if (
-                      confirm(`Потвърди изпращане на Поръчка #${order.id}?`)
-                    ) {
-                      fulfillMutation.mutate(order.id);
-                    }
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: `Потвърди изпращане на Поръчка #${order.id}?`,
+                      description:
+                        "Поръчката ще бъде маркирана като изпълнена и ще се отрази в склада.",
+                      confirmText: "Потвърди изпращане",
+                    });
+                    if (ok) fulfillMutation.mutate(order.id);
                   }}
                   disabled={fulfillMutation.isPending}
                   className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-base font-medium transition-colors ${

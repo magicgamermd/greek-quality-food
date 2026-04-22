@@ -1,29 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { query } from "../db.js";
-
-const createPartnerSchema = z.object({
-  name: z.string().min(1),
-  microinvest_code: z.string().optional(),
-  eik: z.string().optional(),
-  vat_number: z.string().optional(),
-  address: z.string().optional(),
-  contact_person: z.string().optional(),
-  phone: z.string().optional(),
-  email: z.string().optional(),
-  price_list_id: z.number().int().optional().nullable(),
-  city: z.string().optional(),
-  print_name: z.string().optional(),
-  client_type: z.string().optional(),
-  price_group: z.string().optional(),
-  discount_percent: z.union([z.string(), z.number()]).optional(),
-  bank_name: z.string().optional(),
-  bic: z.string().optional(),
-  iban: z.string().optional(),
-  category: z.string().optional().nullable(),
-});
-
-const updatePartnerSchema = createPartnerSchema.partial();
+import { partnerCreateSchema, partnerUpdateSchema } from "./partner-schemas.js";
 
 const priceListItemSchema = z.object({
   items: z.array(
@@ -226,21 +204,32 @@ export default async function partnerRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: "Insufficient permissions" });
     }
 
-    const body = createPartnerSchema.parse(request.body);
+    const body = partnerCreateSchema.parse(request.body);
+
+    // Individual partners never carry EIK / VAT / bank info even if the
+    // client accidentally sent them. Normalise to null so the DB row is clean.
+    const isIndividual = body.partner_type === "individual";
+    const eik = isIndividual ? null : body.eik || null;
+    const vatNumber = isIndividual ? null : body.vat_number || null;
 
     const { rows } = await query(
-      `INSERT INTO partners (name, eik, vat_number, address, contact_person, phone, email, price_list_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO partners
+         (name, eik, vat_number, address, contact_person, phone, email,
+          price_list_id, city, print_name, partner_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         body.name,
-        body.eik,
-        body.vat_number,
-        body.address,
-        body.contact_person,
-        body.phone,
-        body.email,
-        body.price_list_id,
+        eik,
+        vatNumber,
+        body.address || null,
+        body.contact_person || null,
+        body.phone || null,
+        body.email || null,
+        body.price_list_id ?? null,
+        body.city || null,
+        body.print_name || null,
+        body.partner_type,
       ],
     );
 
@@ -255,13 +244,22 @@ export default async function partnerRoutes(app: FastifyInstance) {
     }
 
     const { id } = request.params as { id: string };
-    const body = updatePartnerSchema.parse(request.body);
+    const body = partnerUpdateSchema.parse(request.body);
+
+    // For individuals, force-null EIK/VAT so lingering legacy values don't
+    // persist when the client switches partner_type. Use a separate object
+    // instead of mutating the parsed result — cleaner types at the SET-builder.
+    const updatePayload: Record<string, unknown> = { ...body };
+    if (body.partner_type === "individual") {
+      updatePayload.eik = null;
+      updatePayload.vat_number = null;
+    }
 
     const fields: string[] = [];
     const values: any[] = [];
     let idx = 1;
 
-    for (const [key, val] of Object.entries(body)) {
+    for (const [key, val] of Object.entries(updatePayload)) {
       if (val !== undefined) {
         fields.push(`${key} = $${idx++}`);
         values.push(val);

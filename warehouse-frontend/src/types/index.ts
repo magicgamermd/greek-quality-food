@@ -197,6 +197,8 @@ export interface Order {
   credit_note_number?: string | null;
   stock_dispatch_number?: string | null;
   commercial_document_number?: string | null;
+  warranty_number?: string | null;
+  warranty_issued_at?: string | null;
   invoiced?: boolean;
   item_count?: number;
   partner?: Partner;

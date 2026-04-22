@@ -50,6 +50,15 @@ const createInvoiceSchema = z.object({
   order_id: z.number().int(),
   vat_rate: z.number().default(20), // Bulgarian VAT 20%
   include_vat: z.boolean().default(true),
+  // Optional — only meaningful when the order's partner is an individual.
+  // If set, this name is printed on the invoice PDF instead of the partner's
+  // generic name. Trim + normalise empty string → null so the DB stays clean.
+  client_display_name: z
+    .string()
+    .trim()
+    .max(255)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
 });
 
 const createCreditNoteSchema = z.object({
@@ -348,6 +357,14 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         order.partner_id,
       ]);
 
+      // Only accept a display-name override when the buyer is an individual.
+      // Storing it on legal-entity invoices would make the DB state misleading
+      // even though the PDF ignores it.
+      const clientDisplayName =
+        partner?.partner_type === "individual"
+          ? (body.client_display_name ?? null)
+          : null;
+
       // Calculate totals
       const totalNet = items.reduce(
         (sum: number, i: any) => sum + parseFloat(i.total_price),
@@ -366,8 +383,11 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       const {
         rows: [invoice],
       } = await client.query(
-        `INSERT INTO invoices (invoice_number, invoice_date, partner_id, total_net, total_vat, total_gross, include_vat)
-         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6)
+        `INSERT INTO invoices
+           (invoice_number, invoice_date, partner_id,
+            total_net, total_vat, total_gross, include_vat,
+            client_display_name)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
         [
           invoiceNumber,
@@ -376,6 +396,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           totalVat,
           totalGross,
           body.include_vat,
+          clientDisplayName,
         ],
       );
 

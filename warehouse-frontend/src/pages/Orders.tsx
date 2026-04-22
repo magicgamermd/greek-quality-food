@@ -34,6 +34,7 @@ import {
   X as XIcon,
   Truck,
   ShieldCheck,
+  History,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -72,6 +73,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
+import { PartnerHistoryDrawer } from "@/components/PartnerHistoryDrawer";
+import type { PartnerHistoryItem } from "@/components/PartnerHistoryDrawer";
 
 const statusLabels: Record<string, string> = {
   pending: "Чакаща",
@@ -442,6 +445,10 @@ function OrderDetailModal({
 
   // VAT toggle for invoice/documents
   const [includeVat, setIncludeVat] = useState(true);
+  // Optional override of the buyer name on the printed invoice. Only
+  // exposed when the order's partner is an individual (физ. лице). When
+  // empty we fall back to partner.name server-side.
+  const [clientDisplayName, setClientDisplayName] = useState("");
   const [generatedInvoiceId, setGeneratedInvoiceId] = useState<number | null>(
     null,
   );
@@ -464,6 +471,7 @@ function OrderDetailModal({
     setCreditNoteReason("");
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
+    setClientDisplayName("");
   }, [order?.id]);
 
   const statusMutation = useMutation({
@@ -485,6 +493,8 @@ function OrderDetailModal({
     qc.invalidateQueries({ queryKey: ["unpaid-invoices"] });
     qc.invalidateQueries({ queryKey: ["inventory"] });
     qc.invalidateQueries({ queryKey: ["products"] });
+    qc.invalidateQueries({ queryKey: ["partner-history"] });
+    qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
   };
 
   const fulfillMutation = useMutation({
@@ -504,7 +514,11 @@ function OrderDetailModal({
 
   const invoiceMutation = useMutation({
     mutationFn: (id: number) =>
-      api.post("/invoices", { order_id: id, include_vat: includeVat }),
+      api.post("/invoices", {
+        order_id: id,
+        include_vat: includeVat,
+        client_display_name: clientDisplayName.trim() || undefined,
+      }),
     onSuccess: (res) => {
       const newInvoiceId = res.data?.id ?? null;
       setGeneratedInvoiceId(newInvoiceId);
@@ -618,6 +632,12 @@ function OrderDetailModal({
         URL.revokeObjectURL(url);
         if (iframe.parentNode) document.body.removeChild(iframe);
       }, 60000);
+
+      // Issuing a warranty stamps warranty_issued_at on the server; refresh
+      // the detail so the "Гаранция №" field in the header shows up.
+      if (docType === "warranty") {
+        invalidateAllOrderRelated();
+      }
     } catch {
       toast.error("Грешка при генериране на документ");
     }
@@ -716,6 +736,10 @@ function OrderDetailModal({
               <div className="text-sm">
                 {detail.commercial_document_number || "—"}
               </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Гаранция №</div>
+              <div className="text-sm">{detail.warranty_number || "—"}</div>
             </div>
           </div>
 
@@ -1029,18 +1053,29 @@ function OrderDetailModal({
               )}
 
               {!hasInvoice ? (
-                <Button
-                  onClick={() => invoiceMutation.mutate(detail.id)}
-                  disabled={invoiceMutation.isPending}
-                  className="bg-[#f97316] hover:bg-[#ea580c]"
-                >
-                  {invoiceMutation.isPending ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <FileText className="h-4 w-4" />
+                <div className="flex items-center gap-2">
+                  {(detail as any)?.partner_partner_type === "individual" && (
+                    <Input
+                      value={clientDisplayName}
+                      onChange={(e) => setClientDisplayName(e.target.value)}
+                      placeholder="Име на клиента (по желание)"
+                      className="w-60 h-9"
+                      title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
+                    />
                   )}
-                  Генерирай фактура {!includeVat && "(без ДДС)"}
-                </Button>
+                  <Button
+                    onClick={() => invoiceMutation.mutate(detail.id)}
+                    disabled={invoiceMutation.isPending}
+                    className="bg-[#f97316] hover:bg-[#ea580c]"
+                  >
+                    {invoiceMutation.isPending ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <FileText className="h-4 w-4" />
+                    )}
+                    Генерирай фактура {!includeVat && "(без ДДС)"}
+                  </Button>
+                </div>
               ) : (
                 <>
                   <Button
@@ -1832,6 +1867,14 @@ function CreateOrderModal({
 }) {
   const qc = useQueryClient();
   const today = isoDateToday();
+  const anonymousIndividual = partners.find(
+    (p) =>
+      (p as any).partner_type === "individual" &&
+      p.name === "Физическо лице — краен потребител",
+  );
+  const [customerMode, setCustomerMode] = useState<"legal" | "individual">(
+    "legal",
+  );
   const [form, setForm] = useState({
     partner_id: "",
     delivery_date: today,
@@ -1855,6 +1898,7 @@ function CreateOrderModal({
   const [errorMsg, setErrorMsg] = useState("");
   const [orderCreated, setOrderCreated] = useState(false);
   const [confirmOverstock, setConfirmOverstock] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Keyboard-flow refs — Enter in qty jumps to price → (next row) qty,
   // so warehouse staff can key-fill a whole order from a single
@@ -1890,9 +1934,33 @@ function CreateOrderModal({
     handle?.focus();
   };
 
+  // Sync partner_id with customerMode
+  useEffect(() => {
+    if (customerMode === "individual") {
+      if (anonymousIndividual) {
+        setForm((f) => ({ ...f, partner_id: String(anonymousIndividual.id) }));
+      }
+    } else {
+      // When switching back to "фирма", clear partner_id so the combobox
+      // re-engages (keeps the user in control — they must pick explicitly).
+      setForm((f) =>
+        f.partner_id &&
+        anonymousIndividual &&
+        f.partner_id === String(anonymousIndividual.id)
+          ? { ...f, partner_id: "" }
+          : f,
+      );
+    }
+  }, [customerMode, anonymousIndividual]);
+
+  useEffect(() => {
+    setHistoryOpen(false);
+  }, [form.partner_id, customerMode]);
+
   // Reset on open
   useEffect(() => {
     if (open) {
+      setCustomerMode("legal");
       setForm({
         partner_id: "",
         delivery_date: today,
@@ -1996,6 +2064,60 @@ function CreateOrderModal({
     );
     setStockWarnings([]);
   };
+
+  const addHistoryItems = useCallback(
+    (newItems: PartnerHistoryItem[]) => {
+      if (newItems.length === 0) return;
+      const existingIds = new Set(
+        items
+          .map((i) => Number(i.product_id))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      );
+      const eligible = newItems.filter((ni) => !existingIds.has(ni.product_id));
+      const skippedAsDupes = newItems.length - eligible.length;
+      const adding = eligible.filter((ni) => ni.stock_now > 0);
+      const skippedOutOfStock = eligible.length - adding.length;
+
+      if (adding.length > 0) {
+        setItems((prev) => {
+          const base = prev.filter(
+            (row) => row.product_id !== "" || Number(row.quantity) > 0,
+          );
+          const newRows = adding.map((ni) =>
+            makeOrderItemRow({
+              product_id: String(ni.product_id),
+              product_name: ni.product_name,
+              quantity: "1",
+              unit_price: String(ni.unit_price),
+              discount_percent: String(ni.discount_percent),
+              unit: ni.unit,
+              stock: ni.stock_now,
+            }),
+          );
+          return [...base, ...newRows];
+        });
+      }
+
+      const parts: string[] = [];
+      if (adding.length > 0)
+        parts.push(
+          `Добавени ${adding.length} ${adding.length === 1 ? "артикул" : "артикула"}`,
+        );
+      if (skippedAsDupes > 0)
+        parts.push(`пропуснати ${skippedAsDupes} (вече в поръчката)`);
+      if (skippedOutOfStock > 0)
+        parts.push(`пропуснати ${skippedOutOfStock} (няма наличност)`);
+
+      if (parts.length > 0) {
+        if (adding.length === 0) {
+          toast.info(parts.join(" · "));
+        } else {
+          toast.success(parts.join(" · "));
+        }
+      }
+    },
+    [items],
+  );
 
   const addItem = () => setItems((i) => [...i, emptyItem()]);
   // Same as addItem but schedules focus to land on the new row's
@@ -2112,6 +2234,8 @@ function CreateOrderModal({
     },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
+      qc.invalidateQueries({ queryKey: ["partner-history"] });
+      qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       if (onCreated && createdOrder && createdOrder.id) {
@@ -2165,39 +2289,110 @@ function CreateOrderModal({
           </p>
         </DialogHeader>
         <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
+          {/* Тип клиент (сегмент) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Label className="mr-2">Тип клиент:</Label>
+            <div className="inline-flex rounded-lg border bg-gray-50 p-1">
+              <button
+                type="button"
+                onClick={() => setCustomerMode("legal")}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                  customerMode === "legal"
+                    ? "bg-white shadow text-gray-900"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
+                🏢 Фирма (с ЕИК)
+              </button>
+              <button
+                type="button"
+                onClick={() => setCustomerMode("individual")}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                  customerMode === "individual"
+                    ? "bg-white shadow text-gray-900"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+                disabled={!anonymousIndividual}
+                title={
+                  anonymousIndividual
+                    ? "Физическо лице — без ЕИК, без лични данни"
+                    : "Seed партньорът липсва — изпълнете миграцията"
+                }
+              >
+                👤 Физическо лице
+              </button>
+            </div>
+            {customerMode === "individual" && (
+              <span className="text-xs text-gray-500">
+                Продажба на краен потребител. Касовата бележка излиза от
+                фискалния апарат.
+              </span>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>Партньор *</Label>
-              <Combobox
-                inputRef={partnerInputRef}
-                items={partners.map((p) => ({
-                  value: String(p.id),
-                  label: p.name,
-                  hint: p.microinvest_code
-                    ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
-                    : p.eik
-                      ? `ЕИК: ${p.eik}`
-                      : undefined,
-                }))}
-                value={form.partner_id}
-                onChange={(val) =>
-                  setForm((f) => ({
-                    ...f,
-                    partner_id: val,
-                  }))
-                }
-                onClear={() =>
-                  setForm((f) => ({
-                    ...f,
-                    partner_id: "",
-                  }))
-                }
-                onPickEnter={() =>
-                  queueMicrotask(() => focusAndSelect(dateInputRef.current))
-                }
-                placeholder="Избери или потърси по код, име или ЕИК..."
-                emptyMessage="Няма намерени партньори."
-              />
+              <Label>
+                {customerMode === "individual" ? "Клиент" : "Партньор *"}
+              </Label>
+              {customerMode === "individual" ? (
+                <div className="h-9 flex items-center px-3 rounded-md border bg-gray-50 text-sm text-gray-700">
+                  👤 Физическо лице — краен потребител
+                </div>
+              ) : (
+                <div className="flex items-stretch gap-2">
+                  <div className="flex-1">
+                    <Combobox
+                      inputRef={partnerInputRef}
+                      items={partners
+                        .filter((p) => (p as any).partner_type !== "individual")
+                        .map((p) => ({
+                          value: String(p.id),
+                          label: p.name,
+                          hint: p.microinvest_code
+                            ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
+                            : p.eik
+                              ? `ЕИК: ${p.eik}`
+                              : undefined,
+                        }))}
+                      value={form.partner_id}
+                      onChange={(val) =>
+                        setForm((f) => ({
+                          ...f,
+                          partner_id: val,
+                        }))
+                      }
+                      onClear={() =>
+                        setForm((f) => ({
+                          ...f,
+                          partner_id: "",
+                        }))
+                      }
+                      onPickEnter={() =>
+                        queueMicrotask(() =>
+                          focusAndSelect(dateInputRef.current),
+                        )
+                      }
+                      placeholder="Избери или потърси по код, име или ЕИК..."
+                      emptyMessage="Няма намерени партньори."
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryOpen(true)}
+                    disabled={!form.partner_id}
+                    title={
+                      form.partner_id
+                        ? "Виж минали поръчки от този партньор"
+                        : "Избери партньор"
+                    }
+                    className="shrink-0 inline-flex items-center gap-1.5 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <History className="h-4 w-4" />
+                    <span className="hidden sm:inline">История</span>
+                  </button>
+                </div>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Дата на доставка</Label>
@@ -2655,6 +2850,25 @@ function CreateOrderModal({
           </DialogFooter>
         </div>
       </DialogContent>
+      {customerMode === "legal" && form.partner_id && (
+        <PartnerHistoryDrawer
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          partnerId={form.partner_id}
+          partnerName={
+            partners.find((p) => String(p.id) === form.partner_id)?.name ?? ""
+          }
+          currentProductIds={
+            new Set(
+              items
+                .map((i) => Number(i.product_id))
+                .filter((id) => Number.isFinite(id) && id > 0),
+            )
+          }
+          onAddItem={(hi) => addHistoryItems([hi])}
+          onRepeatOrder={(his) => addHistoryItems(his)}
+        />
+      )}
     </Dialog>
   );
 }
