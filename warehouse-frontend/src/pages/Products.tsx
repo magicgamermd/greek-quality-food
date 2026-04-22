@@ -36,7 +36,12 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
-import { formatCurrency, formatUnit, getApiErrorMessage } from "@/lib/utils";
+import {
+  formatCurrency,
+  formatUnit,
+  getApiErrorMessage,
+  stockColorClass,
+} from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { HighlightMatch } from "@/lib/highlight";
 
@@ -980,11 +985,10 @@ export function Products() {
                         {p.total_stock !== null &&
                         p.total_stock !== undefined ? (
                           <span
-                            className={
-                              parseFloat(String(p.total_stock)) < 10
-                                ? "text-red-600 font-bold"
-                                : "text-gray-900"
-                            }
+                            className={stockColorClass(
+                              parseFloat(String(p.total_stock || 0)),
+                              (p as any).low_stock_threshold,
+                            )}
                           >
                             {parseFloat(String(p.total_stock))}{" "}
                             {formatUnit(String(p.unit))}

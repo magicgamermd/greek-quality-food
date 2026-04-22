@@ -48,6 +48,7 @@ import {
   formatCurrency,
   isoDateToday,
   getApiErrorMessage,
+  stockColorClass,
 } from "@/lib/utils";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch } from "@/lib/highlight";
@@ -410,10 +411,27 @@ const ProductSearch = forwardRef<
                 >
                   {price > 0 ? formatCurrency(price) : "без цена"}
                 </div>
-                <div
-                  className={`text-xs ${stock > 0 ? "text-gray-400" : "text-red-500"}`}
-                >
-                  {stock > 0 ? `${stock} ${p.unit || "бр."}` : "няма"}
+                <div className="text-xs">
+                  {(() => {
+                    const qty = parseFloat(String(p.total_stock || 0));
+                    if (qty < 0) {
+                      return (
+                        <span className="text-red-600 font-semibold">
+                          на минус: {qty}
+                        </span>
+                      );
+                    }
+                    return (
+                      <span
+                        className={stockColorClass(
+                          qty,
+                          (p as any).low_stock_threshold,
+                        )}
+                      >
+                        налично: {qty}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
