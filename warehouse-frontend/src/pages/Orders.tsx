@@ -43,7 +43,12 @@ import { EcontShipmentActions } from "@/components/EcontShipmentActions";
 import { OrderActionsMenu } from "@/components/OrderActionsMenu";
 import { RecordPaymentModal } from "@/components/RecordPaymentModal";
 import type { Order, OrderItem, Partner } from "@/types";
-import { formatDate, formatCurrency, isoDateToday } from "@/lib/utils";
+import {
+  formatDate,
+  formatCurrency,
+  isoDateToday,
+  getApiErrorMessage,
+} from "@/lib/utils";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch } from "@/lib/highlight";
 import { Button } from "@/components/ui/button";
@@ -3073,6 +3078,76 @@ export function Orders() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
   });
 
+  const [pendingFulfillOversell, setPendingFulfillOversell] = useState<{
+    items: OversellItem[];
+    proceed: () => void;
+  } | null>(null);
+
+  async function handleFulfillClick(orderId: number) {
+    try {
+      const detailRes = await api.get(`/orders/${orderId}`);
+      const detail = detailRes.data?.data ?? detailRes.data;
+      const itemsList: Array<{
+        product_id: number;
+        quantity: number | string;
+        total_stock: number | string;
+        name_bg?: string;
+        name_en?: string;
+      }> = detail?.items ?? [];
+
+      const oversell: OversellItem[] = [];
+      const byProduct = new Map<
+        number,
+        { requested: number; total_stock: number; name: string }
+      >();
+
+      for (const it of itemsList) {
+        const qty = parseFloat(String(it.quantity));
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+        const available = parseFloat(String(it.total_stock ?? 0));
+        const name = it.name_bg || it.name_en || `Продукт #${it.product_id}`;
+        const prev = byProduct.get(it.product_id);
+        if (prev) {
+          byProduct.set(it.product_id, {
+            requested: prev.requested + qty,
+            total_stock: available,
+            name: prev.name,
+          });
+        } else {
+          byProduct.set(it.product_id, {
+            requested: qty,
+            total_stock: available,
+            name,
+          });
+        }
+      }
+
+      for (const [, entry] of byProduct) {
+        if (entry.total_stock - entry.requested < 0) {
+          oversell.push({
+            product_name: entry.name,
+            available: entry.total_stock,
+            requested: entry.requested,
+            final_stock: entry.total_stock - entry.requested,
+          });
+        }
+      }
+
+      if (oversell.length > 0) {
+        setPendingFulfillOversell({
+          items: oversell,
+          proceed: () => fulfillMutation.mutate(orderId),
+        });
+        return;
+      }
+      fulfillMutation.mutate(orderId);
+    } catch (err) {
+      toast.error(
+        getApiErrorMessage(err, "Грешка при проверка на наличността."),
+      );
+    }
+  }
+
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       api.put(`/orders/${id}/status`, { status }),
@@ -3661,7 +3736,7 @@ export function Orders() {
                                           if (
                                             transition.value === "fulfilled"
                                           ) {
-                                            fulfillMutation.mutate(order.id);
+                                            handleFulfillClick(order.id);
                                           } else {
                                             statusMutation.mutate({
                                               id: order.id,
@@ -3789,6 +3864,17 @@ export function Orders() {
           }
         />
       )}
+
+      <OversellConfirmDialog
+        open={!!pendingFulfillOversell}
+        items={pendingFulfillOversell?.items ?? []}
+        onCancel={() => setPendingFulfillOversell(null)}
+        onConfirm={() => {
+          const proceed = pendingFulfillOversell?.proceed;
+          setPendingFulfillOversell(null);
+          proceed?.();
+        }}
+      />
     </div>
   );
 }
