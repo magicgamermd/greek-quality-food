@@ -150,7 +150,12 @@ export function Payments() {
     queryKey: ["payments", activeTab, filters],
     queryFn: () => {
       const params = new URLSearchParams();
-      params.set("limit", "100");
+      const isOneDay = !!(
+        filters.date_from &&
+        filters.date_to &&
+        filters.date_from === filters.date_to
+      );
+      params.set("limit", isOneDay ? "500" : "100");
       params.set("type", activeTab);
       if (filters.search.trim()) params.set("q", filters.search.trim());
       if (filters.payment_method !== "all") {
@@ -419,6 +424,13 @@ export function Payments() {
           </div>
         </CardContent>
       </Card>
+
+      {payments.length >= 500 && (
+        <div className="no-print rounded-lg bg-yellow-50 border border-yellow-200 p-3 text-sm text-yellow-800">
+          Показват се първите 500 плащания. Ако денят има повече записи, сумите
+          в обобщението може да не са пълни. Стеснете периода или филтрите.
+        </div>
+      )}
 
       <Card className="payments-table">
         <CardContent className="p-0">
