@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { AlertCircle, Package, PackageX, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Order } from "@/types";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Sheet,
@@ -39,24 +40,6 @@ interface HistoryPage {
   pagination: { page: number; limit: number; total: number };
 }
 
-function formatBGN(value: number | string | null | undefined): string {
-  const num =
-    typeof value === "number" ? value : parseFloat(String(value ?? 0));
-  if (!Number.isFinite(num)) return "0,00 €";
-  return `${num.toLocaleString("bg-BG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
-}
-
-function formatDate(iso: string | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("bg-BG", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
-}
-
 const STATUS_LABEL: Record<string, string> = {
   pending: "Чакаща",
   confirmed: "Потвърдена",
@@ -80,6 +63,10 @@ export function PartnerHistoryDrawer({
   onOpenChange,
   partnerId,
   partnerName,
+  // Wired in Task 4/5:
+  currentProductIds: _currentProductIds,
+  onAddItem: _onAddItem,
+  onRepeatOrder: _onRepeatOrder,
 }: PartnerHistoryDrawerProps) {
   const numericPartnerId = Number(partnerId);
   const enabled =
@@ -94,7 +81,7 @@ export function PartnerHistoryDrawer({
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery<HistoryPage>({
-    queryKey: ["partner-history", numericPartnerId],
+    queryKey: ["partner-history", numericPartnerId, PAGE_SIZE],
     queryFn: async ({ pageParam = 1 }) => {
       const res = await api.get(
         `/orders?partner_id=${numericPartnerId}&page=${pageParam}&limit=${PAGE_SIZE}`,
@@ -218,7 +205,7 @@ function OrderCard({ order }: { order: Order }) {
           </div>
         </div>
         <div className="text-sm font-semibold text-gray-900 whitespace-nowrap">
-          {formatBGN(order.total_amount)}
+          {formatCurrency(order.total_amount)}
         </div>
       </div>
     </div>
