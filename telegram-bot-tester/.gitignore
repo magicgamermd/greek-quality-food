@@ -1,0 +1,8 @@
+node_modules
+.env
+reports/*.json
+reports/*.md
+logs/*.log
+session/*.session
+dist
+*.tsbuildinfo
