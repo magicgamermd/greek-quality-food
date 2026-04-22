@@ -248,9 +248,9 @@ export function Inventory() {
         const normalized = arr.map((item: any) => normalizeInventoryItem(item));
         if (tab === "negative") {
           const onlyNegative = normalized
-            .filter((it) => Number(it.total_quantity ?? 0) < 0)
+            .filter((it: StockLevel) => Number(it.total_quantity ?? 0) < 0)
             .sort(
-              (a, b) =>
+              (a: StockLevel, b: StockLevel) =>
                 Number(a.total_quantity ?? 0) - Number(b.total_quantity ?? 0),
             );
           return { items: onlyNegative, total: onlyNegative.length };
