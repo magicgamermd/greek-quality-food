@@ -1,6 +1,6 @@
 # МЕРТ-М Telegram Bot Tester
 
-Автономен "conversational tester" — чати с `@mertm_sklad_bot` от реална Telegram user session, изпълнява сценарии, вада rich verdict-и.
+Автономен "conversational tester" — чати с `@mertm_sklad_bot` от реална Telegram user session, изпълнява сценарии, вади rich verdict-и.
 
 ## Бърз старт
 
