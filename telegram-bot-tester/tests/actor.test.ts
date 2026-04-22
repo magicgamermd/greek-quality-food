@@ -163,4 +163,63 @@ describe("runActor", () => {
     expect(result.endedBy).toBe("give_up");
     expect(result.endReason).toBe("stuck");
   });
+
+  it("reports send_message failures as error turns, not timeouts", async () => {
+    const sent: string[] = [];
+    const tg: TelegramClientHandle = {
+      start: vi.fn(),
+      startInteractiveLogin: vi.fn(),
+      sendMessage: vi.fn(async (t: string) => {
+        sent.push(t);
+        throw new Error("network down");
+      }),
+      waitForReply: vi.fn(async () => {
+        throw new Error("should not be called");
+      }),
+      reset: vi.fn(),
+      stop: vi.fn(),
+    };
+    const anthropic = fakeAnthropic([
+      {
+        stop_reason: "tool_use",
+        content: [
+          {
+            type: "tool_use",
+            id: "t",
+            name: "send_message",
+            input: { text: "hi" },
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      {
+        stop_reason: "tool_use",
+        content: [
+          {
+            type: "tool_use",
+            id: "t2",
+            name: "give_up",
+            input: { reason: "send failed" },
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    ]);
+
+    const result = await runActor(scenario, persona, tg, anthropic, {
+      maxTurns: 5,
+      perTurnTimeoutMs: 1000,
+      model: "claude-haiku-4-5-20251001",
+    });
+
+    const errorTurn = result.transcript.find((t) => t.kind === "error");
+    expect(errorTurn).toBeDefined();
+    expect(
+      errorTurn &&
+        "error" in errorTurn &&
+        errorTurn.error.includes("send_message failed"),
+    ).toBe(true);
+    expect(result.transcript.some((t) => t.kind === "timeout")).toBe(false);
+    expect(tg.waitForReply).not.toHaveBeenCalled();
+  });
 });

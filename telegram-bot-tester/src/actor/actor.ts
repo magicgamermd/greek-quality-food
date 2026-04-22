@@ -160,11 +160,26 @@ export async function runActor(
         const text = (args as { text: string }).text;
         try {
           await tg.sendMessage(text);
+        } catch (err) {
+          const errStr = String(err);
           transcript.push({
-            kind: "sent_to_bot",
+            kind: "error",
             at: new Date().toISOString(),
-            text,
+            error: `send_message failed: ${errStr}`,
           });
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `Грешка при изпращане (${errStr}). Какво правиш?`,
+          });
+          continue;
+        }
+        transcript.push({
+          kind: "sent_to_bot",
+          at: new Date().toISOString(),
+          text,
+        });
+        try {
           const reply = await tg.waitForReply({
             timeoutMs: opts.perTurnTimeoutMs,
           });
