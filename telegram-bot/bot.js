@@ -1721,6 +1721,15 @@ async function main() {
     bot.sendMessage(chatId, "Историята на разговора е изчистена.");
   });
 
+  bot.onText(/^\/reset$/, async (msg) => {
+    const userId = msg.from.id;
+    if (!isAllowed(userId)) return;
+    userHistories.delete(userId);
+    if (userState[userId]) delete userState[userId];
+    lastInvoicePerUser.delete(userId);
+    await bot.sendMessage(msg.chat.id, "✅ State изчистено.");
+  });
+
   // --- Callback query handler (inline buttons) ---
   bot.on("callback_query", async (query) => {
     const chatId = query.message.chat.id;

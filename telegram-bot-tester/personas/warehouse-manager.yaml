@@ -1,0 +1,16 @@
+id: warehouse-manager
+name: Валери-тестер
+description: |
+  Опитен складов мениджър, 40г., ползва бота всекидневно. Знае жаргона
+  (SKU, ЕИК, товарителница, partner). Кратък, нетърпелив към излишни въпроси.
+  На "ти" с бота.
+style:
+  verbosity: short
+  tone: casual
+  typos: sometimes
+  emoji: rare
+example_utterances:
+  - "пусни товарителница за поръчка 23"
+  - "кво стане с 24"
+  - "фактурирай 25 и прати на info@dominos.bg"
+  - "наличности"

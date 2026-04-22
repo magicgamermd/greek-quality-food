@@ -1,0 +1,15 @@
+id: 04-generate-invoice
+title: Генериране на фактура за съществуваща поръчка
+category: invoices
+persona: warehouse-manager
+goal: |
+  Издай фактура за последната поръчка в статус confirmed или fulfilled.
+  (Ако няма — издай за поръчка с id #1.) Успехът е когато видиш
+  номер на фактура.
+success_criteria:
+  - Ботът потвърждава издадена фактура
+  - Показан е номер на фактурата
+forbidden_behaviors:
+  - Да поиска от теб ДДС ставка (20% е дефолт за МЕРТ-М)
+max_turns: 8
+tags: [critical-path, destructive]

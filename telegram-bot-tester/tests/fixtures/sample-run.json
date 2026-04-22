@@ -1,0 +1,76 @@
+{
+  "runId": "2026-04-22T14-30-00",
+  "startedAt": "2026-04-22T14:30:00.000Z",
+  "finishedAt": "2026-04-22T14:32:00.000Z",
+  "totalCostUsd": 0.234,
+  "scenarios": [
+    {
+      "scenarioId": "hello",
+      "personaId": "warehouse-manager",
+      "endedBy": "goal_achieved",
+      "turnsUsed": 3,
+      "costUsd": 0.05,
+      "transcript": [
+        {
+          "kind": "sent_to_bot",
+          "at": "2026-04-22T14:30:01Z",
+          "text": "/start"
+        },
+        {
+          "kind": "bot_reply",
+          "at": "2026-04-22T14:30:02Z",
+          "text": "Здравей!",
+          "messageId": 1
+        }
+      ],
+      "verdict": {
+        "goal_achieved": "yes",
+        "turns_used": 3,
+        "criteria": [
+          { "text": "bot replied", "met": true, "evidence": "turn 2" }
+        ],
+        "frustrations": [],
+        "confusions": [],
+        "bot_bugs": [],
+        "ux_suggestions": [],
+        "forbidden_violations": [],
+        "overall_severity": "none",
+        "quotes": [],
+        "summary": "OK"
+      }
+    },
+    {
+      "scenarioId": "create-order",
+      "personaId": "new-employee",
+      "endedBy": "give_up",
+      "turnsUsed": 8,
+      "costUsd": 0.18,
+      "transcript": [],
+      "verdict": {
+        "goal_achieved": "no",
+        "turns_used": 8,
+        "criteria": [
+          { "text": "order created", "met": false, "evidence": "never reached" }
+        ],
+        "frustrations": ["Ботът поиска 3 пъти потвърждение"],
+        "confusions": ["Не разбра 'утре'"],
+        "bot_bugs": ["500 при generate_invoice"],
+        "ux_suggestions": ["Приеми relative дати"],
+        "forbidden_violations": ["Двойно питане за същото"],
+        "overall_severity": "major",
+        "quotes": [],
+        "summary": "Поръчката не беше създадена."
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "passed": 1,
+    "partial": 0,
+    "failed": 1,
+    "topFrustrations": [
+      { "text": "Ботът поиска 3 пъти потвърждение", "count": 1 }
+    ],
+    "topBotBugs": [{ "text": "500 при generate_invoice", "count": 1 }]
+  }
+}

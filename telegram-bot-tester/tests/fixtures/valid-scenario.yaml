@@ -1,0 +1,7 @@
+id: test-scenario
+title: Test scenario
+category: orders
+persona: test-manager
+goal: Test goal
+success_criteria:
+  - Criterion 1

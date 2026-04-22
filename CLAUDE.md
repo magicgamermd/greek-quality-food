@@ -12,6 +12,7 @@ durable goods).
 - warehouse-backend (Fastify / TS / PostgreSQL 16) — port 3003
 - warehouse-frontend (React / Vite / Tailwind v4) — port 5173 dev
 - ai-service (Python / FastAPI) — port 8000, OCR of incoming documents
+- telegram-bot-tester (Node.js / TS) — conversational tester за Telegram бота, YAML сценарии, Haiku actor + Sonnet judge, ad-hoc CLI
 
 ## Agent Army
 

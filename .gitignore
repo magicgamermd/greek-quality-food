@@ -50,3 +50,13 @@ prod-secrets.env
 scripts/prod-secrets.env
 # Mounted credential bundles.
 ai-service/secrets/
+
+# -------------------------------------------------------------------------
+# telegram-bot-tester subproject
+# -------------------------------------------------------------------------
+telegram-bot-tester/.env
+telegram-bot-tester/node_modules
+telegram-bot-tester/reports/*.json
+telegram-bot-tester/reports/*.md
+telegram-bot-tester/logs/
+telegram-bot-tester/session/*.session

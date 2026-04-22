@@ -1,0 +1,13 @@
+id: 00-hello
+title: Smoke — /start и меню
+category: orders
+persona: warehouse-manager
+goal: |
+  Прати /start. Увери се че ботът отговаря със съобщение (меню или
+  приветствие). Нищо повече.
+success_criteria:
+  - Ботът отговаря след /start
+  - Отговорът съдържа приветствие или меню (не е празен)
+forbidden_behaviors: []
+max_turns: 3
+tags: [smoke, critical-path]
