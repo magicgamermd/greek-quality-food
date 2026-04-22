@@ -493,6 +493,7 @@ function OrderDetailModal({
     qc.invalidateQueries({ queryKey: ["unpaid-invoices"] });
     qc.invalidateQueries({ queryKey: ["inventory"] });
     qc.invalidateQueries({ queryKey: ["products"] });
+    qc.invalidateQueries({ queryKey: ["partner-history"] });
   };
 
   const fulfillMutation = useMutation({
@@ -2063,6 +2064,57 @@ function CreateOrderModal({
     setStockWarnings([]);
   };
 
+  const addHistoryItems = useCallback(
+    (newItems: PartnerHistoryItem[]) => {
+      if (newItems.length === 0) return;
+      const existingIds = new Set(
+        items
+          .map((i) => Number(i.product_id))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      );
+      const eligible = newItems.filter((ni) => !existingIds.has(ni.product_id));
+      const skippedAsDupes = newItems.length - eligible.length;
+      const adding = eligible.filter((ni) => ni.stock_now > 0);
+      const skippedOutOfStock = eligible.length - adding.length;
+
+      if (adding.length > 0) {
+        setItems((prev) => {
+          const base = prev.filter(
+            (row) => row.product_id !== "" || Number(row.quantity) > 0,
+          );
+          const newRows = adding.map((ni) =>
+            makeOrderItemRow({
+              product_id: String(ni.product_id),
+              product_name: ni.product_name,
+              quantity: "1",
+              unit_price: String(ni.unit_price),
+              discount_percent: String(ni.discount_percent),
+              unit: ni.unit,
+              stock: ni.stock_now,
+            }),
+          );
+          const combined = [...base, ...newRows];
+          return combined.length > 0 ? combined : [emptyItem()];
+        });
+      }
+
+      const parts: string[] = [];
+      if (adding.length > 0)
+        parts.push(
+          `Добавени ${adding.length} ${adding.length === 1 ? "артикул" : "артикула"}`,
+        );
+      if (skippedAsDupes > 0)
+        parts.push(`пропуснати ${skippedAsDupes} (вече в поръчката)`);
+      if (skippedOutOfStock > 0)
+        parts.push(`пропуснати ${skippedOutOfStock} (няма наличност)`);
+
+      if (parts.length > 0) {
+        toast.success(parts.join(" · "));
+      }
+    },
+    [items],
+  );
+
   const addItem = () => setItems((i) => [...i, emptyItem()]);
   // Same as addItem but schedules focus to land on the new row's
   // ProductSearch — used by "Enter on last-row price" so the cashier
@@ -2178,6 +2230,7 @@ function CreateOrderModal({
     },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
+      qc.invalidateQueries({ queryKey: ["partner-history"] });
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       if (onCreated && createdOrder && createdOrder.id) {
@@ -2807,12 +2860,8 @@ function CreateOrderModal({
                 .filter((id) => Number.isFinite(id) && id > 0),
             )
           }
-          onAddItem={() => {
-            // placeholder — wired up in Task 5
-          }}
-          onRepeatOrder={() => {
-            // placeholder — wired up in Task 5
-          }}
+          onAddItem={(hi) => addHistoryItems([hi])}
+          onRepeatOrder={(his) => addHistoryItems(his)}
         />
       )}
     </Dialog>
