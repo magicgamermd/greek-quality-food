@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { RecordPaymentModal } from "@/components/RecordPaymentModal";
+import "./Payments.print.css";
 
 /** Return today's date in ISO 8601 format (YYYY-MM-DD) in Europe/Sofia timezone. */
 function todayIso(): string {
@@ -197,7 +198,7 @@ export function Payments() {
     .reduce((s, p) => s + safeAmount(p.amount), 0);
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="payments-page p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Плащания</h1>
@@ -239,60 +240,62 @@ export function Payments() {
       )}
 
       {/* Summary */}
-      {isSingleDay ? (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-          <div className="rounded-xl bg-gray-50 border border-gray-200 p-4">
-            <p className="text-sm text-gray-600">За деня</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">
-              {formatDateBg(filters.date_from)}
-            </p>
+      <div className="summary-cards">
+        {isSingleDay ? (
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="rounded-xl bg-gray-50 border border-gray-200 p-4">
+              <p className="text-sm text-gray-600">За деня</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">
+                {formatDateBg(filters.date_from)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-green-50 border border-green-200 p-4">
+              <p className="text-sm text-green-600">В брой</p>
+              <p className="text-2xl font-bold text-green-700 mt-1">
+                {formatCurrency(cashTotal)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">
+              <p className="text-sm text-blue-600">По банка</p>
+              <p className="text-2xl font-bold text-blue-700 mt-1">
+                {formatCurrency(bankTotal)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
+              <p className="text-sm text-orange-600">Общо за деня</p>
+              <p className="text-2xl font-bold text-orange-700 mt-1">
+                {formatCurrency(totalReceived)}
+              </p>
+              <p className="text-xs text-orange-500 mt-1">
+                {payments.length} плащания
+              </p>
+            </div>
           </div>
-          <div className="rounded-xl bg-green-50 border border-green-200 p-4">
-            <p className="text-sm text-green-600">В брой</p>
-            <p className="text-2xl font-bold text-green-700 mt-1">
-              {formatCurrency(cashTotal)}
-            </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-xl bg-green-50 border border-green-200 p-4">
+              <p className="text-sm text-green-600">Получени плащания</p>
+              <p className="text-2xl font-bold text-green-700 mt-1">
+                {formatCurrency(totalReceived)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-red-50 border border-red-200 p-4">
+              <p className="text-sm text-red-600">Чакащи фактури</p>
+              <p className="text-2xl font-bold text-red-700 mt-1">
+                {unpaidInvoices.length}
+              </p>
+            </div>
+            <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
+              <p className="text-sm text-orange-600">Общо транзакции</p>
+              <p className="text-2xl font-bold text-orange-700 mt-1">
+                {payments.length}
+              </p>
+            </div>
           </div>
-          <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">
-            <p className="text-sm text-blue-600">По банка</p>
-            <p className="text-2xl font-bold text-blue-700 mt-1">
-              {formatCurrency(bankTotal)}
-            </p>
-          </div>
-          <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
-            <p className="text-sm text-orange-600">Общо за деня</p>
-            <p className="text-2xl font-bold text-orange-700 mt-1">
-              {formatCurrency(totalReceived)}
-            </p>
-            <p className="text-xs text-orange-500 mt-1">
-              {payments.length} плащания
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="rounded-xl bg-green-50 border border-green-200 p-4">
-            <p className="text-sm text-green-600">Получени плащания</p>
-            <p className="text-2xl font-bold text-green-700 mt-1">
-              {formatCurrency(totalReceived)}
-            </p>
-          </div>
-          <div className="rounded-xl bg-red-50 border border-red-200 p-4">
-            <p className="text-sm text-red-600">Чакащи фактури</p>
-            <p className="text-2xl font-bold text-red-700 mt-1">
-              {unpaidInvoices.length}
-            </p>
-          </div>
-          <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
-            <p className="text-sm text-orange-600">Общо транзакции</p>
-            <p className="text-2xl font-bold text-orange-700 mt-1">
-              {payments.length}
-            </p>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      <Card>
+      <Card className="filters-card">
         <CardContent className="p-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="space-y-1 md:col-span-2">
@@ -395,7 +398,7 @@ export function Payments() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="payments-table">
         <CardContent className="p-0">
           {isLoading ? (
             <LoadingOverlay />

@@ -1,0 +1,64 @@
+@media print {
+  /* Hide app chrome */
+  aside,
+  .app-header,
+  .sidebar,
+  nav[aria-label="Main navigation"] {
+    display: none !important;
+  }
+
+  /* Hide interactive controls within the Payments page */
+  .payments-page .no-print,
+  .payments-page button,
+  .payments-page input,
+  .payments-page select,
+  .payments-page .filters-card {
+    display: none !important;
+  }
+
+  /* Full-width main content */
+  main,
+  .payments-page {
+    padding: 0 !important;
+    margin: 0 !important;
+    background: white !important;
+  }
+
+  /* Print-only elements (hidden on screen) */
+  .print-only {
+    display: block !important;
+  }
+
+  /* Keep summary and table visible */
+  .payments-page .summary-cards,
+  .payments-page .payments-table {
+    page-break-inside: avoid;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 1.5cm;
+  }
+
+  /* Smaller heading + muted footer */
+  .print-title h1 {
+    font-size: 16pt;
+    margin: 0 0 4px 0;
+  }
+  .print-title p {
+    font-size: 11pt;
+    margin: 0 0 12px 0;
+  }
+  .print-footer {
+    font-size: 9pt;
+    color: #555;
+    margin-top: 16px;
+    text-align: right;
+  }
+}
+
+/* Hidden on screen, shown only in print (Tailwind's `print:block` works too,
+   but we keep one source of truth for print styling here) */
+.print-only {
+  display: none;
+}
