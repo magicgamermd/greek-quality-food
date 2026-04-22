@@ -52,15 +52,18 @@ async function cmdLogin(): Promise<void> {
   console.log(
     "Login flow. Ти ще бъдеш питан за Telegram code (и 2FA password ако имаш).",
   );
-  await tg.startInteractiveLogin(
-    async () => cfg.tg.phone,
-    async () => promptLine("Telegram code: "),
-    async () => {
-      const pw = await promptLine("2FA password (празно = няма): ");
-      return pw || undefined;
-    },
-  );
-  await tg.stop();
+  try {
+    await tg.startInteractiveLogin(
+      async () => cfg.tg.phone,
+      async () => promptLine("Telegram code: "),
+      async () => {
+        const pw = await promptLine("2FA password (празно = няма): ");
+        return pw || undefined;
+      },
+    );
+  } finally {
+    await tg.stop();
+  }
   console.log(
     "Session saved. Може да пускаш сценарии: npm run tester -- --all",
   );
@@ -107,6 +110,7 @@ async function cmdRun(args: Args): Promise<void> {
       perTurnTimeoutMs: cfg.perTurnTimeoutMs,
       scenarioTimeoutMs: cfg.scenarioTimeoutMs,
       costCapUsd: cfg.costCapUsd,
+      runId,
     });
     console.log("---");
     console.log(`Report JSON: ${out.jsonPath}`);

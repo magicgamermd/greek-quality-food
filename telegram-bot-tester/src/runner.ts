@@ -23,6 +23,7 @@ export type RunScenariosInput = {
   perTurnTimeoutMs: number;
   scenarioTimeoutMs: number;
   costCapUsd: number;
+  runId?: string;
 };
 
 export type RunScenariosOutput = {
@@ -35,7 +36,7 @@ export type RunScenariosOutput = {
 export async function runScenarios(
   input: RunScenariosInput,
 ): Promise<RunScenariosOutput> {
-  const runId = makeRunId();
+  const runId = input.runId ?? makeRunId();
   const startedAt = new Date().toISOString();
   const results: ScenarioResult[] = [];
   let totalCost = 0;
