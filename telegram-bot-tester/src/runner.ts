@@ -1,9 +1,14 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { TelegramClientHandle } from "./telegram/client.js";
 import type { Persona, Scenario, ScenarioResult, RunReport } from "./types.js";
+import { RunReportSchema } from "./types.js";
 import { runActor } from "./actor/actor.js";
 import { runJudge } from "./judge/judge.js";
-import { writeRunReport, makeRunId } from "./reporter/reporter.js";
+import {
+  writeRunReport,
+  makeRunId,
+  summarizeRun,
+} from "./reporter/reporter.js";
 import { log } from "./logger.js";
 
 export type RunScenariosInput = {
@@ -46,10 +51,19 @@ export async function runScenarios(
 
   const sigintHandler = () => {
     log.warn("[runner] SIGINT received — writing partial report");
-    writePartial();
-    process.exit(130);
+    try {
+      writePartial();
+    } catch (err) {
+      log.error("[runner] partial report write failed", { error: String(err) });
+    } finally {
+      process.exit(130);
+    }
   };
   process.on("SIGINT", sigintHandler);
+
+  let jsonPath: string;
+  let mdPath: string;
+  let report: RunReport;
 
   try {
     for (const scenario of input.scenarios) {
@@ -92,34 +106,39 @@ export async function runScenarios(
         }
       }
 
+      let scenarioTimer: NodeJS.Timeout | undefined;
       const actorResult = await Promise.race([
         runActor(scenario, persona, input.tg, input.anthropic, {
           maxTurns: scenario.max_turns ?? input.maxTurns,
           perTurnTimeoutMs: input.perTurnTimeoutMs,
           model: input.actorModel,
         }),
-        new Promise<never>((_, reject) =>
-          setTimeout(
+        new Promise<never>((_, reject) => {
+          scenarioTimer = setTimeout(
             () => reject(new Error("scenario timeout")),
             input.scenarioTimeoutMs,
-          ),
-        ),
-      ]).catch((err) => {
-        log.error("[runner] scenario aborted", { error: String(err) });
-        return {
-          transcript: [
-            {
-              kind: "error" as const,
-              at: new Date().toISOString(),
-              error: String(err),
-            },
-          ],
-          endedBy: "error" as const,
-          endReason: String(err),
-          turnsUsed: 0,
-          costUsd: 0,
-        };
-      });
+          );
+        }),
+      ])
+        .catch((err) => {
+          log.error("[runner] scenario aborted", { error: String(err) });
+          return {
+            transcript: [
+              {
+                kind: "error" as const,
+                at: new Date().toISOString(),
+                error: String(err),
+              },
+            ],
+            endedBy: "error" as const,
+            endReason: String(err),
+            turnsUsed: 0,
+            costUsd: 0,
+          };
+        })
+        .finally(() => {
+          if (scenarioTimer) clearTimeout(scenarioTimer);
+        });
 
       totalCost += actorResult.costUsd;
 
@@ -152,19 +171,22 @@ export async function runScenarios(
       // Small pause between scenarios to avoid Telegram rate-limits
       await new Promise((r) => setTimeout(r, 2000));
     }
+
+    const written = writePartial();
+    jsonPath = written.jsonPath;
+    mdPath = written.mdPath;
+
+    report = RunReportSchema.parse({
+      runId,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      totalCostUsd: totalCost,
+      scenarios: results,
+      summary: summarizeRun(results),
+    });
   } finally {
     process.off("SIGINT", sigintHandler);
   }
-
-  const { jsonPath, mdPath } = writePartial();
-  const report = (await import("./types.js")).RunReportSchema.parse({
-    runId,
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    totalCostUsd: totalCost,
-    scenarios: results,
-    summary: (await import("./reporter/reporter.js")).summarizeRun(results),
-  });
 
   return { report, jsonPath, mdPath, stoppedEarly };
 }
