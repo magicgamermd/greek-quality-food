@@ -470,11 +470,35 @@ export function Payments() {
                   payments.map((p) => (
                     <TableRow key={p.id}>
                       <TableCell className="font-mono text-[#f97316]">
-                        {activeTab === "razpiska"
-                          ? `#${p.order_number ?? p.order_id}`
-                          : (p.invoice?.invoice_number ??
-                            p.invoice_number ??
-                            `#${p.invoice_id}`)}
+                        {(() => {
+                          const isCancelled =
+                            activeTab === "razpiska"
+                              ? p.order_status === "cancelled"
+                              : p.invoice_status === "cancelled";
+                          const label =
+                            activeTab === "razpiska"
+                              ? `#${p.order_number ?? p.order_id}`
+                              : (p.invoice?.invoice_number ??
+                                p.invoice_number ??
+                                `#${p.invoice_id}`);
+                          return (
+                            <span
+                              className={
+                                isCancelled ? "line-through text-gray-400" : ""
+                              }
+                            >
+                              {label}
+                              {isCancelled && (
+                                <Badge
+                                  variant="destructive"
+                                  className="ml-2 no-print-inline"
+                                >
+                                  АНУЛИРАНА
+                                </Badge>
+                              )}
+                            </span>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         {p.invoice?.partner?.name ?? p.partner_name ?? "—"}
