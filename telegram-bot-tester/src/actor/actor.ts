@@ -18,6 +18,7 @@ type ActorOpts = {
   maxTurns: number;
   perTurnTimeoutMs: number;
   model: string;
+  signal?: AbortSignal;
 };
 
 type AnthropicContentBlock =
@@ -58,6 +59,16 @@ export async function runActor(
   let endReason: string | undefined;
 
   for (let turn = 0; turn < opts.maxTurns; turn++) {
+    if (opts.signal?.aborted) {
+      transcript.push({
+        kind: "error",
+        at: new Date().toISOString(),
+        error: "scenario cancelled",
+      });
+      endedBy = "error";
+      endReason = "scenario_cancelled";
+      break;
+    }
     let response;
     try {
       response = await (

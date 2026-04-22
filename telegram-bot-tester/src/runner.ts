@@ -50,15 +50,19 @@ export async function runScenarios(
       results,
     });
 
-  const sigintHandler = () => {
+  const sigintHandler = async () => {
     log.warn("[runner] SIGINT received — writing partial report");
     try {
       writePartial();
     } catch (err) {
       log.error("[runner] partial report write failed", { error: String(err) });
-    } finally {
-      process.exit(130);
     }
+    try {
+      await input.tg.stop();
+    } catch (err) {
+      log.error("[runner] tg.stop on SIGINT failed", { error: String(err) });
+    }
+    process.exit(130);
   };
   process.on("SIGINT", sigintHandler);
 
@@ -107,18 +111,20 @@ export async function runScenarios(
         }
       }
 
+      const abortController = new AbortController();
       let scenarioTimer: NodeJS.Timeout | undefined;
       const actorResult = await Promise.race([
         runActor(scenario, persona, input.tg, input.anthropic, {
           maxTurns: scenario.max_turns ?? input.maxTurns,
           perTurnTimeoutMs: input.perTurnTimeoutMs,
           model: input.actorModel,
+          signal: abortController.signal,
         }),
         new Promise<never>((_, reject) => {
-          scenarioTimer = setTimeout(
-            () => reject(new Error("scenario timeout")),
-            input.scenarioTimeoutMs,
-          );
+          scenarioTimer = setTimeout(() => {
+            abortController.abort();
+            reject(new Error("scenario timeout"));
+          }, input.scenarioTimeoutMs);
         }),
       ])
         .catch((err) => {

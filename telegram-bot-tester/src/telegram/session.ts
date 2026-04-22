@@ -1,4 +1,10 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+} from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
@@ -12,8 +18,10 @@ export function readSession(): string {
 }
 
 export function writeSession(s: string): void {
-  if (!existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
-  writeFileSync(SESSION_FILE, s, "utf-8");
+  if (!existsSync(SESSION_DIR))
+    mkdirSync(SESSION_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(SESSION_FILE, s, { encoding: "utf-8", mode: 0o600 });
+  chmodSync(SESSION_FILE, 0o600);
 }
 
 export function sessionExists(): boolean {
