@@ -485,6 +485,10 @@ function OrderDetailModal({
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
+    // Close any in-flight oversell dialog — its `proceed` closure captured
+    // the previous order's id, so leaving it open would fulfill the wrong
+    // order if the user confirms after switching drawers.
+    setPendingFulfillOversell(null);
   }, [order?.id]);
 
   const statusMutation = useMutation({
@@ -518,66 +522,65 @@ function OrderDetailModal({
   });
 
   function handleFulfillClick(orderId: number) {
-    try {
-      const itemsList: Array<{
-        product_id: number;
-        quantity: number | string;
-        total_stock?: number | string;
-        name_bg?: string;
-        name_en?: string;
-      }> = (detail?.items as any[]) ?? [];
+    // Reads items from the React Query cache — stale-cache accepted per
+    // spec §2 (the backend is the source of truth; this check is a soft
+    // UX gate, not an enforcement barrier). Pure synchronous Map ops; no
+    // awaits, nothing that can throw on realistic inputs → no try/catch.
+    type FulfillItem = {
+      product_id: number;
+      quantity: number | string;
+      total_stock?: number | string;
+      name_bg?: string;
+      name_en?: string;
+    };
+    const itemsList = (detail?.items ?? []) as unknown as FulfillItem[];
 
-      // First pass — sum requested quantities per product_id.
-      const requestedByProduct = new Map<number, number>();
-      for (const it of itemsList) {
-        const qty = parseFloat(String(it.quantity));
-        if (!Number.isFinite(qty) || qty <= 0) continue;
-        requestedByProduct.set(
-          it.product_id,
-          (requestedByProduct.get(it.product_id) || 0) + qty,
-        );
-      }
-
-      // Second pass — one-time stock + name lookup per unique product_id.
-      const stockByProduct = new Map<
-        number,
-        { total_stock: number; name: string }
-      >();
-      for (const it of itemsList) {
-        if (stockByProduct.has(it.product_id)) continue;
-        stockByProduct.set(it.product_id, {
-          total_stock: parseFloat(String(it.total_stock ?? 0)),
-          name: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
-        });
-      }
-
-      const oversell: OversellItem[] = [];
-      for (const [productId, requested] of requestedByProduct) {
-        const meta = stockByProduct.get(productId);
-        if (!meta) continue;
-        if (meta.total_stock - requested < 0) {
-          oversell.push({
-            product_name: meta.name,
-            available: meta.total_stock,
-            requested,
-            final_stock: meta.total_stock - requested,
-          });
-        }
-      }
-
-      if (oversell.length > 0) {
-        setPendingFulfillOversell({
-          items: oversell,
-          proceed: () => fulfillMutation.mutate(orderId),
-        });
-        return;
-      }
-      fulfillMutation.mutate(orderId);
-    } catch (err) {
-      toast.error(
-        getApiErrorMessage(err, "Грешка при проверка на наличността."),
+    // First pass — sum requested quantities per product_id.
+    const requestedByProduct = new Map<number, number>();
+    for (const it of itemsList) {
+      const qty = parseFloat(String(it.quantity));
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      requestedByProduct.set(
+        it.product_id,
+        (requestedByProduct.get(it.product_id) || 0) + qty,
       );
     }
+
+    // Second pass — one-time stock + name lookup per unique product_id.
+    const stockByProduct = new Map<
+      number,
+      { total_stock: number; name: string }
+    >();
+    for (const it of itemsList) {
+      if (stockByProduct.has(it.product_id)) continue;
+      stockByProduct.set(it.product_id, {
+        total_stock: parseFloat(String(it.total_stock ?? 0)),
+        name: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
+      });
+    }
+
+    const oversell: OversellItem[] = [];
+    for (const [productId, requested] of requestedByProduct) {
+      const meta = stockByProduct.get(productId);
+      if (!meta) continue;
+      if (meta.total_stock - requested < 0) {
+        oversell.push({
+          product_name: meta.name,
+          available: meta.total_stock,
+          requested,
+          final_stock: meta.total_stock - requested,
+        });
+      }
+    }
+
+    if (oversell.length > 0) {
+      setPendingFulfillOversell({
+        items: oversell,
+        proceed: () => fulfillMutation.mutate(orderId),
+      });
+      return;
+    }
+    fulfillMutation.mutate(orderId);
   }
 
   const fiscalReceiptMutation = useMutation({
