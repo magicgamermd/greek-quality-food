@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Printer } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Payment, Invoice } from "@/types";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
@@ -199,6 +199,19 @@ export function Payments() {
 
   return (
     <div className="payments-page p-6 space-y-6">
+      <div className="print-only print-title">
+        <h1>
+          МЕРТ-М — Дневен отчет (
+          {activeTab === "invoice" ? "Фактурни" : "По разписки"})
+        </h1>
+        <p>
+          {isSingleDay
+            ? formatDateBg(filters.date_from)
+            : filters.date_from && filters.date_to
+              ? `Период: ${formatDateBg(filters.date_from)} – ${formatDateBg(filters.date_to)}`
+              : "Всички плащания"}
+        </p>
+      </div>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Плащания</h1>
@@ -383,6 +396,15 @@ export function Payments() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => window.print()}
+              disabled={payments.length === 0}
+            >
+              <Printer className="h-4 w-4" />
+              Принтирай отчет
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() =>
                 setFilters({
                   search: "",
@@ -508,6 +530,15 @@ export function Payments() {
         onClose={() => setModalOpen(false)}
         context={{ kind: "invoice-select", invoices: unpaidInvoices }}
       />
+
+      <div className="print-only print-footer">
+        Отпечатано на {formatDateBg(todayIso())}{" "}
+        {new Date().toLocaleTimeString("bg-BG", {
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "Europe/Sofia",
+        })}
+      </div>
     </div>
   );
 }
