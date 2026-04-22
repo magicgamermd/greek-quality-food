@@ -32,6 +32,7 @@ export interface Product {
   created_at: string;
   stock_quantity?: number;
   total_stock?: number | string;
+  low_stock_threshold?: number;
   brand?: string;
   purchase_price?: number;
   selling_price?: number;

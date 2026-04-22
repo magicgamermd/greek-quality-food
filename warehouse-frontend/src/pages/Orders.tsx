@@ -124,6 +124,7 @@ interface OrderProduct {
   weight_kg: number | null;
   total_stock: number;
   partner_price: number | null;
+  low_stock_threshold?: number | null;
 }
 
 interface OrderItemRow {
@@ -423,10 +424,7 @@ const ProductSearch = forwardRef<
                     }
                     return (
                       <span
-                        className={stockColorClass(
-                          qty,
-                          (p as any).low_stock_threshold,
-                        )}
+                        className={stockColorClass(qty, p.low_stock_threshold)}
                       >
                         налично: {qty}
                       </span>

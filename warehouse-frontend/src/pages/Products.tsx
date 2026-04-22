@@ -987,7 +987,7 @@ export function Products() {
                           <span
                             className={stockColorClass(
                               parseFloat(String(p.total_stock || 0)),
-                              (p as any).low_stock_threshold,
+                              p.low_stock_threshold,
                             )}
                           >
                             {parseFloat(String(p.total_stock))}{" "}
