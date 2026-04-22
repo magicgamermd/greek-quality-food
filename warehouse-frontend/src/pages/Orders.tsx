@@ -75,6 +75,10 @@ import {
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
 import { PartnerHistoryDrawer } from "@/components/PartnerHistoryDrawer";
 import type { PartnerHistoryItem } from "@/components/PartnerHistoryDrawer";
+import {
+  OversellConfirmDialog,
+  type OversellItem,
+} from "@/components/OversellConfirmDialog";
 
 const statusLabels: Record<string, string> = {
   pending: "Чакаща",
@@ -1899,6 +1903,10 @@ function CreateOrderModal({
   const [orderCreated, setOrderCreated] = useState(false);
   const [confirmOverstock, setConfirmOverstock] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [pendingOversell, setPendingOversell] = useState<{
+    items: OversellItem[];
+    proceed: () => void;
+  } | null>(null);
 
   // Keyboard-flow refs — Enter in qty jumps to price → (next row) qty,
   // so warehouse staff can key-fill a whole order from a single
@@ -1983,6 +1991,7 @@ function CreateOrderModal({
       setErrorMsg("");
       setOrderCreated(false);
       setConfirmOverstock(false);
+      setPendingOversell(null);
       // Auto-land focus on партньор combobox so user can start typing
       // immediately — no mouse needed to begin a new order.
       queueMicrotask(() => partnerInputRef.current?.focus());
@@ -2236,6 +2245,12 @@ function CreateOrderModal({
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["partner-history"] });
       qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
+      const oversell = res.data?.warnings?.oversell;
+      if (Array.isArray(oversell) && oversell.length > 0) {
+        toast.warning(
+          `Поръчката е записана, но ${oversell.length} ${oversell.length === 1 ? "артикул ще влезе" : "артикула ще влязат"} в минус при изпълнение.`,
+        );
+      }
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       if (onCreated && createdOrder && createdOrder.id) {
@@ -2262,6 +2277,44 @@ function CreateOrderModal({
     !mutation.isPending &&
     !orderCreated;
 
+  // Compute which items will go negative. Uses the stock snapshotted at
+  // product-pick time (item.stock), which matches what the server sees.
+  function computeOversellItems(): OversellItem[] {
+    const byProduct = new Map<
+      number,
+      { requested: number; name: string; available: number }
+    >();
+    for (const row of items) {
+      if (!row.product_id) continue;
+      const qty = parseFloat(String(row.quantity || 0));
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      const id = Number(row.product_id);
+      const existing = byProduct.get(id);
+      if (existing) {
+        existing.requested += qty;
+      } else {
+        byProduct.set(id, {
+          requested: qty,
+          name: row.product_name || `Продукт #${id}`,
+          available: parseFloat(String(row.stock || 0)),
+        });
+      }
+    }
+    const result: OversellItem[] = [];
+    for (const [, info] of byProduct) {
+      const finalStock = info.available - info.requested;
+      if (finalStock < 0) {
+        result.push({
+          product_name: info.name,
+          available: info.available,
+          requested: info.requested,
+          final_stock: finalStock,
+        });
+      }
+    }
+    return result;
+  }
+
   // Ctrl/Cmd+Enter anywhere in the dialog submits the order (when it's
   // in a submittable state — warnings still need their explicit confirms
   // via the warning buttons, which keeps destructive decisions deliberate).
@@ -2273,6 +2326,11 @@ function CreateOrderModal({
     if (hasBelowCost && !confirmBelowCost) return;
     e.preventDefault();
     setErrorMsg("");
+    const oversell = computeOversellItems();
+    if (oversell.length > 0) {
+      setPendingOversell({ items: oversell, proceed: () => mutation.mutate() });
+      return;
+    }
     mutation.mutate();
   };
 
@@ -2827,6 +2885,14 @@ function CreateOrderModal({
                 <Button
                   onClick={() => {
                     setErrorMsg("");
+                    const oversell = computeOversellItems();
+                    if (oversell.length > 0) {
+                      setPendingOversell({
+                        items: oversell,
+                        proceed: () => mutation.mutate(),
+                      });
+                      return;
+                    }
                     mutation.mutate();
                   }}
                   disabled={!canSubmit}
@@ -2869,6 +2935,16 @@ function CreateOrderModal({
           onRepeatOrder={(his) => addHistoryItems(his)}
         />
       )}
+      <OversellConfirmDialog
+        open={!!pendingOversell}
+        items={pendingOversell?.items ?? []}
+        onCancel={() => setPendingOversell(null)}
+        onConfirm={() => {
+          const proceed = pendingOversell?.proceed;
+          setPendingOversell(null);
+          proceed?.();
+        }}
+      />
     </Dialog>
   );
 }
