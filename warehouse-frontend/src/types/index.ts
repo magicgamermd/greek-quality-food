@@ -290,6 +290,7 @@ export interface Payment {
     | "processing"
     | "fulfilled"
     | "cancelled"
+    | "invoiced"
     | null;
 }
 
