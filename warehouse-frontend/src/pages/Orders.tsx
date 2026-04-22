@@ -494,6 +494,7 @@ function OrderDetailModal({
     qc.invalidateQueries({ queryKey: ["inventory"] });
     qc.invalidateQueries({ queryKey: ["products"] });
     qc.invalidateQueries({ queryKey: ["partner-history"] });
+    qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
   };
 
   const fulfillMutation = useMutation({
@@ -2093,8 +2094,7 @@ function CreateOrderModal({
               stock: ni.stock_now,
             }),
           );
-          const combined = [...base, ...newRows];
-          return combined.length > 0 ? combined : [emptyItem()];
+          return [...base, ...newRows];
         });
       }
 
@@ -2109,7 +2109,11 @@ function CreateOrderModal({
         parts.push(`пропуснати ${skippedOutOfStock} (няма наличност)`);
 
       if (parts.length > 0) {
-        toast.success(parts.join(" · "));
+        if (adding.length === 0) {
+          toast.info(parts.join(" · "));
+        } else {
+          toast.success(parts.join(" · "));
+        }
       }
     },
     [items],
@@ -2231,6 +2235,7 @@ function CreateOrderModal({
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["partner-history"] });
+      qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       if (onCreated && createdOrder && createdOrder.id) {
