@@ -34,6 +34,7 @@ import {
   X as XIcon,
   Truck,
   ShieldCheck,
+  History,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -72,6 +73,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
+import { PartnerHistoryDrawer } from "@/components/PartnerHistoryDrawer";
+import type { PartnerHistoryItem } from "@/components/PartnerHistoryDrawer";
 
 const statusLabels: Record<string, string> = {
   pending: "Чакаща",
@@ -1893,6 +1896,7 @@ function CreateOrderModal({
   const [errorMsg, setErrorMsg] = useState("");
   const [orderCreated, setOrderCreated] = useState(false);
   const [confirmOverstock, setConfirmOverstock] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Keyboard-flow refs — Enter in qty jumps to price → (next row) qty,
   // so warehouse staff can key-fill a whole order from a single
@@ -1946,6 +1950,10 @@ function CreateOrderModal({
       );
     }
   }, [customerMode, anonymousIndividual]);
+
+  useEffect(() => {
+    setHistoryOpen(false);
+  }, [form.partner_id, customerMode]);
 
   // Reset on open
   useEffect(() => {
@@ -2274,38 +2282,58 @@ function CreateOrderModal({
                   👤 Физическо лице — краен потребител
                 </div>
               ) : (
-                <Combobox
-                  inputRef={partnerInputRef}
-                  items={partners
-                    .filter((p) => (p as any).partner_type !== "individual")
-                    .map((p) => ({
-                      value: String(p.id),
-                      label: p.name,
-                      hint: p.microinvest_code
-                        ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
-                        : p.eik
-                          ? `ЕИК: ${p.eik}`
-                          : undefined,
-                    }))}
-                  value={form.partner_id}
-                  onChange={(val) =>
-                    setForm((f) => ({
-                      ...f,
-                      partner_id: val,
-                    }))
-                  }
-                  onClear={() =>
-                    setForm((f) => ({
-                      ...f,
-                      partner_id: "",
-                    }))
-                  }
-                  onPickEnter={() =>
-                    queueMicrotask(() => focusAndSelect(dateInputRef.current))
-                  }
-                  placeholder="Избери или потърси по код, име или ЕИК..."
-                  emptyMessage="Няма намерени партньори."
-                />
+                <div className="flex items-stretch gap-2">
+                  <div className="flex-1">
+                    <Combobox
+                      inputRef={partnerInputRef}
+                      items={partners
+                        .filter((p) => (p as any).partner_type !== "individual")
+                        .map((p) => ({
+                          value: String(p.id),
+                          label: p.name,
+                          hint: p.microinvest_code
+                            ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
+                            : p.eik
+                              ? `ЕИК: ${p.eik}`
+                              : undefined,
+                        }))}
+                      value={form.partner_id}
+                      onChange={(val) =>
+                        setForm((f) => ({
+                          ...f,
+                          partner_id: val,
+                        }))
+                      }
+                      onClear={() =>
+                        setForm((f) => ({
+                          ...f,
+                          partner_id: "",
+                        }))
+                      }
+                      onPickEnter={() =>
+                        queueMicrotask(() =>
+                          focusAndSelect(dateInputRef.current),
+                        )
+                      }
+                      placeholder="Избери или потърси по код, име или ЕИК..."
+                      emptyMessage="Няма намерени партньори."
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryOpen(true)}
+                    disabled={!form.partner_id}
+                    title={
+                      form.partner_id
+                        ? "Виж минали поръчки от този партньор"
+                        : "Избери партньор"
+                    }
+                    className="shrink-0 inline-flex items-center gap-1.5 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <History className="h-4 w-4" />
+                    <span className="hidden sm:inline">История</span>
+                  </button>
+                </div>
               )}
             </div>
             <div className="space-y-1.5">
@@ -2764,6 +2792,29 @@ function CreateOrderModal({
           </DialogFooter>
         </div>
       </DialogContent>
+      {customerMode === "legal" && form.partner_id && (
+        <PartnerHistoryDrawer
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          partnerId={form.partner_id}
+          partnerName={
+            partners.find((p) => String(p.id) === form.partner_id)?.name ?? ""
+          }
+          currentProductIds={
+            new Set(
+              items
+                .map((i) => Number(i.product_id))
+                .filter((id) => Number.isFinite(id) && id > 0),
+            )
+          }
+          onAddItem={() => {
+            // placeholder — wired up in Task 5
+          }}
+          onRepeatOrder={() => {
+            // placeholder — wired up in Task 5
+          }}
+        />
+      )}
     </Dialog>
   );
 }
