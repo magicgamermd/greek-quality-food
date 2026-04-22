@@ -1,6 +1,7 @@
 @media print {
   /* Hide app chrome */
   aside,
+  header,
   .app-header,
   .sidebar,
   nav[aria-label="Main navigation"] {

@@ -489,10 +489,7 @@ export function Payments() {
                             >
                               {label}
                               {isCancelled && (
-                                <Badge
-                                  variant="destructive"
-                                  className="ml-2 no-print-inline"
-                                >
+                                <Badge variant="destructive" className="ml-2">
                                   АНУЛИРАНА
                                 </Badge>
                               )}
