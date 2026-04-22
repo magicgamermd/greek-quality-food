@@ -1,0 +1,14 @@
+id: 02-list-pending-orders
+title: Списък на pending поръчки
+category: orders
+persona: warehouse-manager
+goal: |
+  Виж чакащите поръчки (status=pending). Успехът е когато видиш списък
+  (може и празен — "няма чакащи" също е валидно).
+success_criteria:
+  - Ботът разпозна заявката за pending orders
+  - Върна списък или ясно съобщение "няма"
+forbidden_behaviors:
+  - Да поиска от теб status параметър ("pending или fulfilled?")
+max_turns: 5
+tags: [smoke, read-only]

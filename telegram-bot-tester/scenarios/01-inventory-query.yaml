@@ -1,0 +1,14 @@
+id: 01-inventory-query
+title: Справка за наличности
+category: inventory
+persona: warehouse-manager
+goal: |
+  Поискай справка за наличностите. Успехът е когато видиш поне 1 продукт
+  с име и брой на склад.
+success_criteria:
+  - Ботът върна списък с продукти
+  - За поне 1 продукт е видно името/SKU и количество
+forbidden_behaviors:
+  - Да пита кой точно продукт ако кажеш "наличности" без име
+max_turns: 5
+tags: [smoke, critical-path, read-only]

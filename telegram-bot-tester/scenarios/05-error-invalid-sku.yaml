@@ -1,0 +1,15 @@
+id: 05-error-invalid-sku
+title: Error handling — несъществуващ SKU
+category: error-handling
+persona: new-employee
+goal: |
+  Попитай за наличност на артикул "XXXXX-NONEXISTENT-999". Очакваш
+  ботът ясно да каже че няма такъв продукт.
+success_criteria:
+  - Ботът ясно съобщава че продуктът не е намерен
+  - Не хвърля technical грешка (500, SQL, stack trace)
+forbidden_behaviors:
+  - Да показва technical детайли (SQL query, stack trace)
+  - Да се "прави" че го е намерил
+max_turns: 5
+tags: [smoke, error-handling, read-only]
