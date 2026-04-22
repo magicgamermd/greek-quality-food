@@ -283,6 +283,14 @@ export interface Payment {
   order_number?: number;
   order_total?: number | string;
   order_paid_total?: number | string;
+  invoice_status?: "active" | "cancelled" | null;
+  order_status?:
+    | "pending"
+    | "confirmed"
+    | "processing"
+    | "fulfilled"
+    | "cancelled"
+    | null;
 }
 
 export interface Notification {
