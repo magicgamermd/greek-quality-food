@@ -43,7 +43,13 @@ import { EcontShipmentActions } from "@/components/EcontShipmentActions";
 import { OrderActionsMenu } from "@/components/OrderActionsMenu";
 import { RecordPaymentModal } from "@/components/RecordPaymentModal";
 import type { Order, OrderItem, Partner } from "@/types";
-import { formatDate, formatCurrency, isoDateToday } from "@/lib/utils";
+import {
+  formatDate,
+  formatCurrency,
+  isoDateToday,
+  getApiErrorMessage,
+  stockColorClass,
+} from "@/lib/utils";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch } from "@/lib/highlight";
 import { Button } from "@/components/ui/button";
@@ -75,6 +81,10 @@ import {
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
 import { PartnerHistoryDrawer } from "@/components/PartnerHistoryDrawer";
 import type { PartnerHistoryItem } from "@/components/PartnerHistoryDrawer";
+import {
+  OversellConfirmDialog,
+  type OversellItem,
+} from "@/components/OversellConfirmDialog";
 
 const statusLabels: Record<string, string> = {
   pending: "Чакаща",
@@ -114,6 +124,7 @@ interface OrderProduct {
   weight_kg: number | null;
   total_stock: number;
   partner_price: number | null;
+  low_stock_threshold?: number | null;
 }
 
 interface OrderItemRow {
@@ -291,7 +302,6 @@ const ProductSearch = forwardRef<
         const params = new URLSearchParams();
         if (partnerId) params.set("partner_id", partnerId);
         if (inputValue.trim()) params.set("search", inputValue.trim());
-        params.set("in_stock_only", "true");
         const res = await api.get(`/orders/products-for-order?${params}`);
         const raw = res.data;
         const data = Array.isArray(raw)
@@ -401,10 +411,24 @@ const ProductSearch = forwardRef<
                 >
                   {price > 0 ? formatCurrency(price) : "без цена"}
                 </div>
-                <div
-                  className={`text-xs ${stock > 0 ? "text-gray-400" : "text-red-500"}`}
-                >
-                  {stock > 0 ? `${stock} ${p.unit || "бр."}` : "няма"}
+                <div className="text-xs">
+                  {(() => {
+                    const qty = parseFloat(String(p.total_stock || 0));
+                    if (qty < 0) {
+                      return (
+                        <span className="text-red-600 font-semibold">
+                          на минус: {qty}
+                        </span>
+                      );
+                    }
+                    return (
+                      <span
+                        className={stockColorClass(qty, p.low_stock_threshold)}
+                      >
+                        налично: {qty}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -462,6 +486,10 @@ function OrderDetailModal({
   const [issuedCreditNoteId, setIssuedCreditNoteId] = useState<number | null>(
     null,
   );
+  const [pendingFulfillOversell, setPendingFulfillOversell] = useState<{
+    items: OversellItem[];
+    proceed: () => void;
+  } | null>(null);
   useEffect(() => {
     setGeneratedInvoiceId(null);
     setEditOpen(false);
@@ -472,6 +500,10 @@ function OrderDetailModal({
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
+    // Close any in-flight oversell dialog — its `proceed` closure captured
+    // the previous order's id, so leaving it open would fulfill the wrong
+    // order if the user confirms after switching drawers.
+    setPendingFulfillOversell(null);
   }, [order?.id]);
 
   const statusMutation = useMutation({
@@ -503,6 +535,68 @@ function OrderDetailModal({
       invalidateAllOrderRelated();
     },
   });
+
+  function handleFulfillClick(orderId: number) {
+    // Reads items from the React Query cache — stale-cache accepted per
+    // spec §2 (the backend is the source of truth; this check is a soft
+    // UX gate, not an enforcement barrier). Pure synchronous Map ops; no
+    // awaits, nothing that can throw on realistic inputs → no try/catch.
+    type FulfillItem = {
+      product_id: number;
+      quantity: number | string;
+      total_stock?: number | string;
+      name_bg?: string;
+      name_en?: string;
+    };
+    const itemsList = (detail?.items ?? []) as unknown as FulfillItem[];
+
+    // First pass — sum requested quantities per product_id.
+    const requestedByProduct = new Map<number, number>();
+    for (const it of itemsList) {
+      const qty = parseFloat(String(it.quantity));
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      requestedByProduct.set(
+        it.product_id,
+        (requestedByProduct.get(it.product_id) || 0) + qty,
+      );
+    }
+
+    // Second pass — one-time stock + name lookup per unique product_id.
+    const stockByProduct = new Map<
+      number,
+      { total_stock: number; name: string }
+    >();
+    for (const it of itemsList) {
+      if (stockByProduct.has(it.product_id)) continue;
+      stockByProduct.set(it.product_id, {
+        total_stock: parseFloat(String(it.total_stock ?? 0)),
+        name: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
+      });
+    }
+
+    const oversell: OversellItem[] = [];
+    for (const [productId, requested] of requestedByProduct) {
+      const meta = stockByProduct.get(productId);
+      if (!meta) continue;
+      if (meta.total_stock - requested < 0) {
+        oversell.push({
+          product_name: meta.name,
+          available: meta.total_stock,
+          requested,
+          final_stock: meta.total_stock - requested,
+        });
+      }
+    }
+
+    if (oversell.length > 0) {
+      setPendingFulfillOversell({
+        items: oversell,
+        proceed: () => fulfillMutation.mutate(orderId),
+      });
+      return;
+    }
+    fulfillMutation.mutate(orderId);
+  }
 
   const fiscalReceiptMutation = useMutation({
     mutationFn: (id: number) => api.post("/fiscal/receipt", { order_id: id }),
@@ -668,747 +762,771 @@ function OrderDetailModal({
       : "—";
 
   return (
-    <Dialog open={!!order} onOpenChange={onClose} modal={false}>
-      <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col">
-        <DialogHeader className="shrink-0">
-          <DialogTitle className="flex items-center gap-3 flex-wrap">
-            <span>Поръчка #{detail.order_number ?? detail.id}</span>
-            <Badge variant={statusVariants[detail.status] ?? "secondary"}>
-              {statusLabels[detail.status] ?? detail.status}
-            </Badge>
-            {hasAnnulledInvoice(detail) && (
-              <Badge variant="destructive">Анулирана фактура</Badge>
-            )}
-          </DialogTitle>
-        </DialogHeader>
+    <>
+      <Dialog open={!!order} onOpenChange={onClose} modal={false}>
+        <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col">
+          <DialogHeader className="shrink-0">
+            <DialogTitle className="flex items-center gap-3 flex-wrap">
+              <span>Поръчка #{detail.order_number ?? detail.id}</span>
+              <Badge variant={statusVariants[detail.status] ?? "secondary"}>
+                {statusLabels[detail.status] ?? detail.status}
+              </Badge>
+              {hasAnnulledInvoice(detail) && (
+                <Badge variant="destructive">Анулирана фактура</Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
-          {/* Header info */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 bg-gray-50 rounded-lg p-4">
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Партньор</div>
-              <div className="font-medium text-sm">
-                {detail.partner?.name ??
-                  detail.partner_name ??
-                  `#${detail.partner_id}`}
+          <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
+            {/* Header info */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 bg-gray-50 rounded-lg p-4">
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Партньор</div>
+                <div className="font-medium text-sm">
+                  {detail.partner?.name ??
+                    detail.partner_name ??
+                    `#${detail.partner_id}`}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">
+                  Дата на поръчка
+                </div>
+                <div className="text-sm">{formatDate(detail.order_date)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">
+                  Дата на доставка
+                </div>
+                <div className="text-sm">
+                  {detail.delivery_date
+                    ? formatDate(detail.delivery_date)
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Източник</div>
+                <Badge variant="secondary">{detail.source}</Badge>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">
+                  Номер на заявка
+                </div>
+                <div className="text-sm">{detail.request_number || "—"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">
+                  Обект / магазин
+                </div>
+                <div className="text-sm">{objectLabel}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Фактура</div>
+                <div className="text-sm">{invoiceLabel}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">
+                  Дата на фактура
+                </div>
+                <div className="text-sm">
+                  {detail.invoice_date ? formatDate(detail.invoice_date) : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Стокова №</div>
+                <div className="text-sm">
+                  {detail.stock_dispatch_number || "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Търговски №</div>
+                <div className="text-sm">
+                  {detail.commercial_document_number || "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Гаранция №</div>
+                <div className="text-sm">{detail.warranty_number || "—"}</div>
               </div>
             </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Дата на поръчка</div>
-              <div className="text-sm">{formatDate(detail.order_date)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Дата на доставка</div>
-              <div className="text-sm">
-                {detail.delivery_date ? formatDate(detail.delivery_date) : "—"}
+
+            {hasAnnulledInvoice(detail) && (
+              <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-sm text-red-800 space-y-1">
+                <div>
+                  <span className="font-medium">Анулирана фактура:</span>{" "}
+                  <span className="font-mono">
+                    {detail.annulled_invoice_number ||
+                      (detail.annulled_invoice_id
+                        ? `#${detail.annulled_invoice_id}`
+                        : "—")}
+                  </span>
+                  {detail.annulled_invoice_at && (
+                    <span> · {formatDate(detail.annulled_invoice_at)}</span>
+                  )}
+                </div>
+                {detail.annulled_invoice_reason && (
+                  <div>Причина: {detail.annulled_invoice_reason}</div>
+                )}
               </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Източник</div>
-              <Badge variant="secondary">{detail.source}</Badge>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Номер на заявка</div>
-              <div className="text-sm">{detail.request_number || "—"}</div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Обект / магазин</div>
-              <div className="text-sm">{objectLabel}</div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Фактура</div>
-              <div className="text-sm">{invoiceLabel}</div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Дата на фактура</div>
-              <div className="text-sm">
-                {detail.invoice_date ? formatDate(detail.invoice_date) : "—"}
+            )}
+
+            {detail.notes && (
+              <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-800">
+                <span className="font-medium">Бележки:</span> {detail.notes}
               </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Стокова №</div>
-              <div className="text-sm">
-                {detail.stock_dispatch_number || "—"}
+            )}
+
+            {detail && authToken && (
+              <EcontShipmentActions
+                order={detail}
+                token={authToken}
+                onOrderUpdated={() => {
+                  refetchDetail();
+                  qc.invalidateQueries({ queryKey: ["orders"] });
+                }}
+              />
+            )}
+
+            {/* Items table */}
+            {detailLoading && (
+              <div className="flex items-center justify-center py-8">
+                <Spinner size="sm" />
+                <span className="ml-2 text-sm text-gray-500">
+                  Зареждане на артикули...
+                </span>
               </div>
+            )}
+            <div className="border rounded-lg overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Продукт</TableHead>
+                    <TableHead className="w-20 text-right">К-во</TableHead>
+                    <TableHead className="w-24 text-right">Ед. цена</TableHead>
+                    <TableHead className="w-24 text-right">Сума</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={4}
+                        className="text-center text-gray-400 py-6"
+                      >
+                        Няма артикули
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    items.map((item: any) => {
+                      const lineTotal =
+                        item.total_price ?? item.quantity * item.unit_price;
+                      const prodName =
+                        item.product?.name_bg ||
+                        item.product?.name_en ||
+                        item.name_bg ||
+                        item.name_en ||
+                        item.product?.sku ||
+                        item.sku ||
+                        `Продукт #${item.product_id}`;
+                      return (
+                        <TableRow key={item.id}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Package className="h-4 w-4 text-gray-400 shrink-0" />
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium truncate">
+                                  {prodName}
+                                </div>
+                                {(item.product?.sku || item.sku) && (
+                                  <div className="text-xs text-gray-400">
+                                    {item.product?.sku || item.sku}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right text-sm">
+                            {item.quantity}
+                          </TableCell>
+                          <TableCell className="text-right text-sm">
+                            {formatCurrency(item.unit_price)}
+                          </TableCell>
+                          <TableCell className="text-right text-sm font-medium">
+                            {formatCurrency(lineTotal)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
             </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Търговски №</div>
-              <div className="text-sm">
-                {detail.commercial_document_number || "—"}
+
+            {/* Total */}
+            <div className="flex justify-end">
+              <div className="bg-gray-50 rounded-lg px-6 py-3 text-right">
+                <div className="text-xs text-gray-500 mb-1">
+                  {items.length} артикул{items.length !== 1 ? "а" : ""}
+                </div>
+                <div className="text-lg font-bold">
+                  {formatCurrency(detail.total_amount || orderTotal)}
+                </div>
               </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Гаранция №</div>
-              <div className="text-sm">{detail.warranty_number || "—"}</div>
             </div>
           </div>
 
-          {hasAnnulledInvoice(detail) && (
-            <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-sm text-red-800 space-y-1">
-              <div>
-                <span className="font-medium">Анулирана фактура:</span>{" "}
-                <span className="font-mono">
-                  {detail.annulled_invoice_number ||
-                    (detail.annulled_invoice_id
-                      ? `#${detail.annulled_invoice_id}`
-                      : "—")}
-                </span>
-                {detail.annulled_invoice_at && (
-                  <span> · {formatDate(detail.annulled_invoice_at)}</span>
-                )}
+          {/* ── Workflow step indicator ── */}
+          {detail.status !== "cancelled" && (
+            <div className="shrink-0 border-t pt-3">
+              <div className="flex items-center justify-between gap-1 mb-3 px-1">
+                {[
+                  { key: "pending", label: "Чакаща" },
+                  { key: "confirmed", label: "Потвърдена" },
+                  { key: "processing", label: "В обработка" },
+                  { key: "fulfilled", label: "Изпълнена" },
+                ].map((step, idx, arr) => {
+                  const statusOrder = [
+                    "pending",
+                    "confirmed",
+                    "processing",
+                    "fulfilled",
+                  ];
+                  // Legacy "invoiced" status — treat as fulfilled for the stepper.
+                  const normalizedStatus =
+                    detail.status === "invoiced" ? "fulfilled" : detail.status;
+                  const currentIdx = statusOrder.indexOf(normalizedStatus);
+                  const stepIdx = statusOrder.indexOf(step.key);
+                  const isDone = stepIdx < currentIdx;
+                  const isCurrent = stepIdx === currentIdx;
+                  return (
+                    <div key={step.key} className="flex items-center flex-1">
+                      <div className="flex flex-col items-center flex-1">
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                            isDone
+                              ? "bg-green-500 text-white"
+                              : isCurrent
+                                ? "bg-[#f97316] text-white ring-2 ring-[#f97316]/30"
+                                : "bg-gray-200 text-gray-400"
+                          }`}
+                        >
+                          {isDone ? "✓" : idx + 1}
+                        </div>
+                        <div
+                          className={`text-[10px] mt-0.5 ${isCurrent ? "font-bold text-[#f97316]" : isDone ? "text-green-600" : "text-gray-400"}`}
+                        >
+                          {step.label}
+                        </div>
+                      </div>
+                      {idx < arr.length - 1 && (
+                        <div
+                          className={`h-0.5 flex-1 -mt-3 ${stepIdx < currentIdx ? "bg-green-400" : "bg-gray-200"}`}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              {detail.annulled_invoice_reason && (
-                <div>Причина: {detail.annulled_invoice_reason}</div>
+            </div>
+          )}
+
+          {/* ── Actions — grouped by purpose ── */}
+          <DialogFooter className="shrink-0 flex-col items-stretch gap-2 sm:flex-col">
+            {/* Error banners — full width on top */}
+            {invoiceMutation.isError && (
+              <div className="text-xs text-red-600">
+                {(invoiceMutation.error as any)?.response?.data?.error ||
+                  "Грешка при генериране на фактура"}
+              </div>
+            )}
+            {(statusMutation.isError || fulfillMutation.isError) && (
+              <div className="text-xs text-red-600">
+                {(statusMutation.error as any)?.response?.data?.error ||
+                  (fulfillMutation.error as any)?.response?.data?.error ||
+                  "Грешка при смяна на статус"}
+              </div>
+            )}
+
+            {/* Row 1 — navigation + primary workflow action */}
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button variant="outline" onClick={onClose}>
+                Затвори
+              </Button>
+              {detail.status !== "cancelled" && (
+                <Button variant="outline" onClick={() => setEditOpen(true)}>
+                  <Pencil className="h-4 w-4" />
+                  Редактирай артикули
+                </Button>
+              )}
+
+              <div className="flex-1" />
+
+              {detail.status === "pending" && (
+                <Button
+                  onClick={() => confirmOrderMutation.mutate(detail.id)}
+                  disabled={confirmOrderMutation.isPending}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  {confirmOrderMutation.isPending ? (
+                    <Spinner size="sm" />
+                  ) : (
+                    <CheckCircle className="h-4 w-4" />
+                  )}
+                  Потвърди поръчка
+                </Button>
+              )}
+              {detail.status === "confirmed" && (
+                <Button
+                  onClick={() =>
+                    statusMutation.mutate({
+                      id: detail.id,
+                      status: "processing",
+                    })
+                  }
+                  disabled={statusMutation.isPending}
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  {statusMutation.isPending ? (
+                    <Spinner size="sm" />
+                  ) : (
+                    <Truck className="h-4 w-4" />
+                  )}
+                  Изпрати към склад
+                </Button>
+              )}
+              {detail.status === "processing" && (
+                <Button
+                  onClick={() => handleFulfillClick(detail.id)}
+                  disabled={fulfillMutation.isPending}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  {fulfillMutation.isPending ? (
+                    <Spinner size="sm" />
+                  ) : (
+                    <CheckCircle className="h-4 w-4" />
+                  )}
+                  Изпълни поръчка
+                </Button>
               )}
             </div>
-          )}
 
-          {detail.notes && (
-            <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-800">
-              <span className="font-medium">Бележки:</span> {detail.notes}
-            </div>
-          )}
+            {/* Row 2 — Invoice group (available from confirmed onwards) */}
+            {detail.status !== "pending" && detail.status !== "cancelled" && (
+              <div className="flex flex-wrap gap-2 items-center border-t pt-2">
+                <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
+                  Фактура:
+                </span>
 
-          {detail && authToken && (
-            <EcontShipmentActions
-              order={detail}
-              token={authToken}
-              onOrderUpdated={() => {
-                refetchDetail();
-                qc.invalidateQueries({ queryKey: ["orders"] });
-              }}
-            />
-          )}
-
-          {/* Items table */}
-          {detailLoading && (
-            <div className="flex items-center justify-center py-8">
-              <Spinner size="sm" />
-              <span className="ml-2 text-sm text-gray-500">
-                Зареждане на артикули...
-              </span>
-            </div>
-          )}
-          <div className="border rounded-lg overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Продукт</TableHead>
-                  <TableHead className="w-20 text-right">К-во</TableHead>
-                  <TableHead className="w-24 text-right">Ед. цена</TableHead>
-                  <TableHead className="w-24 text-right">Сума</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={4}
-                      className="text-center text-gray-400 py-6"
+                {/* VAT toggle / indicator */}
+                {!hasInvoice ? (
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
+                    <span className="text-xs text-gray-500">ДДС:</span>
+                    <button
+                      type="button"
+                      onClick={() => setIncludeVat(true)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
+                        includeVat
+                          ? "bg-[#f97316] text-white"
+                          : "bg-white text-gray-600 border hover:bg-gray-100"
+                      }`}
                     >
-                      Няма артикули
-                    </TableCell>
-                  </TableRow>
+                      С ДДС
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIncludeVat(false)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
+                        !includeVat
+                          ? "bg-orange-500 text-white"
+                          : "bg-white text-gray-600 border hover:bg-gray-100"
+                      }`}
+                    >
+                      Без ДДС
+                    </button>
+                  </div>
                 ) : (
-                  items.map((item: any) => {
-                    const lineTotal =
-                      item.total_price ?? item.quantity * item.unit_price;
-                    const prodName =
-                      item.product?.name_bg ||
-                      item.product?.name_en ||
-                      item.name_bg ||
-                      item.name_en ||
-                      item.product?.sku ||
-                      item.sku ||
-                      `Продукт #${item.product_id}`;
-                    return (
-                      <TableRow key={item.id}>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Package className="h-4 w-4 text-gray-400 shrink-0" />
-                            <div className="min-w-0">
-                              <div className="text-sm font-medium truncate">
-                                {prodName}
-                              </div>
-                              {(item.product?.sku || item.sku) && (
-                                <div className="text-xs text-gray-400">
-                                  {item.product?.sku || item.sku}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right text-sm">
-                          {item.quantity}
-                        </TableCell>
-                        <TableCell className="text-right text-sm">
-                          {formatCurrency(item.unit_price)}
-                        </TableCell>
-                        <TableCell className="text-right text-sm font-medium">
-                          {formatCurrency(lineTotal)}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
+                    <span className="text-xs text-gray-500">ДДС:</span>
+                    <span
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md ${
+                        invoiceIncludesVat !== false
+                          ? "bg-[#f97316]/10 text-[#f97316] border border-[#f97316]/20"
+                          : "bg-orange-50 text-orange-600 border border-orange-200"
+                      }`}
+                    >
+                      {invoiceIncludesVat !== false ? "С ДДС" : "Без ДДС"}
+                    </span>
+                  </div>
                 )}
-              </TableBody>
-            </Table>
-          </div>
 
-          {/* Total */}
-          <div className="flex justify-end">
-            <div className="bg-gray-50 rounded-lg px-6 py-3 text-right">
-              <div className="text-xs text-gray-500 mb-1">
-                {items.length} артикул{items.length !== 1 ? "а" : ""}
-              </div>
-              <div className="text-lg font-bold">
-                {formatCurrency(detail.total_amount || orderTotal)}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Workflow step indicator ── */}
-        {detail.status !== "cancelled" && (
-          <div className="shrink-0 border-t pt-3">
-            <div className="flex items-center justify-between gap-1 mb-3 px-1">
-              {[
-                { key: "pending", label: "Чакаща" },
-                { key: "confirmed", label: "Потвърдена" },
-                { key: "processing", label: "В обработка" },
-                { key: "fulfilled", label: "Изпълнена" },
-              ].map((step, idx, arr) => {
-                const statusOrder = [
-                  "pending",
-                  "confirmed",
-                  "processing",
-                  "fulfilled",
-                ];
-                // Legacy "invoiced" status — treat as fulfilled for the stepper.
-                const normalizedStatus =
-                  detail.status === "invoiced" ? "fulfilled" : detail.status;
-                const currentIdx = statusOrder.indexOf(normalizedStatus);
-                const stepIdx = statusOrder.indexOf(step.key);
-                const isDone = stepIdx < currentIdx;
-                const isCurrent = stepIdx === currentIdx;
-                return (
-                  <div key={step.key} className="flex items-center flex-1">
-                    <div className="flex flex-col items-center flex-1">
-                      <div
-                        className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                          isDone
-                            ? "bg-green-500 text-white"
-                            : isCurrent
-                              ? "bg-[#f97316] text-white ring-2 ring-[#f97316]/30"
-                              : "bg-gray-200 text-gray-400"
-                        }`}
-                      >
-                        {isDone ? "✓" : idx + 1}
-                      </div>
-                      <div
-                        className={`text-[10px] mt-0.5 ${isCurrent ? "font-bold text-[#f97316]" : isDone ? "text-green-600" : "text-gray-400"}`}
-                      >
-                        {step.label}
-                      </div>
-                    </div>
-                    {idx < arr.length - 1 && (
-                      <div
-                        className={`h-0.5 flex-1 -mt-3 ${stepIdx < currentIdx ? "bg-green-400" : "bg-gray-200"}`}
+                {!hasInvoice ? (
+                  <div className="flex items-center gap-2">
+                    {(detail as any)?.partner_partner_type === "individual" && (
+                      <Input
+                        value={clientDisplayName}
+                        onChange={(e) => setClientDisplayName(e.target.value)}
+                        placeholder="Име на клиента (по желание)"
+                        className="w-60 h-9"
+                        title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
                       />
                     )}
+                    <Button
+                      onClick={() => invoiceMutation.mutate(detail.id)}
+                      disabled={invoiceMutation.isPending}
+                      className="bg-[#f97316] hover:bg-[#ea580c]"
+                    >
+                      {invoiceMutation.isPending ? (
+                        <Spinner size="sm" />
+                      ) : (
+                        <FileText className="h-4 w-4" />
+                      )}
+                      Генерирай фактура {!includeVat && "(без ДДС)"}
+                    </Button>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ── Actions — grouped by purpose ── */}
-        <DialogFooter className="shrink-0 flex-col items-stretch gap-2 sm:flex-col">
-          {/* Error banners — full width on top */}
-          {invoiceMutation.isError && (
-            <div className="text-xs text-red-600">
-              {(invoiceMutation.error as any)?.response?.data?.error ||
-                "Грешка при генериране на фактура"}
-            </div>
-          )}
-          {(statusMutation.isError || fulfillMutation.isError) && (
-            <div className="text-xs text-red-600">
-              {(statusMutation.error as any)?.response?.data?.error ||
-                (fulfillMutation.error as any)?.response?.data?.error ||
-                "Грешка при смяна на статус"}
-            </div>
-          )}
-
-          {/* Row 1 — navigation + primary workflow action */}
-          <div className="flex flex-wrap gap-2 items-center">
-            <Button variant="outline" onClick={onClose}>
-              Затвори
-            </Button>
-            {detail.status !== "cancelled" && (
-              <Button variant="outline" onClick={() => setEditOpen(true)}>
-                <Pencil className="h-4 w-4" />
-                Редактирай артикули
-              </Button>
-            )}
-
-            <div className="flex-1" />
-
-            {detail.status === "pending" && (
-              <Button
-                onClick={() => confirmOrderMutation.mutate(detail.id)}
-                disabled={confirmOrderMutation.isPending}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                {confirmOrderMutation.isPending ? (
-                  <Spinner size="sm" />
                 ) : (
-                  <CheckCircle className="h-4 w-4" />
-                )}
-                Потвърди поръчка
-              </Button>
-            )}
-            {detail.status === "confirmed" && (
-              <Button
-                onClick={() =>
-                  statusMutation.mutate({
-                    id: detail.id,
-                    status: "processing",
-                  })
-                }
-                disabled={statusMutation.isPending}
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                {statusMutation.isPending ? (
-                  <Spinner size="sm" />
-                ) : (
-                  <Truck className="h-4 w-4" />
-                )}
-                Изпрати към склад
-              </Button>
-            )}
-            {detail.status === "processing" && (
-              <Button
-                onClick={() => fulfillMutation.mutate(detail.id)}
-                disabled={fulfillMutation.isPending}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                {fulfillMutation.isPending ? (
-                  <Spinner size="sm" />
-                ) : (
-                  <CheckCircle className="h-4 w-4" />
-                )}
-                Изпълни поръчка
-              </Button>
-            )}
-          </div>
-
-          {/* Row 2 — Invoice group (available from confirmed onwards) */}
-          {detail.status !== "pending" && detail.status !== "cancelled" && (
-            <div className="flex flex-wrap gap-2 items-center border-t pt-2">
-              <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
-                Фактура:
-              </span>
-
-              {/* VAT toggle / indicator */}
-              {!hasInvoice ? (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
-                  <span className="text-xs text-gray-500">ДДС:</span>
-                  <button
-                    type="button"
-                    onClick={() => setIncludeVat(true)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                      includeVat
-                        ? "bg-[#f97316] text-white"
-                        : "bg-white text-gray-600 border hover:bg-gray-100"
-                    }`}
-                  >
-                    С ДДС
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIncludeVat(false)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                      !includeVat
-                        ? "bg-orange-500 text-white"
-                        : "bg-white text-gray-600 border hover:bg-gray-100"
-                    }`}
-                  >
-                    Без ДДС
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
-                  <span className="text-xs text-gray-500">ДДС:</span>
-                  <span
-                    className={`px-2.5 py-1 text-xs font-medium rounded-md ${
-                      invoiceIncludesVat !== false
-                        ? "bg-[#f97316]/10 text-[#f97316] border border-[#f97316]/20"
-                        : "bg-orange-50 text-orange-600 border border-orange-200"
-                    }`}
-                  >
-                    {invoiceIncludesVat !== false ? "С ДДС" : "Без ДДС"}
-                  </span>
-                </div>
-              )}
-
-              {!hasInvoice ? (
-                <div className="flex items-center gap-2">
-                  {(detail as any)?.partner_partner_type === "individual" && (
-                    <Input
-                      value={clientDisplayName}
-                      onChange={(e) => setClientDisplayName(e.target.value)}
-                      placeholder="Име на клиента (по желание)"
-                      className="w-60 h-9"
-                      title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
-                    />
-                  )}
-                  <Button
-                    onClick={() => invoiceMutation.mutate(detail.id)}
-                    disabled={invoiceMutation.isPending}
-                    className="bg-[#f97316] hover:bg-[#ea580c]"
-                  >
-                    {invoiceMutation.isPending ? (
-                      <Spinner size="sm" />
-                    ) : (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => void openInvoicePdf(effectiveInvoiceId!)}
+                      className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5"
+                    >
                       <FileText className="h-4 w-4" />
-                    )}
-                    Генерирай фактура {!includeVat && "(без ДДС)"}
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={() => void openInvoicePdf(effectiveInvoiceId!)}
-                    className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5"
-                  >
-                    <FileText className="h-4 w-4" />
-                    Отвори
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      regenerateInvoiceMutation.mutate(effectiveInvoiceId!)
-                    }
-                    disabled={regenerateInvoiceMutation.isPending}
-                    className="text-orange-600 border-orange-300 hover:bg-orange-50"
-                  >
-                    <RefreshCw
-                      className={`h-4 w-4 ${regenerateInvoiceMutation.isPending ? "animate-spin" : ""}`}
-                    />
-                    Регенерирай
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      effectiveInvoiceId &&
-                      sendInvoiceEmailMutation.mutate(effectiveInvoiceId)
-                    }
-                    disabled={sendInvoiceEmailMutation.isPending}
-                    title="Изпрати фактурата по имейл на партньора"
-                  >
-                    {sendInvoiceEmailMutation.isPending ? (
-                      <Spinner size="sm" />
-                    ) : (
-                      <span className="text-base leading-none mr-1">
-                        &#x2709;
-                      </span>
-                    )}
-                    Имейл
-                  </Button>
-                  {detail.credit_note_id ? (
+                      Отвори
+                    </Button>
                     <Button
                       variant="outline"
                       onClick={() =>
-                        void openInvoicePdf(detail.credit_note_id!)
+                        regenerateInvoiceMutation.mutate(effectiveInvoiceId!)
                       }
-                      className="text-amber-700 border-amber-300 bg-amber-50"
-                      title="Отвори издаденото Кредитно известие"
+                      disabled={regenerateInvoiceMutation.isPending}
+                      className="text-orange-600 border-orange-300 hover:bg-orange-50"
                     >
-                      <RefreshCw className="h-4 w-4" />
-                      Сторнирана (
-                      <span className="font-mono">
-                        {detail.credit_note_number ??
-                          `КИ-${detail.credit_note_id}`}
-                      </span>
-                      )
+                      <RefreshCw
+                        className={`h-4 w-4 ${regenerateInvoiceMutation.isPending ? "animate-spin" : ""}`}
+                      />
+                      Регенерирай
                     </Button>
-                  ) : (
                     <Button
                       variant="outline"
-                      onClick={() => {
-                        setCreditNoteOpen(true);
-                        setCreditNoteReason("");
-                        setCreditNoteRestoreStock(true);
-                      }}
-                      className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                      title="Издай Кредитно известие (пълно сторниране на фактурата)"
+                      onClick={() =>
+                        effectiveInvoiceId &&
+                        sendInvoiceEmailMutation.mutate(effectiveInvoiceId)
+                      }
+                      disabled={sendInvoiceEmailMutation.isPending}
+                      title="Изпрати фактурата по имейл на партньора"
                     >
-                      <RefreshCw className="h-4 w-4" />
-                      Сторнирай
+                      {sendInvoiceEmailMutation.isPending ? (
+                        <Spinner size="sm" />
+                      ) : (
+                        <span className="text-base leading-none mr-1">
+                          &#x2709;
+                        </span>
+                      )}
+                      Имейл
                     </Button>
-                  )}
-                  {!detail.credit_note_id &&
-                    detail.invoice_status !== "cancelled" && (
+                    {detail.credit_note_id ? (
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          void openInvoicePdf(detail.credit_note_id!)
+                        }
+                        className="text-amber-700 border-amber-300 bg-amber-50"
+                        title="Отвори издаденото Кредитно известие"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        Сторнирана (
+                        <span className="font-mono">
+                          {detail.credit_note_number ??
+                            `КИ-${detail.credit_note_id}`}
+                        </span>
+                        )
+                      </Button>
+                    ) : (
                       <Button
                         variant="outline"
                         onClick={() => {
-                          setCancelInvoiceOpen(true);
-                          setCancelInvoiceReason("");
+                          setCreditNoteOpen(true);
+                          setCreditNoteReason("");
+                          setCreditNoteRestoreStock(true);
                         }}
-                        className="text-red-600 border-red-300 hover:bg-red-50"
-                        title="Анулирай фактурата (само ако не е ползвана от получателя)"
+                        className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                        title="Издай Кредитно известие (пълно сторниране на фактурата)"
                       >
-                        <XCircle className="h-4 w-4" />
-                        Анулирай
+                        <RefreshCw className="h-4 w-4" />
+                        Сторнирай
                       </Button>
                     )}
-                  {detail.invoice_status === "cancelled" && (
-                    <span className="text-xs text-red-600 flex items-center gap-1">
-                      <XCircle className="h-3 w-3" />
-                      Фактурата е анулирана
-                    </span>
-                  )}
-                </>
-              )}
+                    {!detail.credit_note_id &&
+                      detail.invoice_status !== "cancelled" && (
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setCancelInvoiceOpen(true);
+                            setCancelInvoiceReason("");
+                          }}
+                          className="text-red-600 border-red-300 hover:bg-red-50"
+                          title="Анулирай фактурата (само ако не е ползвана от получателя)"
+                        >
+                          <XCircle className="h-4 w-4" />
+                          Анулирай
+                        </Button>
+                      )}
+                    {detail.invoice_status === "cancelled" && (
+                      <span className="text-xs text-red-600 flex items-center gap-1">
+                        <XCircle className="h-3 w-3" />
+                        Фактурата е анулирана
+                      </span>
+                    )}
+                  </>
+                )}
 
-              {sendInvoiceEmailMutation.isSuccess && (
-                <span className="text-xs text-green-600 flex items-center gap-1">
-                  &#x2713; Имейлът е изпратен
+                {sendInvoiceEmailMutation.isSuccess && (
+                  <span className="text-xs text-green-600 flex items-center gap-1">
+                    &#x2713; Имейлът е изпратен
+                  </span>
+                )}
+                {sendInvoiceEmailMutation.isError && (
+                  <span className="text-xs text-red-600">
+                    {(sendInvoiceEmailMutation.error as any)?.response?.data
+                      ?.error || "Грешка при изпращане"}
+                  </span>
+                )}
+                {creditNoteMutation.isError && (
+                  <span className="text-xs text-red-600">
+                    {(creditNoteMutation.error as any)?.response?.data?.error ||
+                      "Грешка при издаване на Кредитно известие"}
+                  </span>
+                )}
+                {issuedCreditNoteId && (
+                  <span className="text-xs text-amber-700 flex items-center gap-1">
+                    &#x2713; Издадено е Кредитно известие
+                    <button
+                      type="button"
+                      onClick={() => void openInvoicePdf(issuedCreditNoteId)}
+                      className="underline hover:text-amber-900"
+                    >
+                      отвори
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Row 3 — Document downloads (available from processing onwards) */}
+            {(detail.status === "processing" ||
+              detail.status === "fulfilled" ||
+              detail.status === "invoiced") && (
+              <div className="flex flex-wrap gap-2 items-center border-t pt-2">
+                <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
+                  Документи:
                 </span>
-              )}
-              {sendInvoiceEmailMutation.isError && (
-                <span className="text-xs text-red-600">
-                  {(sendInvoiceEmailMutation.error as any)?.response?.data
-                    ?.error || "Грешка при изпращане"}
-                </span>
-              )}
-              {creditNoteMutation.isError && (
-                <span className="text-xs text-red-600">
-                  {(creditNoteMutation.error as any)?.response?.data?.error ||
-                    "Грешка при издаване на Кредитно известие"}
-                </span>
-              )}
-              {issuedCreditNoteId && (
-                <span className="text-xs text-amber-700 flex items-center gap-1">
-                  &#x2713; Издадено е Кредитно известие
-                  <button
-                    type="button"
-                    onClick={() => void openInvoicePdf(issuedCreditNoteId)}
-                    className="underline hover:text-amber-900"
-                  >
-                    отвори
-                  </button>
-                </span>
+                <Button
+                  variant="outline"
+                  onClick={() => handleDocDownload(detail.id, "stock-dispatch")}
+                  className="text-emerald-600 border-emerald-300 hover:bg-emerald-50"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Стокова разписка
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    handleDocDownload(detail.id, "stock-dispatch", {
+                      pricingMode: "gross",
+                    })
+                  }
+                  className="text-emerald-700 border-emerald-400 hover:bg-emerald-50"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Стокова разписка (с ДДС)
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleDocDownload(detail.id, "commercial-doc")}
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                >
+                  <ScrollText className="h-4 w-4" />
+                  Търговски документ
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleDocDownload(detail.id, "warranty")}
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                  title="Гаранционна карта (сериен номер = номер на поръчката)"
+                >
+                  <ShieldCheck className="h-4 w-4" />
+                  Гаранция
+                </Button>
+              </div>
+            )}
+          </DialogFooter>
+        </DialogContent>
+
+        {detail && (
+          <EditOrderItemsModal
+            open={editOpen}
+            order={detail}
+            onClose={() => setEditOpen(false)}
+          />
+        )}
+
+        <Dialog
+          open={cancelInvoiceOpen}
+          onOpenChange={(open) => {
+            setCancelInvoiceOpen(open);
+            if (!open) setCancelInvoiceReason("");
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Анулирай фактура</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600">
+                Фактура:{" "}
+                <span className="font-mono font-bold">{invoiceLabel}</span>
+              </p>
+              <div className="space-y-1.5">
+                <Label>Причина за анулиране</Label>
+                <Textarea
+                  value={cancelInvoiceReason}
+                  onChange={(e) => setCancelInvoiceReason(e.target.value)}
+                  placeholder="напр. Грешно фактурирана поръчка"
+                  rows={4}
+                />
+              </div>
+              {cancelInvoiceMutation.isError && (
+                <ErrorMessage
+                  message={
+                    (cancelInvoiceMutation.error as any)?.response?.data
+                      ?.error || "Грешка при анулиране на фактура"
+                  }
+                />
               )}
             </div>
-          )}
-
-          {/* Row 3 — Document downloads (available from processing onwards) */}
-          {(detail.status === "processing" ||
-            detail.status === "fulfilled" ||
-            detail.status === "invoiced") && (
-            <div className="flex flex-wrap gap-2 items-center border-t pt-2">
-              <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
-                Документи:
-              </span>
+            <DialogFooter>
               <Button
                 variant="outline"
-                onClick={() => handleDocDownload(detail.id, "stock-dispatch")}
-                className="text-emerald-600 border-emerald-300 hover:bg-emerald-50"
+                onClick={() => {
+                  setCancelInvoiceOpen(false);
+                  setCancelInvoiceReason("");
+                }}
               >
-                <ClipboardList className="h-4 w-4" />
-                Стокова разписка
+                Отказ
               </Button>
               <Button
-                variant="outline"
                 onClick={() =>
-                  handleDocDownload(detail.id, "stock-dispatch", {
-                    pricingMode: "gross",
+                  effectiveInvoiceId &&
+                  cancelInvoiceMutation.mutate({
+                    id: effectiveInvoiceId,
+                    reason: cancelInvoiceReason.trim(),
                   })
                 }
-                className="text-emerald-700 border-emerald-400 hover:bg-emerald-50"
+                disabled={cancelInvoiceMutation.isPending}
+                className="bg-red-600 hover:bg-red-700"
               >
-                <ClipboardList className="h-4 w-4" />
-                Стокова разписка (с ДДС)
+                {cancelInvoiceMutation.isPending ? <Spinner size="sm" /> : null}
+                Потвърди анулиране
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleDocDownload(detail.id, "commercial-doc")}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                <ScrollText className="h-4 w-4" />
-                Търговски документ
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleDocDownload(detail.id, "warranty")}
-                className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                title="Гаранционна карта (сериен номер = номер на поръчката)"
-              >
-                <ShieldCheck className="h-4 w-4" />
-                Гаранция
-              </Button>
-            </div>
-          )}
-        </DialogFooter>
-      </DialogContent>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-      {detail && (
-        <EditOrderItemsModal
-          open={editOpen}
-          order={detail}
-          onClose={() => setEditOpen(false)}
-        />
-      )}
-
-      <Dialog
-        open={cancelInvoiceOpen}
-        onOpenChange={(open) => {
-          setCancelInvoiceOpen(open);
-          if (!open) setCancelInvoiceReason("");
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Анулирай фактура</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-gray-600">
-              Фактура:{" "}
-              <span className="font-mono font-bold">{invoiceLabel}</span>
-            </p>
-            <div className="space-y-1.5">
-              <Label>Причина за анулиране</Label>
-              <Textarea
-                value={cancelInvoiceReason}
-                onChange={(e) => setCancelInvoiceReason(e.target.value)}
-                placeholder="напр. Грешно фактурирана поръчка"
-                rows={4}
-              />
-            </div>
-            {cancelInvoiceMutation.isError && (
-              <ErrorMessage
-                message={
-                  (cancelInvoiceMutation.error as any)?.response?.data?.error ||
-                  "Грешка при анулиране на фактура"
-                }
-              />
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setCancelInvoiceOpen(false);
-                setCancelInvoiceReason("");
-              }}
-            >
-              Отказ
-            </Button>
-            <Button
-              onClick={() =>
-                effectiveInvoiceId &&
-                cancelInvoiceMutation.mutate({
-                  id: effectiveInvoiceId,
-                  reason: cancelInvoiceReason.trim(),
-                })
-              }
-              disabled={cancelInvoiceMutation.isPending}
-              className="bg-red-600 hover:bg-red-700"
-            >
-              {cancelInvoiceMutation.isPending ? <Spinner size="sm" /> : null}
-              Потвърди анулиране
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Credit Note (сторниране) dialog */}
-      <Dialog
-        open={creditNoteOpen}
-        onOpenChange={(open) => {
-          setCreditNoteOpen(open);
-          if (!open) setCreditNoteReason("");
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Сторнирай фактура (Кредитно известие)</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-gray-600">
-              Към фактура:{" "}
-              <span className="font-mono font-bold">{invoiceLabel}</span>
-            </p>
-            <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
-              Ще бъде издадено <strong>Кредитно известие</strong> с отрицателни
-              суми, равни на оригиналната фактура. Документът ще се отвори за
-              печат автоматично.
-            </div>
-            <div className="space-y-1.5">
-              <Label>Основание за издаване *</Label>
-              <Textarea
-                value={creditNoteReason}
-                onChange={(e) => setCreditNoteReason(e.target.value)}
-                placeholder="напр. Върната стока от клиента / Грешно количество"
-                rows={3}
-              />
-            </div>
-            <label className="flex items-start gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={creditNoteRestoreStock}
-                onChange={(e) => setCreditNoteRestoreStock(e.target.checked)}
-                className="mt-1"
-              />
-              <span>
-                <span className="font-medium">Върни стоката в склада</span>
-                <span className="block text-xs text-gray-500">
-                  Маркирай, ако стоката физически е върната. За отстъпка или
-                  корекция на цена — остави непровено.
+        {/* Credit Note (сторниране) dialog */}
+        <Dialog
+          open={creditNoteOpen}
+          onOpenChange={(open) => {
+            setCreditNoteOpen(open);
+            if (!open) setCreditNoteReason("");
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Сторнирай фактура (Кредитно известие)</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600">
+                Към фактура:{" "}
+                <span className="font-mono font-bold">{invoiceLabel}</span>
+              </p>
+              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+                Ще бъде издадено <strong>Кредитно известие</strong> с
+                отрицателни суми, равни на оригиналната фактура. Документът ще
+                се отвори за печат автоматично.
+              </div>
+              <div className="space-y-1.5">
+                <Label>Основание за издаване *</Label>
+                <Textarea
+                  value={creditNoteReason}
+                  onChange={(e) => setCreditNoteReason(e.target.value)}
+                  placeholder="напр. Върната стока от клиента / Грешно количество"
+                  rows={3}
+                />
+              </div>
+              <label className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={creditNoteRestoreStock}
+                  onChange={(e) => setCreditNoteRestoreStock(e.target.checked)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium">Върни стоката в склада</span>
+                  <span className="block text-xs text-gray-500">
+                    Маркирай, ако стоката физически е върната. За отстъпка или
+                    корекция на цена — остави непровено.
+                  </span>
                 </span>
-              </span>
-            </label>
-            {creditNoteMutation.isError && (
-              <ErrorMessage
-                message={
-                  (creditNoteMutation.error as any)?.response?.data?.error ||
-                  "Грешка при издаване на Кредитно известие"
+              </label>
+              {creditNoteMutation.isError && (
+                <ErrorMessage
+                  message={
+                    (creditNoteMutation.error as any)?.response?.data?.error ||
+                    "Грешка при издаване на Кредитно известие"
+                  }
+                />
+              )}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setCreditNoteOpen(false);
+                  setCreditNoteReason("");
+                }}
+              >
+                Отказ
+              </Button>
+              <Button
+                onClick={() =>
+                  effectiveInvoiceId &&
+                  creditNoteMutation.mutate({
+                    related_invoice_id: effectiveInvoiceId,
+                    reason: creditNoteReason.trim() || "Сторниране по искане",
+                    restore_stock: creditNoteRestoreStock,
+                  })
                 }
-              />
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setCreditNoteOpen(false);
-                setCreditNoteReason("");
-              }}
-            >
-              Отказ
-            </Button>
-            <Button
-              onClick={() =>
-                effectiveInvoiceId &&
-                creditNoteMutation.mutate({
-                  related_invoice_id: effectiveInvoiceId,
-                  reason: creditNoteReason.trim() || "Сторниране по искане",
-                  restore_stock: creditNoteRestoreStock,
-                })
-              }
-              disabled={creditNoteMutation.isPending}
-              className="bg-amber-600 hover:bg-amber-700"
-            >
-              {creditNoteMutation.isPending ? <Spinner size="sm" /> : null}
-              Издай Кредитно известие
-            </Button>
-          </DialogFooter>
-        </DialogContent>
+                disabled={creditNoteMutation.isPending}
+                className="bg-amber-600 hover:bg-amber-700"
+              >
+                {creditNoteMutation.isPending ? <Spinner size="sm" /> : null}
+                Издай Кредитно известие
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </Dialog>
-    </Dialog>
+      <OversellConfirmDialog
+        open={!!pendingFulfillOversell}
+        items={pendingFulfillOversell?.items ?? []}
+        onCancel={() => setPendingFulfillOversell(null)}
+        onConfirm={() => {
+          const proceed = pendingFulfillOversell?.proceed;
+          setPendingFulfillOversell(null);
+          proceed?.();
+        }}
+      />
+    </>
   );
 }
 
@@ -1899,6 +2017,10 @@ function CreateOrderModal({
   const [orderCreated, setOrderCreated] = useState(false);
   const [confirmOverstock, setConfirmOverstock] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [pendingOversell, setPendingOversell] = useState<{
+    items: OversellItem[];
+    proceed: () => void;
+  } | null>(null);
 
   // Keyboard-flow refs — Enter in qty jumps to price → (next row) qty,
   // so warehouse staff can key-fill a whole order from a single
@@ -1983,6 +2105,7 @@ function CreateOrderModal({
       setErrorMsg("");
       setOrderCreated(false);
       setConfirmOverstock(false);
+      setPendingOversell(null);
       // Auto-land focus on партньор combobox so user can start typing
       // immediately — no mouse needed to begin a new order.
       queueMicrotask(() => partnerInputRef.current?.focus());
@@ -2236,6 +2359,12 @@ function CreateOrderModal({
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["partner-history"] });
       qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
+      const oversell = res.data?.warnings?.oversell;
+      if (Array.isArray(oversell) && oversell.length > 0) {
+        toast.warning(
+          `Поръчката е записана, но ${oversell.length} ${oversell.length === 1 ? "артикул ще влезе" : "артикула ще влязат"} в минус при изпълнение.`,
+        );
+      }
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       if (onCreated && createdOrder && createdOrder.id) {
@@ -2262,6 +2391,44 @@ function CreateOrderModal({
     !mutation.isPending &&
     !orderCreated;
 
+  // Compute which items will go negative. Uses the stock snapshotted at
+  // product-pick time (item.stock), which matches what the server sees.
+  function computeOversellItems(): OversellItem[] {
+    const byProduct = new Map<
+      number,
+      { requested: number; name: string; available: number }
+    >();
+    for (const row of items) {
+      if (!row.product_id) continue;
+      const qty = parseFloat(String(row.quantity || 0));
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      const id = Number(row.product_id);
+      const existing = byProduct.get(id);
+      if (existing) {
+        existing.requested += qty;
+      } else {
+        byProduct.set(id, {
+          requested: qty,
+          name: row.product_name || `Продукт #${id}`,
+          available: parseFloat(String(row.stock || 0)),
+        });
+      }
+    }
+    const result: OversellItem[] = [];
+    for (const [, info] of byProduct) {
+      const finalStock = info.available - info.requested;
+      if (finalStock < 0) {
+        result.push({
+          product_name: info.name,
+          available: info.available,
+          requested: info.requested,
+          final_stock: finalStock,
+        });
+      }
+    }
+    return result;
+  }
+
   // Ctrl/Cmd+Enter anywhere in the dialog submits the order (when it's
   // in a submittable state — warnings still need their explicit confirms
   // via the warning buttons, which keeps destructive decisions deliberate).
@@ -2273,6 +2440,11 @@ function CreateOrderModal({
     if (hasBelowCost && !confirmBelowCost) return;
     e.preventDefault();
     setErrorMsg("");
+    const oversell = computeOversellItems();
+    if (oversell.length > 0) {
+      setPendingOversell({ items: oversell, proceed: () => mutation.mutate() });
+      return;
+    }
     mutation.mutate();
   };
 
@@ -2827,6 +2999,14 @@ function CreateOrderModal({
                 <Button
                   onClick={() => {
                     setErrorMsg("");
+                    const oversell = computeOversellItems();
+                    if (oversell.length > 0) {
+                      setPendingOversell({
+                        items: oversell,
+                        proceed: () => mutation.mutate(),
+                      });
+                      return;
+                    }
                     mutation.mutate();
                   }}
                   disabled={!canSubmit}
@@ -2869,6 +3049,16 @@ function CreateOrderModal({
           onRepeatOrder={(his) => addHistoryItems(his)}
         />
       )}
+      <OversellConfirmDialog
+        open={!!pendingOversell}
+        items={pendingOversell?.items ?? []}
+        onCancel={() => setPendingOversell(null)}
+        onConfirm={() => {
+          const proceed = pendingOversell?.proceed;
+          setPendingOversell(null);
+          proceed?.();
+        }}
+      />
     </Dialog>
   );
 }
@@ -2996,6 +3186,76 @@ export function Orders() {
     mutationFn: (id: number) => api.post(`/orders/${id}/fulfill`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
   });
+
+  const [pendingFulfillOversell, setPendingFulfillOversell] = useState<{
+    items: OversellItem[];
+    proceed: () => void;
+  } | null>(null);
+
+  async function handleFulfillClick(orderId: number) {
+    try {
+      const detailRes = await api.get(`/orders/${orderId}`);
+      const detail = detailRes.data?.data ?? detailRes.data;
+      const itemsList: Array<{
+        product_id: number;
+        quantity: number | string;
+        total_stock?: number | string;
+        name_bg?: string;
+        name_en?: string;
+      }> = detail?.items ?? [];
+
+      // First pass — sum requested quantities per product_id.
+      const requestedByProduct = new Map<number, number>();
+      for (const it of itemsList) {
+        const qty = parseFloat(String(it.quantity));
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+        requestedByProduct.set(
+          it.product_id,
+          (requestedByProduct.get(it.product_id) || 0) + qty,
+        );
+      }
+
+      // Second pass — one-time stock + name lookup per unique product_id.
+      const stockByProduct = new Map<
+        number,
+        { total_stock: number; name: string }
+      >();
+      for (const it of itemsList) {
+        if (stockByProduct.has(it.product_id)) continue;
+        stockByProduct.set(it.product_id, {
+          total_stock: parseFloat(String(it.total_stock ?? 0)),
+          name: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
+        });
+      }
+
+      const oversell: OversellItem[] = [];
+      for (const [productId, requested] of requestedByProduct) {
+        const meta = stockByProduct.get(productId);
+        if (!meta) continue;
+        if (meta.total_stock - requested < 0) {
+          oversell.push({
+            product_name: meta.name,
+            available: meta.total_stock,
+            requested,
+            final_stock: meta.total_stock - requested,
+          });
+        }
+      }
+
+      if (oversell.length > 0) {
+        setPendingFulfillOversell({
+          items: oversell,
+          proceed: () => fulfillMutation.mutate(orderId),
+        });
+        return;
+      }
+      fulfillMutation.mutate(orderId);
+    } catch (err) {
+      toast.error(
+        getApiErrorMessage(err, "Грешка при проверка на наличността."),
+      );
+    }
+  }
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
@@ -3585,7 +3845,7 @@ export function Orders() {
                                           if (
                                             transition.value === "fulfilled"
                                           ) {
-                                            fulfillMutation.mutate(order.id);
+                                            handleFulfillClick(order.id);
                                           } else {
                                             statusMutation.mutate({
                                               id: order.id,
@@ -3713,6 +3973,17 @@ export function Orders() {
           }
         />
       )}
+
+      <OversellConfirmDialog
+        open={!!pendingFulfillOversell}
+        items={pendingFulfillOversell?.items ?? []}
+        onCancel={() => setPendingFulfillOversell(null)}
+        onConfirm={() => {
+          const proceed = pendingFulfillOversell?.proceed;
+          setPendingFulfillOversell(null);
+          proceed?.();
+        }}
+      />
     </div>
   );
 }

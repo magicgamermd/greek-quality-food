@@ -108,3 +108,27 @@ export function isoDateToday(): string {
   const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
   return localDate.toISOString().slice(0, 10);
 }
+
+/**
+ * Returns the Tailwind classes for displaying an inventory quantity.
+ * Red+bold for negative (back-order), gray for zero, amber for
+ * low-stock, default dark gray otherwise. Callers that know the
+ * product's `low_stock_threshold` should pass it; missing threshold
+ * is treated as "not low".
+ */
+export function stockColorClass(
+  qty: number,
+  lowStockThreshold?: number | null,
+): string {
+  if (!Number.isFinite(qty)) return "text-gray-900";
+  if (qty < 0) return "text-red-600 font-semibold";
+  if (qty === 0) return "text-gray-500";
+  if (
+    lowStockThreshold != null &&
+    lowStockThreshold > 0 &&
+    qty <= lowStockThreshold
+  ) {
+    return "text-amber-600";
+  }
+  return "text-gray-900";
+}

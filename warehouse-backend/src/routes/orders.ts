@@ -608,6 +608,8 @@ export default async function orderRoutes(app: FastifyInstance) {
 
     const body = createOrderSchema.parse(request.body);
 
+    let oversell_items: OversellInfo[] = [];
+
     const result = await transaction(async (client) => {
       // Get partner's price list for default pricing
       const {
@@ -674,7 +676,12 @@ export default async function orderRoutes(app: FastifyInstance) {
         );
       }
 
-      await validateRequestedStock(client, body.items, productMap);
+      const validationResult = await validateRequestedStock(
+        client,
+        body.items,
+        productMap,
+      );
+      oversell_items = validationResult.oversell_items;
 
       // Create order with sequential order_number
       const {
@@ -775,7 +782,11 @@ export default async function orderRoutes(app: FastifyInstance) {
       };
     });
 
-    return reply.status(201).send(result);
+    const response: any = { ...result };
+    if (oversell_items.length > 0) {
+      response.warnings = { oversell: oversell_items };
+    }
+    return reply.status(201).send(response);
   });
 
   // POST /orders/from-comarch — create order from Comarch ERP sync
@@ -1099,7 +1110,11 @@ export default async function orderRoutes(app: FastifyInstance) {
         }
 
         await client.query("DELETE FROM order_items WHERE order_id = $1", [id]);
-        await validateRequestedStock(client, body.items, productMap);
+        const { oversell_items } = await validateRequestedStock(
+          client,
+          body.items,
+          productMap,
+        );
 
         let totalAmount = 0;
         const items = [];
@@ -1175,13 +1190,17 @@ export default async function orderRoutes(app: FastifyInstance) {
           ],
         );
 
-        return {
+        const putResponse: any = {
           ...updated,
           total_amount: totalAmount,
           items,
           regenerated_invoice_id: regeneratedInvoiceId,
           regenerated_documents: mustReconcileStock,
         };
+        if (oversell_items.length > 0) {
+          putResponse.warnings = { oversell: oversell_items };
+        }
+        return putResponse;
       }
 
       return updated;
@@ -1479,16 +1498,22 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
+  interface OversellInfo {
+    product_id: number;
+    available: number;
+    requested: number;
+    final_stock: number;
+  }
+
   async function validateRequestedStock(
     db: DbExecutor,
     items: Array<{
       product_id: number;
       quantity: number;
     }>,
-    productMap: Map<number, any>,
-  ) {
+    _productMap: Map<number, any>,
+  ): Promise<{ oversell_items: OversellInfo[] }> {
     const requestedByProduct = new Map<number, number>();
-
     for (const item of items) {
       requestedByProduct.set(
         item.product_id,
@@ -1496,7 +1521,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       );
     }
 
-    const stockErrors: string[] = [];
+    const oversell_items: OversellInfo[] = [];
     for (const [productId, requestedQty] of requestedByProduct.entries()) {
       const {
         rows: [stockRow],
@@ -1506,33 +1531,31 @@ export default async function orderRoutes(app: FastifyInstance) {
       );
       const available = parseFloat(stockRow.total);
       if (available + EPSILON < requestedQty) {
-        const productName =
-          productMap.get(productId)?.name_bg || `Продукт #${productId}`;
-        stockErrors.push(
-          `${productName}: налични ${available}, поръчани ${requestedQty}`,
-        );
+        oversell_items.push({
+          product_id: productId,
+          available,
+          requested: requestedQty,
+          final_stock: available - requestedQty,
+        });
       }
     }
 
-    if (stockErrors.length > 0) {
-      throw Object.assign(
-        new Error(`Недостатъчна наличност:\n${stockErrors.join("\n")}`),
-        { statusCode: 400 },
-      );
-    }
+    return { oversell_items };
   }
 
   /**
-   * MERT-M per-product stock deduction. Replaces the old FEFO allocator
-   * (which chose batches by expiry date). For durable goods there is a
-   * single inventory row per (product_id, warehouse_id) with batch_id
-   * NULL, enforced by the partial unique index
-   * inventory_product_warehouse_nobatch_uidx (migration 045).
+   * MERT-M per-product stock deduction — back-order aware.
    *
-   * Uses a single atomic UPDATE with a quantity guard — if the row does
-   * not exist or lacks stock, no row is returned and we raise
-   * `insufficient_stock`. Returns the COGS unit price snapshotted from
-   * products.purchase_price for later profit reporting.
+   * First attempts an atomic UPDATE without a quantity guard so the
+   * inventory row is allowed to go negative (sells into the red). If
+   * no row exists for this product/warehouse yet, fall back to an
+   * INSERT with a negative quantity; the partial unique index
+   * `inventory_product_warehouse_nobatch_uidx` (migration 045) keeps
+   * this safe against concurrent inserts because there is only one
+   * batch_id-NULL row per product/warehouse.
+   *
+   * Returns the COGS unit price snapshotted from products.purchase_price
+   * for later profit reporting (unchanged from the old behaviour).
    */
   async function deductProductStock(
     db: DbExecutor,
@@ -1546,17 +1569,17 @@ export default async function orderRoutes(app: FastifyInstance) {
        WHERE product_id = $2
          AND warehouse_id = 1
          AND batch_id IS NULL
-         AND quantity >= $1
        RETURNING quantity`,
       [quantity, productId],
     );
 
     if (!rowCount) {
-      throw Object.assign(
-        new Error(
-          `insufficient_stock: product #${productId} requires ${quantity} unit(s) on hand`,
-        ),
-        { statusCode: 400 },
+      // No inventory row at all — a product that has never been
+      // delivered yet is being sold. Create a row starting at -qty.
+      await db.query(
+        `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+         VALUES ($1, 1, $2, NULL)`,
+        [productId, -quantity],
       );
     }
 
