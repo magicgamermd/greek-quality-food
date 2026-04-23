@@ -47,6 +47,8 @@ const getOrderGross = (order: Order): number =>
 export function RecordPaymentModal({ open, onClose, context }: Props) {
   const qc = useQueryClient();
   const orderId = context.kind === "order-fixed" ? context.order.id : null;
+  const fixedInvoiceId =
+    context.kind === "invoice-fixed" ? context.invoice_id : null;
 
   const { data: orderPayments } = useQuery<{ amount: number | string }[]>({
     queryKey: ["order-razpiska-payments", orderId],
@@ -58,6 +60,13 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
           return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
         }),
     enabled: open && orderId !== null,
+  });
+
+  const { data: fixedInvoice } = useQuery<Invoice>({
+    queryKey: ["invoice-for-payment", fixedInvoiceId],
+    queryFn: () =>
+      api.get(`/invoices/${fixedInvoiceId}`).then((r) => r.data as Invoice),
+    enabled: open && fixedInvoiceId !== null,
   });
 
   const alreadyPaidOnOrder = (orderPayments ?? []).reduce(
@@ -73,21 +82,28 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
     paid_at: new Date().toISOString().split("T")[0],
   });
 
+  const didFillInvoiceRef = useRef(false);
   const didFillOrderRef = useRef(false);
   useEffect(() => {
     if (!open) {
+      didFillInvoiceRef.current = false;
       didFillOrderRef.current = false;
       return;
     }
     const today = new Date().toISOString().split("T")[0];
     if (context.kind === "invoice-fixed") {
+      if (fixedInvoice === undefined || didFillInvoiceRef.current) return;
+      const gross = Number(fixedInvoice.total_gross);
+      const paid = Number(fixedInvoice.paid_amount ?? 0);
+      const remaining = Math.max(0, gross - paid);
       setForm({
         invoice_id: String(context.invoice_id),
-        amount: context.total.toFixed(2),
+        amount: remaining.toFixed(2),
         payment_method: "bank",
         bank_reference: "",
         paid_at: today,
       });
+      didFillInvoiceRef.current = true;
     } else if (context.kind === "order-fixed") {
       if (orderPayments === undefined || didFillOrderRef.current) return;
       const gross = getOrderGross(context.order);
@@ -109,7 +125,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
         paid_at: today,
       });
     }
-  }, [open, context, orderPayments, alreadyPaidOnOrder]);
+  }, [open, context, orderPayments, alreadyPaidOnOrder, fixedInvoice]);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -172,28 +188,75 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
             </div>
           )}
 
-          {context.kind === "invoice-fixed" && (
-            <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Фактура:</span>
-                <span className="font-mono font-medium">
-                  {context.invoice_number ?? `#${context.invoice_id}`}
-                </span>
-              </div>
-              {context.partner_name && (
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Партньор:</span>
-                  <span className="font-medium">{context.partner_name}</span>
+          {context.kind === "invoice-fixed" &&
+            (() => {
+              const net = Number(fixedInvoice?.total_net ?? context.total);
+              const vat = Number(fixedInvoice?.total_vat ?? 0);
+              const gross = Number(fixedInvoice?.total_gross ?? context.total);
+              const paid = Number(fixedInvoice?.paid_amount ?? 0);
+              const remaining = Math.max(0, gross - paid);
+              const hasPriorPayments = paid > 0;
+              return (
+                <div className="rounded-lg bg-gray-50 p-3 text-sm space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Фактура:</span>
+                    <span className="font-mono font-medium">
+                      {context.invoice_number ?? `#${context.invoice_id}`}
+                    </span>
+                  </div>
+                  {context.partner_name && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Партньор:</span>
+                      <span className="font-medium">
+                        {context.partner_name}
+                      </span>
+                    </div>
+                  )}
+                  {vat > 0 && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Нето:</span>
+                        <span>{formatCurrency(net)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">ДДС (20%):</span>
+                        <span>{formatCurrency(vat)}</span>
+                      </div>
+                    </>
+                  )}
+                  <div className="flex justify-between pt-1 border-t border-gray-200">
+                    <span className="text-gray-500">
+                      {vat > 0 ? "Общо с ДДС:" : "Сума:"}
+                    </span>
+                    <span
+                      className={
+                        hasPriorPayments
+                          ? "font-medium"
+                          : "font-bold text-[#f97316]"
+                      }
+                    >
+                      {formatCurrency(gross)}
+                    </span>
+                  </div>
+                  {hasPriorPayments && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Вече платено:</span>
+                        <span className="font-medium text-green-700">
+                          − {formatCurrency(paid)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between pt-1 border-t border-gray-200">
+                        <span className="text-gray-500">Остатък:</span>
+                        <span className="font-bold text-[#f97316]">
+                          {formatCurrency(remaining)}
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-gray-500">Сума:</span>
-                <span className="font-bold text-[#f97316]">
-                  {formatCurrency(context.total)}
-                </span>
-              </div>
-            </div>
-          )}
+              );
+            })()}
 
           {context.kind === "order-fixed" &&
             (() => {
