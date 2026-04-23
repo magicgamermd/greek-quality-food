@@ -16,6 +16,7 @@ function stubTg(): TelegramClientHandle {
       receivedAt: new Date(),
       messageId: 1,
     })),
+    clickButton: vi.fn(async () => ({ messageId: 1, callbackData: "x" })),
     reset: vi.fn(),
     stop: vi.fn(),
   };

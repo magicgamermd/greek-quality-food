@@ -11,8 +11,23 @@ function renderTranscript(turns: TranscriptTurn[]): string {
       case "sent_to_bot":
         lines.push(`- 👤 **user** → ${t.text}`);
         break;
-      case "bot_reply":
-        lines.push(`- 🤖 **bot** → ${t.text}`);
+      case "bot_reply": {
+        const extras: string[] = [];
+        if (t.document) {
+          const kb = Math.max(1, Math.round(t.document.size / 1024));
+          extras.push(
+            `📎 ${t.document.fileName} (${t.document.mimeType}, ${kb} KB)`,
+          );
+        }
+        if (t.buttons && t.buttons.length > 0) {
+          extras.push("🔘 " + t.buttons.map((b) => `\`${b.text}\``).join(" "));
+        }
+        const suffix = extras.length ? ` — ${extras.join(" · ")}` : "";
+        lines.push(`- 🤖 **bot** → ${t.text}${suffix}`);
+        break;
+      }
+      case "clicked_button":
+        lines.push(`- 👆 **user clicked** → \`${t.buttonText}\``);
         break;
       case "actor_thought":
         lines.push(`- 💭 _thought: ${t.content}_`);

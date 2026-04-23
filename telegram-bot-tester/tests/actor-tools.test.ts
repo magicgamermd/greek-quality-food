@@ -8,11 +8,12 @@ import {
 } from "../src/actor/tools.js";
 
 describe("ACTOR_TOOLS", () => {
-  it("has exactly 4 tools", () => {
-    expect(ACTOR_TOOLS).toHaveLength(4);
+  it("has exactly 5 tools", () => {
+    expect(ACTOR_TOOLS).toHaveLength(5);
     const names = ACTOR_TOOLS.map((t) => t.name);
     expect(names).toContain("send_message");
     expect(names).toContain("read_latest_reply");
+    expect(names).toContain("click_inline_button");
     expect(names).toContain("goal_achieved");
     expect(names).toContain("give_up");
   });
@@ -41,6 +42,23 @@ describe("parseToolArgs", () => {
   it("parses read_latest_reply with empty args", () => {
     const parsed = parseToolArgs("read_latest_reply", {});
     expect(parsed).toEqual({});
+  });
+
+  it("parses click_inline_button args", () => {
+    const parsed = parseToolArgs("click_inline_button", {
+      button_text: "Товарителница",
+    });
+    expect(parsed).toEqual({ button_text: "Товарителница" });
+  });
+
+  it("rejects click_inline_button without button_text", () => {
+    expect(() => parseToolArgs("click_inline_button", {})).toThrow();
+  });
+
+  it("rejects click_inline_button with empty button_text", () => {
+    expect(() =>
+      parseToolArgs("click_inline_button", { button_text: "" }),
+    ).toThrow();
   });
 
   it("throws on unknown tool", () => {

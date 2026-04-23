@@ -4,8 +4,23 @@ function formatTurn(t: TranscriptTurn, i: number): string {
   switch (t.kind) {
     case "sent_to_bot":
       return `[${i}] USER → ${t.text}`;
-    case "bot_reply":
-      return `[${i}] BOT  → ${t.text}`;
+    case "bot_reply": {
+      const extras: string[] = [];
+      if (t.document) {
+        const kb = Math.max(1, Math.round(t.document.size / 1024));
+        extras.push(
+          `[FILE: "${t.document.fileName}" ${t.document.mimeType} ${kb}KB]`,
+        );
+      }
+      if (t.buttons && t.buttons.length > 0) {
+        const btns = t.buttons.map((b) => `[${b.text}]`).join(" ");
+        extras.push(`[BUTTONS: ${btns}]`);
+      }
+      const suffix = extras.length ? ` ${extras.join(" ")}` : "";
+      return `[${i}] BOT  → ${t.text}${suffix}`;
+    }
+    case "clicked_button":
+      return `[${i}] USER clicked button "${t.buttonText}" (msg ${t.messageId})`;
     case "actor_thought":
       return `[${i}] (thought: ${t.content})`;
     case "actor_tool_call":
