@@ -10,13 +10,16 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 dotenv.config();
 
 const DEFAULT_DOCKER_CONTAINER =
-  process.env.RECON_POSTGRES_CONTAINER || "warehouse-backend-postgres-1";
+  process.env.RECON_POSTGRES_CONTAINER || "mertm-postgres-1";
 const DEFAULT_DATABASE_CANDIDATES = [
   process.env.RECON_DATABASE_URL,
   process.env.DATABASE_URL,
-  "postgres://greekfoods:greekfoods_secret@127.0.0.1:5432/greekfoods_warehouse",
-  "postgres://greekfoods:greekfoods_secret@localhost:5432/greekfoods_warehouse",
-].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+  "postgres://mertm:mertm_secret@127.0.0.1:5433/mertm_warehouse",
+  "postgres://mertm:mertm_secret@localhost:5433/mertm_warehouse",
+].filter(
+  (value, index, all): value is string =>
+    Boolean(value) && all.indexOf(value) === index,
+);
 
 export type Severity = "ok" | "warning" | "critical";
 
@@ -140,7 +143,8 @@ export async function getConnectionMode(): Promise<string> {
 export function computeSeverity(sections: ReconciliationSection[]): Severity {
   const hasCritical = sections.some(
     (section) =>
-      section.mismatches_found > 0 && section.severity_on_mismatch === "critical",
+      section.mismatches_found > 0 &&
+      section.severity_on_mismatch === "critical",
   );
   if (hasCritical) return "critical";
 

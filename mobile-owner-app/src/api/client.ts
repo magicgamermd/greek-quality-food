@@ -3,7 +3,7 @@ import axios from "axios";
 import { authStore } from "../store/authStore";
 
 const BASE_URL =
-  (process.env.EXPO_PUBLIC_API_BASE_URL as string) || "http://localhost:3003";
+  (process.env.EXPO_PUBLIC_API_BASE_URL as string) || "http://localhost:3004";
 
 const client = axios.create({
   baseURL: BASE_URL,

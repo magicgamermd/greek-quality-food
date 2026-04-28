@@ -9,9 +9,11 @@ durable goods).
 
 ## Services
 
-- warehouse-backend (Fastify / TS / PostgreSQL 16) — port 3003
-- warehouse-frontend (React / Vite / Tailwind v4) — port 5173 dev
+- warehouse-backend (Fastify / TS / PostgreSQL 16) — port **3004** (Greek Foods Docker държи :3003)
+- warehouse-frontend (React / Vite / Tailwind v4) — port **5174** dev (Greek Foods държи :5173)
 - ai-service (Python / FastAPI) — port 8000, OCR of incoming documents
+- mertm-postgres Docker — host port **5433** (Greek Foods PG държи :5432)
+- mertm-redis Docker — host port **6380** (Greek Foods Redis държи :6379)
 - telegram-bot-tester (Node.js / TS) — conversational tester за Telegram бота, YAML сценарии, Haiku actor + Sonnet judge, ad-hoc CLI
 
 ## Agent Army

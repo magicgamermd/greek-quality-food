@@ -1,7 +1,13 @@
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 import { loginAsAdmin } from "./helpers/auth";
 
-const BACKEND_BASE_URL = process.env.E2E_BACKEND_BASE_URL ?? "http://127.0.0.1:3003";
+const BACKEND_BASE_URL =
+  process.env.E2E_BACKEND_BASE_URL ?? "http://127.0.0.1:3004";
 
 type AuthHeaders = Record<string, string>;
 
@@ -142,7 +148,9 @@ test.describe("Full Warehouse Flow", () => {
       authHeaders,
     );
 
-    console.log("Step 2: Navigating to Incoming Goods and opening manual entry...");
+    console.log(
+      "Step 2: Navigating to Incoming Goods and opening manual entry...",
+    );
     await page.goto("/incoming");
     await expect(page).toHaveURL(/\/incoming(?:[?#].*)?$/);
     await page.waitForSelector("table, [role='grid']", { timeout: 10000 });
@@ -165,7 +173,9 @@ test.describe("Full Warehouse Flow", () => {
     console.log(
       `Step 3: Filling manual-entry form with supplier "${testSupplier}" and invoice "${invoiceNumber}"...`,
     );
-    await manualDialog.getByPlaceholder("Име на нов доставчик").fill(testSupplier);
+    await manualDialog
+      .getByPlaceholder("Име на нов доставчик")
+      .fill(testSupplier);
     await manualDialog.getByPlaceholder("0000123456").fill(invoiceNumber);
 
     console.log("Step 4: Adding item in manual-entry form...");
@@ -177,15 +187,23 @@ test.describe("Full Warehouse Flow", () => {
     await manualDialog.locator('input[type="number"]').nth(1).fill("5.50");
 
     console.log("Step 5: Saving manual delivery...");
-    await manualDialog.getByRole("button", { name: /запиши доставка/i }).click();
+    await manualDialog
+      .getByRole("button", { name: /запиши доставка/i })
+      .click();
     await expect(manualDialog).toBeHidden({ timeout: 10000 });
 
-    console.log("Step 6: Verifying delivery and inventory impact via backend API...");
+    console.log(
+      "Step 6: Verifying delivery and inventory impact via backend API...",
+    );
 
     await expect
       .poll(
         async () => {
-          const probe = await checkInvoice(page.request, authHeaders, invoiceNumber);
+          const probe = await checkInvoice(
+            page.request,
+            authHeaders,
+            invoiceNumber,
+          );
           return probe.status ?? "missing";
         },
         {
@@ -195,11 +213,17 @@ test.describe("Full Warehouse Flow", () => {
       )
       .toBe("confirmed");
 
-    const invoiceProbe = await checkInvoice(page.request, authHeaders, invoiceNumber);
+    const invoiceProbe = await checkInvoice(
+      page.request,
+      authHeaders,
+      invoiceNumber,
+    );
     expect(invoiceProbe.duplicate).toBe(true);
     expect(invoiceProbe.existing_id).toBeTruthy();
     if (!invoiceProbe.existing_id) {
-      throw new Error(`Delivery with invoice ${invoiceNumber} was not created.`);
+      throw new Error(
+        `Delivery with invoice ${invoiceNumber} was not created.`,
+      );
     }
 
     const deliveryDetails = await getIncomingDetails(

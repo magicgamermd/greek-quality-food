@@ -37,7 +37,7 @@ app = FastAPI(
 # calls from the backend go server-to-server and don't care about CORS at all,
 # so in practice only browsers are affected; we keep this list tight to avoid
 # drive-by requests from other origins.
-_raw_origins = settings.backend_origin or "http://localhost:3003"
+_raw_origins = settings.backend_origin or "http://localhost:3004"
 _allowed_origins = [origin.strip() for origin in _raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
