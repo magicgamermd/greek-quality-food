@@ -1,5 +1,19 @@
 # MERT-M Warehouse Software — Project Guide
 
+## ⚠️ READ FIRST — Every Session
+
+**Before starting any work**, read `STATUS.md` at the repo root. It is
+the single source of truth for "where we are now" — current branch,
+recent commits, active blockers, key decisions, and live ports/creds.
+
+**After completing a significant step**, update `STATUS.md` so the
+next session (or the next compacted context) doesn't have to re-derive
+state from git history. The other `.md` files in the repo root are
+either project intro (`README.md`, this `CLAUDE.md`) or scoped
+artifacts (`PRODUCTION-READINESS-REPORT-2026-04-22.md`,
+`QA-NIGHT-REPORT-2026-04-22.md`); historical reports live in
+`docs/archive/`.
+
 ## Project Overview
 
 Warehouse management system for MERT-M, a Bulgarian distributor of commercial
