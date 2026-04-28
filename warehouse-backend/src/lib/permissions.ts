@@ -3,6 +3,11 @@
  * Backend route checks reference these constants; admin UI gets the
  * full catalog via GET /permissions/registry.
  */
+/**
+ * Permission registry — central catalog of all permission flags.
+ * Backend route checks reference these constants; admin UI gets the
+ * full catalog via GET /permissions/registry.
+ */
 
 export const PERMISSIONS = {
   // Sales / commercial
@@ -188,3 +193,82 @@ export const PERMISSION_REGISTRY: Array<{
     description: "Системни настройки на приложението",
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Runtime helpers — require DB + Redis; imported lazily so that the constant
+// exports above remain usable in contexts without those dependencies.
+// ---------------------------------------------------------------------------
+
+import { query } from "../db.js";
+import { getRedis } from "./redis.js";
+
+const CACHE_TTL_SECONDS = 60;
+const CACHE_KEY_PREFIX = "perms:user:";
+
+/**
+ * Resolve the effective permission set for a user.
+ * Checks Redis cache first; on miss, queries DB and caches result.
+ */
+export async function getUserPermissions(
+  userId: string,
+): Promise<Set<Permission>> {
+  const cacheKey = CACHE_KEY_PREFIX + userId;
+  const redis = await getRedis();
+
+  const cached = await redis.get(cacheKey);
+  if (cached) {
+    return new Set(JSON.parse(cached) as Permission[]);
+  }
+
+  const { rows } = await query(
+    `
+      SELECT u.role,
+             COALESCE(json_agg(
+               json_build_object('permission', upo.permission, 'granted', upo.granted)
+             ) FILTER (WHERE upo.id IS NOT NULL), '[]') AS overrides
+      FROM users u
+      LEFT JOIN user_permission_overrides upo ON upo.user_id = u.id
+      WHERE u.id = $1
+      GROUP BY u.id
+    `,
+    [userId],
+  );
+
+  if (rows.length === 0) return new Set();
+
+  const role = rows[0].role as UserRole;
+  const overrides = rows[0].overrides as Array<{
+    permission: Permission;
+    granted: boolean;
+  }>;
+
+  const effective = new Set<Permission>(ROLE_DEFAULTS[role] ?? []);
+  for (const { permission, granted } of overrides) {
+    if (granted) effective.add(permission);
+    else effective.delete(permission);
+  }
+
+  await redis.setex(
+    cacheKey,
+    CACHE_TTL_SECONDS,
+    JSON.stringify([...effective]),
+  );
+  return effective;
+}
+
+export async function invalidateUserPermissions(userId: string): Promise<void> {
+  const redis = await getRedis();
+  await redis.del(CACHE_KEY_PREFIX + userId);
+}
+
+/**
+ * Authorization check. Admin always returns true without consulting DB.
+ */
+export async function hasPermission(
+  user: { id: string; role: string },
+  perm: Permission,
+): Promise<boolean> {
+  if (user.role === "admin") return true;
+  const perms = await getUserPermissions(user.id);
+  return perms.has(perm);
+}
