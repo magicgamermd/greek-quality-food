@@ -5,7 +5,7 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-28
+**Last updated:** 2026-04-28 (after Phase 4 completion)
 **Active branch:** `feature/MERTM-tester-attachments-buttons`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
 
@@ -60,7 +60,7 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Done — Recent Sessions
 
-**Phase 1–3 separation work** (2026-04-28, 8 commits on this branch):
+**Phase 1–3 separation** (2026-04-28, 8 commits on this branch):
 
 - `64673bb` Phase 1 — defaults: reconciliation/lib.ts, start-frontend.sh,
   ai-service config defaults, env templates, e2e-tests ports `:3003 → :3004`
@@ -73,6 +73,20 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - `d29a928` Phase 3 Q5 — DEPRECATED markers on Comarch + batch/expiry scripts
 - `5de6d98` Phase 3 Q4 — admin password rotated + 13 e2e files updated
 
+**Phase 4 — operational cleanup** (2026-04-28, 5 commits):
+
+- `a6fa4d8` STATUS.md as single source of truth + archived 8 stale
+  reports to `docs/archive/`; CLAUDE.md "READ FIRST" rule
+- `9063457` `scripts/start-mertm.sh` — single-command idempotent boot
+  (`start | --status | --stop`)
+- `e2e99e8` ai-service `.venv311` recreated fresh (no longer copy of
+  greek-foods-platform venv); pyproject build-backend bug fixed
+  (`setuptools.backends.legacy:build` → `setuptools.build_meta`)
+- `9d77f84` `.claude/agents/mobile-dev.md` rewritten for mobile-owner-app
+  scope (3 screens) instead of the deleted general-purpose mobile-app
+- `aa59d6a` `docker-compose.backup.yml` header fixed + nightly-pg-dump
+  defaults rebranded (DB name, dump filename pattern)
+
 **Earlier (pre-summary):**
 
 - `aac0cf3` Overnight QA + production-readiness report
@@ -82,20 +96,15 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Next (ordered by impact)
 
-### Phase 4 — Operational cleanup
+### Phase 4 leftovers (deferred — not blocking)
 
-1. **Archive stale `.md`** reports to `docs/archive/` (this commit)
-2. **`scripts/start-mertm.sh`** — single-command boot of all 3 services
-3. **Recreate `ai-service/.venv311/`** fresh (currently shares lineage
-   with greek-foods-platform venv per `pyvenv.cfg`)
-4. **Rewrite `.claude/agents/mobile-dev.md`** for mobile-owner-app
-   (current spec was for the deleted mobile-app)
-5. **`docker-compose.yml` review** — backend already has one; root has
-   only `.backup.yml`; decide if a top-level compose is wanted
-6. **Refactor e2e specs to use `loginAsAdmin()`** instead of duplicating
-   login flow in 11 files
-7. **EAS dashboard** — register `com.mertm.owner` bundle for the
-   rebranded mobile-owner-app build
+1. **Refactor e2e specs to use `loginAsAdmin()`** instead of duplicating
+   login flow in 12 files (DRY cleanup, not functional)
+2. **EAS dashboard** — register `com.mertm.owner` bundle for the
+   rebranded mobile-owner-app build (manual web action, can't be
+   automated from CLI)
+3. **Comarch + batch/expiry actual deletion** — currently DEPRECATED
+   markers; future cleanup commit can remove the dead code entirely
 
 ### Production blockers (from PRODUCTION-READINESS-REPORT-2026-04-22.md)
 
@@ -110,17 +119,18 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Key Decisions (don't re-ask)
 
-| #   | Decision                                                                   | Date                 |
-| --- | -------------------------------------------------------------------------- | -------------------- |
-| 1   | Scope D — full cleanup + load testing + 100% coverage                      | 2026-04-22           |
-| 2   | Mobile: `mobile-app/` deleted, `mobile-owner-app/` kept                    | 2026-04-22           |
-| 3   | No batch/expiry tracking — MERT-M sells durable goods                      | 2026-04-20 (initial) |
-| 4   | Greek Foods coexists at `:3003 / :5432 / :6379`; never touched             | 2026-04-28           |
-| 5   | Q1 (B): API keys shared until production deploy                            | 2026-04-28           |
-| 6   | Q2 (A): `b2b-website/` deleted entirely                                    | 2026-04-28           |
-| 7   | Q3 (B): Greek Foods Bash permission stays in `.claude/settings.local.json` | 2026-04-28           |
-| 8   | Q4: New admin password rotated; e2e specs use env vars + new defaults      | 2026-04-28           |
-| 9   | Q5 (B): Comarch + batch/expiry scripts marked DEPRECATED, not deleted      | 2026-04-28           |
+| #   | Decision                                                                                  | Date                 |
+| --- | ----------------------------------------------------------------------------------------- | -------------------- |
+| 1   | Scope D — full cleanup + load testing + 100% coverage                                     | 2026-04-22           |
+| 2   | Mobile: `mobile-app/` deleted, `mobile-owner-app/` kept                                   | 2026-04-22           |
+| 3   | No batch/expiry tracking — MERT-M sells durable goods                                     | 2026-04-20 (initial) |
+| 4   | Greek Foods coexists at `:3003 / :5432 / :6379`; never touched                            | 2026-04-28           |
+| 5   | Q1 (B): API keys shared until production deploy                                           | 2026-04-28           |
+| 6   | Q2 (A): `b2b-website/` deleted entirely                                                   | 2026-04-28           |
+| 7   | Q3 (B): Greek Foods Bash permission stays in `.claude/settings.local.json`                | 2026-04-28           |
+| 8   | Q4: New admin password rotated; e2e specs use env vars + new defaults                     | 2026-04-28           |
+| 9   | Q5 (B): Comarch + batch/expiry scripts marked DEPRECATED, not deleted                     | 2026-04-28           |
+| 10  | Phase 4 complete: STATUS + boot script + fresh venv + mobile-dev rewrite + backup cleanup | 2026-04-28           |
 
 ---
 
