@@ -7,6 +7,14 @@ vi.mock("../db.js", () => ({
   transaction: vi.fn(),
 }));
 
+vi.mock("../lib/redis.js", () => ({
+  getRedis: vi.fn(async () => ({
+    get: vi.fn(async () => null),
+    setex: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 0),
+  })),
+}));
+
 import { query, transaction } from "../db.js";
 
 const mockQuery = vi.mocked(query);
@@ -38,8 +46,17 @@ describe("incoming cancel endpoint", () => {
     mockTransaction.mockReset();
   });
 
-  it("forbids warehouse role from cancelling incoming documents", async () => {
-    const app = await buildAppWithRole("warehouse");
+  // MERT-M permissions refactor: cancel-incoming is gated by
+  // INCOMING_MANAGE. warehouse/accountant/admin all have that
+  // permission (per ROLE_DEFAULTS), sales does not. The old
+  // owner_mobile-only flow no longer exists.
+
+  it("forbids sales role from cancelling incoming documents", async () => {
+    mockQuery.mockResolvedValueOnce(
+      resultRows([{ role: "sales", overrides: [] }]),
+    );
+
+    const app = await buildAppWithRole("sales");
     try {
       const res = await app.inject({
         method: "PUT",
@@ -53,7 +70,7 @@ describe("incoming cancel endpoint", () => {
     }
   });
 
-  it("allows owner_mobile to cancel pending incoming document", async () => {
+  it("allows admin to cancel pending incoming document", async () => {
     const clientQuery = vi
       .fn()
       .mockResolvedValueOnce(
@@ -66,7 +83,7 @@ describe("incoming cancel endpoint", () => {
       callback({ query: clientQuery }),
     );
 
-    const app = await buildAppWithRole("owner_mobile");
+    const app = await buildAppWithRole("admin");
     try {
       const res = await app.inject({
         method: "PUT",
@@ -83,8 +100,12 @@ describe("incoming cancel endpoint", () => {
       expect(mockTransaction).toHaveBeenCalledTimes(1);
       expect(clientQuery).toHaveBeenCalledTimes(3);
       expect(String(clientQuery.mock.calls[0][0])).toContain("FOR UPDATE");
-      expect(String(clientQuery.mock.calls[1][0])).toContain("UPDATE incoming_goods");
-      expect(String(clientQuery.mock.calls[2][0])).toContain("INSERT INTO notifications");
+      expect(String(clientQuery.mock.calls[1][0])).toContain(
+        "UPDATE incoming_goods",
+      );
+      expect(String(clientQuery.mock.calls[2][0])).toContain(
+        "INSERT INTO notifications",
+      );
       expect(clientQuery.mock.calls[2][1]).toEqual([
         "Доставка #55 (фактура INV-55) е отказана. Причина: Грешно сканирана фактура",
       ]);
@@ -104,7 +125,7 @@ describe("incoming cancel endpoint", () => {
       callback({ query: clientQuery }),
     );
 
-    const app = await buildAppWithRole("owner_mobile");
+    const app = await buildAppWithRole("admin");
     try {
       const res = await app.inject({
         method: "PUT",
@@ -112,7 +133,9 @@ describe("incoming cancel endpoint", () => {
       });
 
       expect(res.statusCode).toBe(400);
-      expect(res.json().message).toContain("Cannot cancel: status is confirmed");
+      expect(res.json().message).toContain(
+        "Cannot cancel: status is confirmed",
+      );
       expect(clientQuery).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();

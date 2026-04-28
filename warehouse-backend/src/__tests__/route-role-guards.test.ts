@@ -105,7 +105,10 @@ describe("warehouse role route guards", () => {
   });
 
   it("allows warehouse to read incoming list", async () => {
-    mockQuery.mockResolvedValueOnce(resultRows([]));
+    // permission lookup — warehouse role has INCOMING_MANAGE
+    mockQuery
+      .mockResolvedValueOnce(resultRows([{ role: "warehouse", overrides: [] }]))
+      .mockResolvedValueOnce(resultRows([]));
 
     const app = await buildAppWithRole(
       "warehouse",
@@ -117,7 +120,8 @@ describe("warehouse role route guards", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ data: [] });
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      // 1 permission lookup + 1 business-logic SELECT
+      expect(mockQuery).toHaveBeenCalledTimes(2);
     } finally {
       await app.close();
     }

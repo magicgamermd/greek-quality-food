@@ -9,17 +9,27 @@ vi.mock("../db.js", () => ({
   transaction: vi.fn(),
 }));
 
+vi.mock("../lib/redis.js", () => ({
+  getRedis: vi.fn(async () => ({
+    get: vi.fn(async () => null),
+    setex: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 0),
+  })),
+}));
+
 vi.mock("../services/document-pdf.js", () => ({
-  generateIncomingStockReceiptPdf: vi.fn().mockImplementation(async ({ outputPath }) => {
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(outputPath, "%PDF-1.4\n%%EOF\n");
-  }),
+  generateIncomingStockReceiptPdf: vi
+    .fn()
+    .mockImplementation(async ({ outputPath }) => {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, "%PDF-1.4\n%%EOF\n");
+    }),
 }));
 
 import { query } from "../db.js";
 import { generateIncomingStockReceiptPdf } from "../services/document-pdf.js";
 
-type Role = "admin" | "warehouse" | "owner_mobile";
+type Role = "admin" | "warehouse" | "sales" | "owner_mobile";
 
 const mockQuery = vi.mocked(query);
 
@@ -48,8 +58,15 @@ describe("incoming stock receipt endpoint", () => {
     mockQuery.mockReset();
   });
 
-  it("forbids owner_mobile role", async () => {
-    const app = await buildAppWithRole("owner_mobile");
+  it("forbids sales role (lacks incoming.manage)", async () => {
+    // MERT-M permissions: sales role does not have INCOMING_MANAGE in
+    // ROLE_DEFAULTS, so the requirePermission middleware rejects with
+    // 403 after the single permission lookup query.
+    mockQuery.mockResolvedValueOnce(
+      resultRows([{ role: "sales", overrides: [] }]),
+    );
+
+    const app = await buildAppWithRole("sales");
     try {
       const res = await app.inject({
         method: "GET",
@@ -57,7 +74,8 @@ describe("incoming stock receipt endpoint", () => {
       });
 
       expect(res.statusCode).toBe(403);
-      expect(mockQuery).not.toHaveBeenCalled();
+      // Only the permission lookup ran — no business-logic queries.
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }
@@ -74,7 +92,9 @@ describe("incoming stock receipt endpoint", () => {
       ]),
     );
 
-    const app = await buildAppWithRole("warehouse");
+    // Admin short-circuits the permission check, so only the single
+    // SELECT against incoming_goods runs before the 409.
+    const app = await buildAppWithRole("admin");
     try {
       const res = await app.inject({
         method: "GET",
@@ -200,4 +220,3 @@ describe("incoming stock receipt endpoint", () => {
     }
   });
 });
-

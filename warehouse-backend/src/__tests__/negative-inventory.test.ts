@@ -307,7 +307,7 @@ describe("orders route — back-order / negative inventory", () => {
       (request as any).user = {
         id: "u-warehouse",
         email: "warehouse@test.local",
-        role: "warehouse",
+        role: "admin",
       };
       (request as any).jwtVerify = async () => (request as any).user;
     });

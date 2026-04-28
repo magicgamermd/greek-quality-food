@@ -2,6 +2,11 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { type PoolClient } from "pg";
 import { z } from "zod";
 import { query, transaction } from "../db.js";
+import {
+  requirePermission,
+  hasPermission,
+  PERMISSIONS,
+} from "../lib/permissions.js";
 import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
 import {
   generateStockDispatchPdf,
@@ -275,6 +280,15 @@ async function resolveOrderObjectSelection(
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   await request.jwtVerify();
 }
+
+const jwtVerify = async (request: FastifyRequest) => {
+  await request.jwtVerify();
+};
+
+const ordersManagePreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.ORDERS_MANAGE),
+];
 
 export default async function orderRoutes(app: FastifyInstance) {
   // GET /orders/products-for-order — products with stock + partner price in one call
@@ -600,94 +614,92 @@ export default async function orderRoutes(app: FastifyInstance) {
   });
 
   // POST /orders — create order
-  app.post("/", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (request.user.role === "accountant") {
-      return reply.status(403).send({ error: "Insufficient permissions" });
-    }
+  app.post(
+    "/",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = createOrderSchema.parse(request.body);
 
-    const body = createOrderSchema.parse(request.body);
+      let oversell_items: OversellInfo[] = [];
 
-    let oversell_items: OversellInfo[] = [];
+      const result = await transaction(async (client) => {
+        // Get partner's price list for default pricing
+        const {
+          rows: [partner],
+        } = await client.query("SELECT * FROM partners WHERE id = $1", [
+          body.partner_id,
+        ]);
 
-    const result = await transaction(async (client) => {
-      // Get partner's price list for default pricing
-      const {
-        rows: [partner],
-      } = await client.query("SELECT * FROM partners WHERE id = $1", [
-        body.partner_id,
-      ]);
-
-      if (!partner) {
-        throw Object.assign(new Error("Partner not found"), {
-          statusCode: 404,
-        });
-      }
-
-      const requestNumber = normalizeOptionalText(body.request_number);
-      const objectSelection = await resolveOrderObjectSelection(client, {
-        partnerId: body.partner_id,
-        partnerObjectId: body.partner_object_id ?? null,
-        objectName: body.object_name,
-        objectCode: body.object_code,
-      });
-
-      let priceMap = new Map<number, number>();
-      if (partner.price_list_id) {
-        const { rows: prices } = await client.query(
-          "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
-          [partner.price_list_id],
-        );
-        for (const p of prices) {
-          priceMap.set(p.product_id, parseFloat(p.price));
+        if (!partner) {
+          throw Object.assign(new Error("Partner not found"), {
+            statusCode: 404,
+          });
         }
-      }
 
-      // Map partner's price group to the product column name
-      const priceGroupColumnMap: Record<string, string> = {
-        "Цена на едро": "selling_price",
-        "Цена на дребно": "retail_price",
-        "Ценова група 1": "price_group_1",
-        "Ценова група 2": "price_group_2",
-        "Ценова група 3": "price_group_3",
-        "Ценова група 4": "price_group_4",
-        "Ценова група 5": "price_group_5",
-        "Ценова група 6": "price_group_6",
-        "Ценова група 7": "price_group_7",
-        "Ценова група 8": "price_group_8",
-      };
-      const partnerPriceColumn = partner.price_group
-        ? priceGroupColumnMap[partner.price_group] || "selling_price"
-        : "selling_price";
+        const requestNumber = normalizeOptionalText(body.request_number);
+        const objectSelection = await resolveOrderObjectSelection(client, {
+          partnerId: body.partner_id,
+          partnerObjectId: body.partner_object_id ?? null,
+          objectName: body.object_name,
+          objectCode: body.object_code,
+        });
 
-      // Load product data including the partner's price group column
-      const productIds = [...new Set(body.items.map((i) => i.product_id))];
-      const { rows: productData } = await client.query(
-        `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg FROM products WHERE id = ANY($1)`,
-        [productIds],
-      );
-      const productMap = new Map(productData.map((p: any) => [p.id, p]));
+        let priceMap = new Map<number, number>();
+        if (partner.price_list_id) {
+          const { rows: prices } = await client.query(
+            "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
+            [partner.price_list_id],
+          );
+          for (const p of prices) {
+            priceMap.set(p.product_id, parseFloat(p.price));
+          }
+        }
 
-      if (productMap.size !== productIds.length) {
-        const missingIds = productIds.filter((pid) => !productMap.has(pid));
-        throw Object.assign(
-          new Error(`Invalid product ids: ${missingIds.join(", ")}`),
-          { statusCode: 400 },
+        // Map partner's price group to the product column name
+        const priceGroupColumnMap: Record<string, string> = {
+          "Цена на едро": "selling_price",
+          "Цена на дребно": "retail_price",
+          "Ценова група 1": "price_group_1",
+          "Ценова група 2": "price_group_2",
+          "Ценова група 3": "price_group_3",
+          "Ценова група 4": "price_group_4",
+          "Ценова група 5": "price_group_5",
+          "Ценова група 6": "price_group_6",
+          "Ценова група 7": "price_group_7",
+          "Ценова група 8": "price_group_8",
+        };
+        const partnerPriceColumn = partner.price_group
+          ? priceGroupColumnMap[partner.price_group] || "selling_price"
+          : "selling_price";
+
+        // Load product data including the partner's price group column
+        const productIds = [...new Set(body.items.map((i) => i.product_id))];
+        const { rows: productData } = await client.query(
+          `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg FROM products WHERE id = ANY($1)`,
+          [productIds],
         );
-      }
+        const productMap = new Map(productData.map((p: any) => [p.id, p]));
 
-      const validationResult = await validateRequestedStock(
-        client,
-        body.items,
-        productMap,
-      );
-      oversell_items = validationResult.oversell_items;
+        if (productMap.size !== productIds.length) {
+          const missingIds = productIds.filter((pid) => !productMap.has(pid));
+          throw Object.assign(
+            new Error(`Invalid product ids: ${missingIds.join(", ")}`),
+            { statusCode: 400 },
+          );
+        }
 
-      // Create order with sequential order_number
-      const {
-        rows: [order],
-      } = await client.query(
-        `INSERT INTO orders (
+        const validationResult = await validateRequestedStock(
+          client,
+          body.items,
+          productMap,
+        );
+        oversell_items = validationResult.oversell_items;
+
+        // Create order with sequential order_number
+        const {
+          rows: [order],
+        } = await client.query(
+          `INSERT INTO orders (
            partner_id, delivery_date, notes, source, request_number,
            partner_object_id, object_name, object_code,
            econt_receiver_name, econt_receiver_phone, econt_delivery_type,
@@ -700,94 +712,95 @@ export default async function orderRoutes(app: FastifyInstance) {
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  'pending', nextval('order_number_seq'))
          RETURNING *`,
-        [
-          body.partner_id,
-          body.delivery_date || null,
-          body.notes || null,
-          body.source,
-          requestNumber,
-          objectSelection.partnerObjectId,
-          objectSelection.objectName,
-          objectSelection.objectCode,
-          body.econt_receiver_name ?? null,
-          body.econt_receiver_phone ?? null,
-          body.econt_delivery_type ?? null,
-          body.econt_city ?? null,
-          body.econt_office_code ?? null,
-          body.econt_office_name ?? null,
-          body.econt_street ?? null,
-          body.econt_street_num ?? null,
-          body.econt_cod_amount ?? null,
-          body.econt_weight ?? null,
-          body.econt_shipping_cost ?? null,
-          body.econt_payer ?? null,
-        ],
-      );
-
-      let totalAmount = 0;
-      const items = [];
-
-      for (const item of body.items) {
-        // Price resolution chain: explicit > partner price list > product selling_price > 0
-        const prod = productMap.get(item.product_id);
-        const unitPrice =
-          item.unit_price ??
-          priceMap.get(item.product_id) ??
-          (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
-          0;
-        // total_price е post-discount (qty × цена × (1 − отст/100)), закръглено
-        // до 2 знака защото колоната е numeric(12,2) — така СУМ-ите в фактурата
-        // не се разминават с визуалните стойности по редовете.
-        const discountPct = item.discount_percent ?? 0;
-        const totalPrice = Number(
-          (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
-        );
-        totalAmount += totalPrice;
-
-        const {
-          rows: [orderItem],
-        } = await client.query(
-          `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
           [
-            order.id,
-            item.product_id,
-            item.quantity,
-            unitPrice,
-            discountPct,
-            totalPrice,
+            body.partner_id,
+            body.delivery_date || null,
+            body.notes || null,
+            body.source,
+            requestNumber,
+            objectSelection.partnerObjectId,
+            objectSelection.objectName,
+            objectSelection.objectCode,
+            body.econt_receiver_name ?? null,
+            body.econt_receiver_phone ?? null,
+            body.econt_delivery_type ?? null,
+            body.econt_city ?? null,
+            body.econt_office_code ?? null,
+            body.econt_office_name ?? null,
+            body.econt_street ?? null,
+            body.econt_street_num ?? null,
+            body.econt_cod_amount ?? null,
+            body.econt_weight ?? null,
+            body.econt_shipping_cost ?? null,
+            body.econt_payer ?? null,
           ],
         );
-        items.push(orderItem);
+
+        let totalAmount = 0;
+        const items = [];
+
+        for (const item of body.items) {
+          // Price resolution chain: explicit > partner price list > product selling_price > 0
+          const prod = productMap.get(item.product_id);
+          const unitPrice =
+            item.unit_price ??
+            priceMap.get(item.product_id) ??
+            (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+            0;
+          // total_price е post-discount (qty × цена × (1 − отст/100)), закръглено
+          // до 2 знака защото колоната е numeric(12,2) — така СУМ-ите в фактурата
+          // не се разминават с визуалните стойности по редовете.
+          const discountPct = item.discount_percent ?? 0;
+          const totalPrice = Number(
+            (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
+          );
+          totalAmount += totalPrice;
+
+          const {
+            rows: [orderItem],
+          } = await client.query(
+            `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [
+              order.id,
+              item.product_id,
+              item.quantity,
+              unitPrice,
+              discountPct,
+              totalPrice,
+            ],
+          );
+          items.push(orderItem);
+        }
+
+        // Update total
+        await client.query(
+          "UPDATE orders SET total_amount = $1 WHERE id = $2",
+          [totalAmount, order.id],
+        );
+
+        // Notification
+        await client.query(
+          `INSERT INTO notifications (type, message) VALUES ('order_created', $1)`,
+          [
+            `Нова поръчка #${order.id} от ${partner.name} на стойност ${totalAmount.toFixed(2)} €`,
+          ],
+        );
+
+        return {
+          ...order,
+          total_amount: totalAmount,
+          items,
+        };
+      });
+
+      const response: any = { ...result };
+      if (oversell_items.length > 0) {
+        response.warnings = { oversell: oversell_items };
       }
-
-      // Update total
-      await client.query("UPDATE orders SET total_amount = $1 WHERE id = $2", [
-        totalAmount,
-        order.id,
-      ]);
-
-      // Notification
-      await client.query(
-        `INSERT INTO notifications (type, message) VALUES ('order_created', $1)`,
-        [
-          `Нова поръчка #${order.id} от ${partner.name} на стойност ${totalAmount.toFixed(2)} €`,
-        ],
-      );
-
-      return {
-        ...order,
-        total_amount: totalAmount,
-        items,
-      };
-    });
-
-    const response: any = { ...result };
-    if (oversell_items.length > 0) {
-      response.warnings = { oversell: oversell_items };
-    }
-    return reply.status(201).send(response);
-  });
+      return reply.status(201).send(response);
+    },
+  );
 
   // POST /orders/from-comarch — create order from Comarch ERP sync
   app.post(
@@ -976,238 +989,243 @@ export default async function orderRoutes(app: FastifyInstance) {
   );
 
   // PUT /orders/:id — edit order details
-  app.put("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (request.user.role === "accountant") {
-      return reply.status(403).send({ error: "Insufficient permissions" });
-    }
+  app.put(
+    "/:id",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const body = updateOrderSchema.parse(request.body);
 
-    const { id } = request.params as { id: string };
-    const body = updateOrderSchema.parse(request.body);
-
-    const {
-      rows: [order],
-    } = await query("SELECT * FROM orders WHERE id = $1", [id]);
-
-    if (!order) {
-      return reply.status(404).send({ error: "Order not found" });
-    }
-    if (order.status === "cancelled") {
-      return reply.status(400).send({ error: "Cannot edit a cancelled order" });
-    }
-
-    const orderId = Number(id);
-
-    const result = await transaction(async (client) => {
-      // Update order fields
-      const sets: string[] = ["updated_at = NOW()"];
-      const params: any[] = [];
-      let paramIdx = 1;
-
-      if (body.delivery_date !== undefined) {
-        sets.push(`delivery_date = $${paramIdx++}`);
-        params.push(body.delivery_date || null);
-      }
-      if (body.notes !== undefined) {
-        sets.push(`notes = $${paramIdx++}`);
-        params.push(body.notes || null);
-      }
-      if (body.request_number !== undefined) {
-        sets.push(`request_number = $${paramIdx++}`);
-        params.push(normalizeOptionalText(body.request_number));
-      }
-
-      const shouldUpdateObjectSelection =
-        body.partner_object_id !== undefined ||
-        body.object_name !== undefined ||
-        body.object_code !== undefined;
-      if (shouldUpdateObjectSelection) {
-        const objectSelection = await resolveOrderObjectSelection(client, {
-          partnerId: order.partner_id,
-          partnerObjectId: body.partner_object_id ?? null,
-          objectName: body.object_name,
-          objectCode: body.object_code,
-        });
-        sets.push(`partner_object_id = $${paramIdx++}`);
-        params.push(objectSelection.partnerObjectId);
-        sets.push(`object_name = $${paramIdx++}`);
-        params.push(objectSelection.objectName);
-        sets.push(`object_code = $${paramIdx++}`);
-        params.push(objectSelection.objectCode);
-      }
-
-      const econtFields: Array<keyof typeof body> = [
-        "econt_receiver_name",
-        "econt_receiver_phone",
-        "econt_delivery_type",
-        "econt_city",
-        "econt_office_code",
-        "econt_office_name",
-        "econt_street",
-        "econt_street_num",
-        "econt_cod_amount",
-        "econt_weight",
-        "econt_payer",
-      ];
-      for (const field of econtFields) {
-        if (body[field] !== undefined) {
-          sets.push(`${field} = $${paramIdx++}`);
-          params.push(body[field] ?? null);
-        }
-      }
-      params.push(id);
       const {
-        rows: [updated],
-      } = await client.query(
-        `UPDATE orders SET ${sets.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
-        params,
-      );
+        rows: [order],
+      } = await query("SELECT * FROM orders WHERE id = $1", [id]);
 
-      // Replace items if provided
-      if (body.items) {
-        const mustReconcileStock = STOCK_COMMITTED_STATUSES.has(updated.status);
+      if (!order) {
+        return reply.status(404).send({ error: "Order not found" });
+      }
+      if (order.status === "cancelled") {
+        return reply
+          .status(400)
+          .send({ error: "Cannot edit a cancelled order" });
+      }
 
-        // Get partner for pricing
-        const {
-          rows: [partner],
-        } = await client.query("SELECT * FROM partners WHERE id = $1", [
-          updated.partner_id,
-        ]);
+      const orderId = Number(id);
 
-        if (!partner) {
-          throw Object.assign(new Error("Partner not found"), {
-            statusCode: 404,
-          });
+      const result = await transaction(async (client) => {
+        // Update order fields
+        const sets: string[] = ["updated_at = NOW()"];
+        const params: any[] = [];
+        let paramIdx = 1;
+
+        if (body.delivery_date !== undefined) {
+          sets.push(`delivery_date = $${paramIdx++}`);
+          params.push(body.delivery_date || null);
+        }
+        if (body.notes !== undefined) {
+          sets.push(`notes = $${paramIdx++}`);
+          params.push(body.notes || null);
+        }
+        if (body.request_number !== undefined) {
+          sets.push(`request_number = $${paramIdx++}`);
+          params.push(normalizeOptionalText(body.request_number));
         }
 
-        let priceMap = new Map<number, number>();
-        if (partner.price_list_id) {
-          const { rows: prices } = await client.query(
-            "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
-            [partner.price_list_id],
-          );
-          for (const p of prices) {
-            priceMap.set(p.product_id, parseFloat(p.price));
+        const shouldUpdateObjectSelection =
+          body.partner_object_id !== undefined ||
+          body.object_name !== undefined ||
+          body.object_code !== undefined;
+        if (shouldUpdateObjectSelection) {
+          const objectSelection = await resolveOrderObjectSelection(client, {
+            partnerId: order.partner_id,
+            partnerObjectId: body.partner_object_id ?? null,
+            objectName: body.object_name,
+            objectCode: body.object_code,
+          });
+          sets.push(`partner_object_id = $${paramIdx++}`);
+          params.push(objectSelection.partnerObjectId);
+          sets.push(`object_name = $${paramIdx++}`);
+          params.push(objectSelection.objectName);
+          sets.push(`object_code = $${paramIdx++}`);
+          params.push(objectSelection.objectCode);
+        }
+
+        const econtFields: Array<keyof typeof body> = [
+          "econt_receiver_name",
+          "econt_receiver_phone",
+          "econt_delivery_type",
+          "econt_city",
+          "econt_office_code",
+          "econt_office_name",
+          "econt_street",
+          "econt_street_num",
+          "econt_cod_amount",
+          "econt_weight",
+          "econt_payer",
+        ];
+        for (const field of econtFields) {
+          if (body[field] !== undefined) {
+            sets.push(`${field} = $${paramIdx++}`);
+            params.push(body[field] ?? null);
           }
         }
-
-        const productIds = [...new Set(body.items.map((i) => i.product_id))];
-        const { rows: productData } = await client.query(
-          "SELECT id, name_bg, selling_price FROM products WHERE id = ANY($1)",
-          [productIds],
-        );
-        const productMap = new Map(productData.map((p: any) => [p.id, p]));
-        if (productMap.size !== productIds.length) {
-          const missingIds = productIds.filter((pid) => !productMap.has(pid));
-          throw Object.assign(
-            new Error(`Invalid product ids: ${missingIds.join(", ")}`),
-            { statusCode: 400 },
-          );
-        }
-
-        if (mustReconcileStock) {
-          await restoreOrderItemsToInventory(client, orderId);
-        }
-
-        await client.query("DELETE FROM order_items WHERE order_id = $1", [id]);
-        const { oversell_items } = await validateRequestedStock(
-          client,
-          body.items,
-          productMap,
+        params.push(id);
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE orders SET ${sets.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
+          params,
         );
 
-        let totalAmount = 0;
-        const items = [];
-
-        for (const item of body.items) {
-          const prod = productMap.get(item.product_id);
-          const unitPrice =
-            item.unit_price ??
-            priceMap.get(item.product_id) ??
-            (prod?.selling_price ? parseFloat(prod.selling_price) : 0);
-          const discountPct = item.discount_percent ?? 0;
-          const totalPrice = Number(
-            (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
+        // Replace items if provided
+        if (body.items) {
+          const mustReconcileStock = STOCK_COMMITTED_STATUSES.has(
+            updated.status,
           );
-          totalAmount += totalPrice;
 
-          // MERT-M: COGS is captured from products.purchase_price at the
-          // moment the order is (re)committed to stock. Batch-sourced COGS
-          // (cost_source_batch_id) is obsolete — left NULL in the DB.
-          let costUnitPrice: number | null = null;
-          if (mustReconcileStock) {
-            costUnitPrice = await deductProductStock(
-              client,
-              item.product_id,
-              item.quantity,
+          // Get partner for pricing
+          const {
+            rows: [partner],
+          } = await client.query("SELECT * FROM partners WHERE id = $1", [
+            updated.partner_id,
+          ]);
+
+          if (!partner) {
+            throw Object.assign(new Error("Partner not found"), {
+              statusCode: 404,
+            });
+          }
+
+          let priceMap = new Map<number, number>();
+          if (partner.price_list_id) {
+            const { rows: prices } = await client.query(
+              "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
+              [partner.price_list_id],
+            );
+            for (const p of prices) {
+              priceMap.set(p.product_id, parseFloat(p.price));
+            }
+          }
+
+          const productIds = [...new Set(body.items.map((i) => i.product_id))];
+          const { rows: productData } = await client.query(
+            "SELECT id, name_bg, selling_price FROM products WHERE id = ANY($1)",
+            [productIds],
+          );
+          const productMap = new Map(productData.map((p: any) => [p.id, p]));
+          if (productMap.size !== productIds.length) {
+            const missingIds = productIds.filter((pid) => !productMap.has(pid));
+            throw Object.assign(
+              new Error(`Invalid product ids: ${missingIds.join(", ")}`),
+              { statusCode: 400 },
             );
           }
 
-          const {
-            rows: [orderItem],
-          } = await client.query(
-            `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price)
+          if (mustReconcileStock) {
+            await restoreOrderItemsToInventory(client, orderId);
+          }
+
+          await client.query("DELETE FROM order_items WHERE order_id = $1", [
+            id,
+          ]);
+          const { oversell_items } = await validateRequestedStock(
+            client,
+            body.items,
+            productMap,
+          );
+
+          let totalAmount = 0;
+          const items = [];
+
+          for (const item of body.items) {
+            const prod = productMap.get(item.product_id);
+            const unitPrice =
+              item.unit_price ??
+              priceMap.get(item.product_id) ??
+              (prod?.selling_price ? parseFloat(prod.selling_price) : 0);
+            const discountPct = item.discount_percent ?? 0;
+            const totalPrice = Number(
+              (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
+            );
+            totalAmount += totalPrice;
+
+            // MERT-M: COGS is captured from products.purchase_price at the
+            // moment the order is (re)committed to stock. Batch-sourced COGS
+            // (cost_source_batch_id) is obsolete — left NULL in the DB.
+            let costUnitPrice: number | null = null;
+            if (mustReconcileStock) {
+              costUnitPrice = await deductProductStock(
+                client,
+                item.product_id,
+                item.quantity,
+              );
+            }
+
+            const {
+              rows: [orderItem],
+            } = await client.query(
+              `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price)
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+              [
+                id,
+                item.product_id,
+                item.quantity,
+                unitPrice,
+                discountPct,
+                totalPrice,
+                costUnitPrice,
+              ],
+            );
+            items.push(orderItem);
+          }
+
+          await client.query(
+            "UPDATE orders SET total_amount = $1 WHERE id = $2",
+            [totalAmount, id],
+          );
+
+          let regeneratedInvoiceId: number | null = null;
+          if (updated.invoice_id) {
+            regeneratedInvoiceId = await regenerateActiveInvoiceForOrder(
+              client,
+              orderId,
+              updated.partner_id,
+              updated.invoice_id,
+            );
+          }
+
+          if (mustReconcileStock) {
+            await regenerateDependentOrderDocuments(client, orderId);
+          }
+
+          const orderRef = updated.order_number || updated.id;
+          await client.query(
+            `INSERT INTO notifications (type, message) VALUES ('order_updated', $1)`,
             [
-              id,
-              item.product_id,
-              item.quantity,
-              unitPrice,
-              discountPct,
-              totalPrice,
-              costUnitPrice,
+              regeneratedInvoiceId
+                ? `Поръчка #${orderRef} е редактирана след фактуриране. Фактурата и документите са регенерирани.`
+                : `Поръчка #${orderRef} е редактирана.`,
             ],
           );
-          items.push(orderItem);
+
+          const putResponse: any = {
+            ...updated,
+            total_amount: totalAmount,
+            items,
+            regenerated_invoice_id: regeneratedInvoiceId,
+            regenerated_documents: mustReconcileStock,
+          };
+          if (oversell_items.length > 0) {
+            putResponse.warnings = { oversell: oversell_items };
+          }
+          return putResponse;
         }
 
-        await client.query(
-          "UPDATE orders SET total_amount = $1 WHERE id = $2",
-          [totalAmount, id],
-        );
+        return updated;
+      });
 
-        let regeneratedInvoiceId: number | null = null;
-        if (updated.invoice_id) {
-          regeneratedInvoiceId = await regenerateActiveInvoiceForOrder(
-            client,
-            orderId,
-            updated.partner_id,
-            updated.invoice_id,
-          );
-        }
-
-        if (mustReconcileStock) {
-          await regenerateDependentOrderDocuments(client, orderId);
-        }
-
-        const orderRef = updated.order_number || updated.id;
-        await client.query(
-          `INSERT INTO notifications (type, message) VALUES ('order_updated', $1)`,
-          [
-            regeneratedInvoiceId
-              ? `Поръчка #${orderRef} е редактирана след фактуриране. Фактурата и документите са регенерирани.`
-              : `Поръчка #${orderRef} е редактирана.`,
-          ],
-        );
-
-        const putResponse: any = {
-          ...updated,
-          total_amount: totalAmount,
-          items,
-          regenerated_invoice_id: regeneratedInvoiceId,
-          regenerated_documents: mustReconcileStock,
-        };
-        if (oversell_items.length > 0) {
-          putResponse.warnings = { oversell: oversell_items };
-        }
-        return putResponse;
-      }
-
-      return updated;
-    });
-
-    return result;
-  });
+      return result;
+    },
+  );
 
   // MERT-M: removed PATCH /orders/:id/items/:itemId — it only edited
   // batch_number / expiry_date on an order line, which no longer exists
@@ -1218,12 +1236,8 @@ export default async function orderRoutes(app: FastifyInstance) {
   // return the goods back to inventory.
   app.put(
     "/:id/status",
+    { preHandler: ordersManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (request.user.role === "accountant") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
       const { id } = request.params as { id: string };
       const { status } = updateStatusSchema.parse(request.body);
 
@@ -1266,12 +1280,8 @@ export default async function orderRoutes(app: FastifyInstance) {
   // POST /orders/:id/fulfill — deduct per-product stock and snapshot COGS
   app.post(
     "/:id/fulfill",
+    { preHandler: ordersManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (request.user.role === "accountant") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
       const { id } = request.params as { id: string };
 
       const result = await transaction(async (client) => {
@@ -1358,113 +1368,113 @@ export default async function orderRoutes(app: FastifyInstance) {
   );
 
   // DELETE /orders/:id — cancel an order (soft delete) with stock return for fulfilled orders
-  app.delete("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (request.user.role === "accountant") {
-      return reply.status(403).send({ error: "Insufficient permissions" });
-    }
+  app.delete(
+    "/:id",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
 
-    const { id } = request.params as { id: string };
-
-    // Fetch minimal order snapshot outside the transaction only to give
-    // good error messages for missing orders. The authoritative read/lock
-    // happens inside the transaction below with FOR UPDATE.
-    const {
-      rows: [orderSnapshot],
-    } = await query("SELECT id FROM orders WHERE id = $1", [id]);
-
-    if (!orderSnapshot) {
-      return reply.status(404).send({ error: "Order not found" });
-    }
-
-    const order = await transaction(async (client) => {
+      // Fetch minimal order snapshot outside the transaction only to give
+      // good error messages for missing orders. The authoritative read/lock
+      // happens inside the transaction below with FOR UPDATE.
       const {
-        rows: [locked],
-      } = await client.query("SELECT * FROM orders WHERE id = $1 FOR UPDATE", [
-        id,
-      ]);
-      return locked;
-    });
+        rows: [orderSnapshot],
+      } = await query("SELECT id FROM orders WHERE id = $1", [id]);
 
-    if (!order) {
-      return reply.status(404).send({ error: "Order not found" });
-    }
+      if (!orderSnapshot) {
+        return reply.status(404).send({ error: "Order not found" });
+      }
 
-    // Invoiced orders can't be cancelled — use credit note instead.
-    // After the flow refactor "Фактурирана" is a flag, so check invoice_id.
-    if (order.invoice_id) {
-      return reply.status(400).send({
-        error:
-          "Не може да се отмени фактурирана поръчка директно. Първо анулирайте фактурата от секция Фактури.",
-      });
-    }
-
-    // If fulfilled, return stock to inventory
-    if (order.status === "fulfilled") {
-      const result = await transaction(async (client) => {
-        // Re-lock the order inside the cancel transaction to avoid races
-        // against concurrent fulfill/invoice operations.
-        await client.query("SELECT id FROM orders WHERE id = $1 FOR UPDATE", [
-          id,
-        ]);
-
-        // Return each item's quantity to inventory. MERT-M: no batches,
-        // so we upsert on the partial unique index
-        // inventory_product_warehouse_nobatch_uidx (product_id, warehouse_id)
-        // WHERE batch_id IS NULL (added in migration 045).
-        const { rows: items } = await client.query(
-          "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
+      const order = await transaction(async (client) => {
+        const {
+          rows: [locked],
+        } = await client.query(
+          "SELECT * FROM orders WHERE id = $1 FOR UPDATE",
           [id],
         );
+        return locked;
+      });
 
-        for (const item of items) {
-          const qty = parseFloat(item.quantity);
-          if (qty <= 0) continue;
+      if (!order) {
+        return reply.status(404).send({ error: "Order not found" });
+      }
 
-          await client.query(
-            `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+      // Invoiced orders can't be cancelled — use credit note instead.
+      // After the flow refactor "Фактурирана" is a flag, so check invoice_id.
+      if (order.invoice_id) {
+        return reply.status(400).send({
+          error:
+            "Не може да се отмени фактурирана поръчка директно. Първо анулирайте фактурата от секция Фактури.",
+        });
+      }
+
+      // If fulfilled, return stock to inventory
+      if (order.status === "fulfilled") {
+        const result = await transaction(async (client) => {
+          // Re-lock the order inside the cancel transaction to avoid races
+          // against concurrent fulfill/invoice operations.
+          await client.query("SELECT id FROM orders WHERE id = $1 FOR UPDATE", [
+            id,
+          ]);
+
+          // Return each item's quantity to inventory. MERT-M: no batches,
+          // so we upsert on the partial unique index
+          // inventory_product_warehouse_nobatch_uidx (product_id, warehouse_id)
+          // WHERE batch_id IS NULL (added in migration 045).
+          const { rows: items } = await client.query(
+            "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
+            [id],
+          );
+
+          for (const item of items) {
+            const qty = parseFloat(item.quantity);
+            if (qty <= 0) continue;
+
+            await client.query(
+              `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
              VALUES ($1, 1, $2, NULL)
              ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
              DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
                            updated_at = NOW()`,
-            [item.product_id, qty],
-          );
-        }
+              [item.product_id, qty],
+            );
+          }
 
-        // Cancel the order
-        await client.query(
-          "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
-          [id],
+          // Cancel the order
+          await client.query(
+            "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
+            [id],
+          );
+
+          return items.length;
+        });
+
+        await query(
+          `INSERT INTO notifications (type, message) VALUES ('order_cancelled', $1)`,
+          [`Поръчка #${id} е отменена. ${result} артикула върнати в склада.`],
         );
 
-        return items.length;
-      });
+        return {
+          message: "Order cancelled. Stock returned to inventory.",
+          order_id: parseInt(id),
+          items_returned: result,
+        };
+      }
+
+      // For pending/confirmed/processing — just cancel (no stock to return)
+      await query(
+        "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
+        [id],
+      );
 
       await query(
         `INSERT INTO notifications (type, message) VALUES ('order_cancelled', $1)`,
-        [`Поръчка #${id} е отменена. ${result} артикула върнати в склада.`],
+        [`Поръчка #${id} е отменена`],
       );
 
-      return {
-        message: "Order cancelled. Stock returned to inventory.",
-        order_id: parseInt(id),
-        items_returned: result,
-      };
-    }
-
-    // For pending/confirmed/processing — just cancel (no stock to return)
-    await query(
-      "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
-      [id],
-    );
-
-    await query(
-      `INSERT INTO notifications (type, message) VALUES ('order_cancelled', $1)`,
-      [`Поръчка #${id} е отменена`],
-    );
-
-    return { message: "Order cancelled", order_id: parseInt(id) };
-  });
+      return { message: "Order cancelled", order_id: parseInt(id) };
+    },
+  );
 
   // GET /orders/:id/invoice — generate invoice for order
   app.get(
@@ -1857,20 +1867,13 @@ export default async function orderRoutes(app: FastifyInstance) {
   // ════════════════════════════════════════════════════════════════════
   // GET /:id/stock-dispatch-pdf — Стокова разписка
   // ════════════════════════════════════════════════════════════════════
-  app.get(
+  app.get<{
+    Params: { id: string };
+    Querystring: { include_vat?: string; pricing_mode?: string };
+  }>(
     "/:id/stock-dispatch-pdf",
-    async (
-      request: FastifyRequest<{
-        Params: { id: string };
-        Querystring: { include_vat?: string; pricing_mode?: string };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      await requireAuth(request, reply);
-      if (request.user.role !== "admin" && request.user.role !== "warehouse") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
+    { preHandler: ordersManagePreHandler },
+    async (request, reply) => {
       const id = Number(request.params.id);
       const data = await loadOrderWithBatches(id);
       if (!data) return reply.status(404).send({ error: "Order not found" });
@@ -1964,17 +1967,10 @@ export default async function orderRoutes(app: FastifyInstance) {
   // ════════════════════════════════════════════════════════════════════
   // GET /:id/commercial-doc-pdf — Търговски документ
   // ════════════════════════════════════════════════════════════════════
-  app.get(
+  app.get<{ Params: { id: string } }>(
     "/:id/commercial-doc-pdf",
-    async (
-      request: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply,
-    ) => {
-      await requireAuth(request, reply);
-      if (request.user.role !== "admin" && request.user.role !== "warehouse") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
+    { preHandler: ordersManagePreHandler },
+    async (request, reply) => {
       const id = Number(request.params.id);
       const data = await loadOrderWithBatches(id);
       if (!data) return reply.status(404).send({ error: "Order not found" });
@@ -2044,17 +2040,10 @@ export default async function orderRoutes(app: FastifyInstance) {
   // Serial number = WR-<order_number padded to 7 digits>, so the warranty
   // can be traced back to the source order / invoice. All other fields are
   // filled by hand.
-  app.get(
+  app.get<{ Params: { id: string } }>(
     "/:id/warranty-pdf",
-    async (
-      request: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply,
-    ) => {
-      await requireAuth(request, reply);
-      if (request.user.role !== "admin" && request.user.role !== "warehouse") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
+    { preHandler: ordersManagePreHandler },
+    async (request, reply) => {
       const id = Number(request.params.id);
       const { rows } = await query(
         "SELECT id, order_number FROM orders WHERE id = $1",
