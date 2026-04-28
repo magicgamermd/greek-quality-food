@@ -5,10 +5,10 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-28 (mid-session: Phase 1 + 75% of Phase 2 done on permissions feature)
+**Last updated:** 2026-04-28 (Phase 2 complete — 9 of 27 tasks)
 **Active branch:** `feature/MERTM-tester-attachments-buttons`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active feature:** Employee role + per-user permission overrides — see `docs/superpowers/specs/2026-04-28-employee-role-permissions-design.md` and plan `docs/superpowers/plans/2026-04-28-employee-role-permissions.md`. **8 of 27 tasks committed** (foundation + 3 of 4 route refactors). Resume at Task 9.
+**Active feature:** Employee role + per-user permission overrides — see `docs/superpowers/specs/2026-04-28-employee-role-permissions-design.md` and plan `docs/superpowers/plans/2026-04-28-employee-role-permissions.md`. **9 of 27 tasks committed** (Phase 1 + 2 done — backend foundation + all 41 route role-checks refactored to permissions). **Resume at Task 10** (strip purchase_price from API responses).
 
 ---
 
@@ -98,8 +98,18 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - `b62b055` Task 6 — users.ts + settings.ts refactor (2 sites → USERS_MANAGE / SETTINGS_MANAGE)
 - `cb1c9f9` Task 7 — invoices.ts refactor (10 sites; **accountants now can create invoices**, fixed inverted bug)
 - `e429e3b` Task 8 — orders.ts + incoming.ts refactor (15 sites; GET /incoming now gated by INCOMING_MANAGE)
+- `3060efa` STATUS checkpoint
+- `e951736` Task 9 — products + payments + partners + export + import + fiscal + auth (14 sites — Phase 2 complete; auth.ts:82 register endpoint preserves first-user bootstrap)
 
-**Tasks 9-27 remain.** Resume in next session via subagent-driven-development OR executing-plans skill, using the plan file. Test baseline: 248 passed, 2 pre-existing failures.
+**Tasks 10-27 remain** (Phase 3+: purchase_price stripping, /me + permissions API endpoints, frontend infra, admin UI, E2E). Resume in next session via subagent-driven-development OR executing-plans skill using the plan file. Test baseline: **248 passed, 2 pre-existing payments-razpiska failures** (unrelated to permissions work).
+
+**Behavioral changes from Phase 2 alignments with spec ROLE_DEFAULTS** (intentional — flagged in commit messages):
+
+- accountants can now create/regenerate/email invoices (Task 7)
+- accountants can now manage incoming workflow (Task 8)
+- sales can now print order PDFs (stock-dispatch, commercial-doc, warranty)
+- GET /incoming now requires INCOMING_MANAGE (sales blocked)
+- owner_mobile session loses cancel-incoming access (re-eval if mobile-owner-app needs accommodation)
 
 **Earlier (pre-permissions feature):**
 
