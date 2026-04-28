@@ -12,7 +12,10 @@ import {
   hasPermission,
   invalidateUserPermissions,
   PERMISSIONS,
+  requirePermission,
+  stripFieldsForUser,
 } from "../lib/permissions.js";
+import Fastify from "fastify";
 
 const mockQuery = vi.mocked(query);
 const mockGetRedis = vi.mocked(getRedis);
@@ -154,5 +157,128 @@ describe("hasPermission", () => {
       PERMISSIONS.SETTINGS_MANAGE,
     );
     expect(result).toBe(false);
+  });
+});
+
+describe("requirePermission middleware", () => {
+  beforeEach(() => {
+    mockGetRedis.mockResolvedValue(makeRedisMock());
+    mockQuery.mockReset();
+  });
+
+  async function buildApp(role: string, userId = "u1") {
+    const app = Fastify();
+    app.addHook("onRequest", async (req) => {
+      (req as any).user = { id: userId, email: "x@y", role };
+    });
+    app.get(
+      "/protected",
+      { preHandler: requirePermission(PERMISSIONS.SETTINGS_MANAGE) },
+      async () => ({ ok: true }),
+    );
+    return app;
+  }
+
+  it("allows admin through without consulting DB", async () => {
+    const app = await buildApp("admin");
+    try {
+      const res = await app.inject({ method: "GET", url: "/protected" });
+      expect(res.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns 403 when user lacks the permission", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ role: "sales", overrides: [] }],
+    } as any);
+
+    const app = await buildApp("sales");
+    try {
+      const res = await app.inject({ method: "GET", url: "/protected" });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({
+        error: "Forbidden",
+        required_permission: PERMISSIONS.SETTINGS_MANAGE,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("stripFieldsForUser", () => {
+  beforeEach(() => {
+    mockGetRedis.mockResolvedValue(makeRedisMock());
+    mockQuery.mockReset();
+  });
+
+  it("removes purchase_price for sales user", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ role: "sales", overrides: [] }],
+    } as any);
+
+    const rows = [
+      { id: 1, name: "Mixer", purchase_price: 200, selling_price: 350 },
+    ];
+    const filtered = await stripFieldsForUser(
+      { id: "u1", role: "sales" },
+      rows,
+      [
+        {
+          permission: PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+          fields: ["purchase_price"],
+        },
+      ],
+    );
+
+    expect(filtered[0]).not.toHaveProperty("purchase_price");
+    expect(filtered[0]).toHaveProperty("selling_price", 350);
+  });
+
+  it("keeps purchase_price for admin without consulting DB", async () => {
+    const rows = [{ id: 1, purchase_price: 200 }];
+    const filtered = await stripFieldsForUser(
+      { id: "admin1", role: "admin" },
+      rows,
+      [
+        {
+          permission: PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+          fields: ["purchase_price"],
+        },
+      ],
+    );
+    expect(filtered[0].purchase_price).toBe(200);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("keeps purchase_price for sales user with grant override", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          role: "sales",
+          overrides: [
+            {
+              permission: PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+              granted: true,
+            },
+          ],
+        },
+      ],
+    } as any);
+
+    const rows = [{ id: 1, purchase_price: 200 }];
+    const filtered = await stripFieldsForUser(
+      { id: "u1", role: "sales" },
+      rows,
+      [
+        {
+          permission: PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+          fields: ["purchase_price"],
+        },
+      ],
+    );
+    expect(filtered[0].purchase_price).toBe(200);
   });
 });

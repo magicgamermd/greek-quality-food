@@ -272,3 +272,43 @@ export async function hasPermission(
   const perms = await getUserPermissions(user.id);
   return perms.has(perm);
 }
+
+import type { FastifyReply, FastifyRequest } from "fastify";
+
+export function requirePermission(perm: Permission) {
+  return async function (request: FastifyRequest, reply: FastifyReply) {
+    const allowed = await hasPermission(
+      request.user as { id: string; role: string },
+      perm,
+    );
+    if (!allowed) {
+      reply.status(403).send({
+        error: "Forbidden",
+        required_permission: perm,
+        message: `Missing permission: ${perm}`,
+      });
+    }
+  };
+}
+
+/**
+ * Remove sensitive fields from response rows when the user lacks the
+ * required permission. Returns a new array of new objects (does not
+ * mutate the input).
+ */
+export async function stripFieldsForUser<T extends Record<string, unknown>>(
+  user: { id: string; role: string },
+  rows: T[],
+  rules: { permission: Permission; fields: string[] }[],
+): Promise<T[]> {
+  let result = rows;
+  for (const rule of rules) {
+    if (await hasPermission(user, rule.permission)) continue;
+    result = result.map((row) => {
+      const stripped = { ...row };
+      for (const f of rule.fields) delete stripped[f];
+      return stripped;
+    });
+  }
+  return result;
+}
