@@ -1,3 +1,14 @@
+// ⚠️ DEPRECATED for MERT-M (2026-04-28):
+// MERT-M sells durable goods (commercial kitchen equipment) and does
+// NOT track batches or expiry dates. This reconciliation check was
+// inherited from the greek-foods-platform clone which sold perishable
+// food. Running it against the MERT-M schema will fail or return empty
+// because the relevant tables/columns don't exist.
+//
+// Kept in the tree as dead code (Phase 3 Q5 B decision) — minimise diff
+// against the upstream baseline. To remove entirely: delete this file
+// and drop it from scripts/reconciliation/run-all.ts.
+
 import {
   argFlag,
   buildReport,

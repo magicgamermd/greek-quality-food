@@ -1,3 +1,10 @@
+// ⚠️ DEPRECATED for MERT-M (2026-04-28):
+// Batch-related repair script inherited from greek-foods-platform clone.
+// MERT-M does not track batches (durable goods, not perishables), so
+// this script has nothing to sync and is a no-op against the MERT-M
+// schema. Kept as dead code per Phase 3 Q5(B) — minimise diff against
+// upstream. Safe to delete entirely once a future cleanup is scheduled.
+
 import { spawnSync } from "node:child_process";
 import {
   argFlag,

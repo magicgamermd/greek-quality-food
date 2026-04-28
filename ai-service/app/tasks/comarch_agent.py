@@ -1,5 +1,20 @@
 """
 Comarch Bridge Agent — Celery task (runs every 30 min)
+
+⚠️ DEPRECATED for MERT-M (2026-04-28): Comarch is a Polish ERP integration
+inherited from the greek-foods-platform clone. MERT-M does NOT use Comarch
+and never will. This task is currently a no-op because COMARCH_API_URL,
+COMARCH_CLIENT_ID, and COMARCH_CLIENT_SECRET are intentionally empty in
+MERT-M's ai-service .env, so any sync attempt fails fast and returns early.
+
+Kept in the tree as dead code (rather than deleted) per Phase 3 decision
+Q5(B) — minimise diff against the upstream baseline so future merges
+remain mechanical. To remove entirely: delete this file, drop
+"app.tasks.comarch_agent" from celery_app.py include list, and remove
+the comarch-bridge-agent entry from beat_schedule.
+
+Original docstring follows.
+---
 Fetches new orders from Comarch ERP API, creates them in the warehouse
 backend, and updates Comarch order status after fulfillment.
 """

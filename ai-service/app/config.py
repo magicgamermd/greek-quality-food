@@ -32,8 +32,10 @@ class Settings(BaseSettings):
     imap_password: str = ""
     imap_folder: str = "INBOX"
 
-    # Comarch
-    comarch_api_url: str = "https://api.comarch.com"
+    # ⚠️ DEPRECATED for MERT-M: Comarch ERP settings inherited from
+    # greek-foods-platform clone. MERT-M does not use Comarch — keep
+    # values empty in .env so tasks become no-ops. See comarch_agent.py.
+    comarch_api_url: str = ""  # was https://api.comarch.com (Greek Foods)
     comarch_client_id: str = ""
     comarch_client_secret: str = ""
     comarch_company_id: str = ""
