@@ -68,7 +68,7 @@ fi
 
 # --- Prepare scratch DB --------------------------------------------------------
 ADMIN_URL="${RESTORE_SUPERUSER_URL:-postgres://postgres@localhost/postgres}"
-SCRATCH_DB="greekfoods_restore_test_$(date +%s)"
+SCRATCH_DB="mertm_restore_test_$(date +%s)"
 log INFO "msg=\"creating scratch db\" name=${SCRATCH_DB}"
 
 psql "$ADMIN_URL" -c "CREATE DATABASE ${SCRATCH_DB};" >/dev/null \
