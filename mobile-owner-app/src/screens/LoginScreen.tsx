@@ -49,9 +49,13 @@ export function LoginScreen() {
       <View style={styles.content}>
         <View style={styles.brandWrap}>
           <View style={styles.brandIcon}>
-            <Ionicons name="business-outline" size={30} color={colors.primary} />
+            <Ionicons
+              name="business-outline"
+              size={30}
+              color={colors.primary}
+            />
           </View>
-          <Text style={styles.title}>Greek Foods Owner</Text>
+          <Text style={styles.title}>МЕРТ-М Owner</Text>
           <Text style={styles.subtitle}>Отделно приложение за собственик</Text>
         </View>
 
@@ -60,7 +64,7 @@ export function LoginScreen() {
           <TextInput
             value={email}
             onChangeText={setEmail}
-            placeholder="owner@greekfoods.bg"
+            placeholder="owner@mertm.bg"
             placeholderTextColor={colors.textMuted}
             keyboardType="email-address"
             autoCapitalize="none"

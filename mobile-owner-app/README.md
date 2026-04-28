@@ -1,4 +1,4 @@
-# Greek Foods Owner App
+# МЕРТ-М Owner App
 
 Отделно мобилно приложение за собственика (Android-first), което използва същия backend и auth като основната система.
 

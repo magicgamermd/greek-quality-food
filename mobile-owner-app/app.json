@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Greek Foods Owner",
-    "slug": "greek-foods-owner",
+    "name": "МЕРТ-М Owner",
+    "slug": "mertm-owner",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.greekfoods.owner"
+      "bundleIdentifier": "com.mertm.owner"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,15 +23,13 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.greekfoods.owner",
+      "package": "com.mertm.owner",
       "minSdkVersion": 28
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "expo-secure-store"
-    ],
+    "plugins": ["expo-secure-store"],
     "owner": "jokermagician2008",
     "extra": {
       "eas": {
