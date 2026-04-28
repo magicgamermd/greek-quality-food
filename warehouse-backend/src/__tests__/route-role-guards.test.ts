@@ -10,6 +10,14 @@ vi.mock("../db.js", () => ({
   transaction: vi.fn(),
 }));
 
+vi.mock("../lib/redis.js", () => ({
+  getRedis: vi.fn(async () => ({
+    get: vi.fn(async () => null),
+    setex: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 0),
+  })),
+}));
+
 import { query } from "../db.js";
 
 type Role = "admin" | "warehouse" | "accountant";
@@ -20,7 +28,11 @@ function resultRows<T>(rows: T[]) {
   return { rows } as any;
 }
 
-async function buildAppWithRole(role: Role, registerRoute: any, prefix: string) {
+async function buildAppWithRole(
+  role: Role,
+  registerRoute: any,
+  prefix: string,
+) {
   const app = Fastify();
 
   app.addHook("onRequest", async (request) => {
@@ -38,12 +50,19 @@ describe("warehouse role route guards", () => {
   });
 
   it("forbids warehouse from invoices list", async () => {
+    // permission lookup — warehouse role lacks INVOICES_MANAGE
+    mockQuery.mockResolvedValueOnce(
+      resultRows([{ role: "warehouse", overrides: [] }]),
+    );
+
     const app = await buildAppWithRole("warehouse", invoiceRoutes, "/invoices");
     try {
       const res = await app.inject({ method: "GET", url: "/invoices" });
 
       expect(res.statusCode).toBe(403);
-      expect(mockQuery).not.toHaveBeenCalled();
+      // No business-logic queries should have been issued — only the
+      // permission lookup (1 call) before the 403.
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }
@@ -88,7 +107,11 @@ describe("warehouse role route guards", () => {
   it("allows warehouse to read incoming list", async () => {
     mockQuery.mockResolvedValueOnce(resultRows([]));
 
-    const app = await buildAppWithRole("warehouse", incomingRoutes, "/incoming");
+    const app = await buildAppWithRole(
+      "warehouse",
+      incomingRoutes,
+      "/incoming",
+    );
     try {
       const res = await app.inject({ method: "GET", url: "/incoming" });
 
