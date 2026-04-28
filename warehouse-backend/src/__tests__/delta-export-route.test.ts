@@ -7,6 +7,14 @@ vi.mock("../db.js", () => ({
   query: vi.fn(),
 }));
 
+vi.mock("../lib/redis.js", () => ({
+  getRedis: vi.fn(async () => ({
+    get: vi.fn(async () => null),
+    setex: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 0),
+  })),
+}));
+
 import { query } from "../db.js";
 
 const mockQuery = vi.mocked(query);
@@ -15,7 +23,9 @@ function resultRows<T>(rows: T[]) {
   return { rows } as any;
 }
 
-async function buildApp(role: "admin" | "accountant" | "warehouse" = "accountant") {
+async function buildApp(
+  role: "admin" | "accountant" | "warehouse" = "accountant",
+) {
   const app = Fastify();
 
   app.addHook("onRequest", async (request) => {
@@ -38,6 +48,10 @@ describe("delta export route", () => {
 
   it("exports sales rows as CP1251 with document + payment pairs", async () => {
     mockQuery
+      // permission lookup for accountant (default test role)
+      .mockResolvedValueOnce(
+        resultRows([{ role: "accountant", overrides: [] }]),
+      )
       .mockResolvedValueOnce(
         resultRows([
           {
@@ -95,10 +109,16 @@ describe("delta export route", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.headers["content-type"]).toContain("application/octet-stream");
-      expect(res.headers["content-disposition"]).toContain("attachment; filename=");
-      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(res.headers["content-disposition"]).toContain(
+        "attachment; filename=",
+      );
+      // 1 permission lookup + 2 export queries
+      expect(mockQuery).toHaveBeenCalledTimes(3);
 
-      const [salesSql, salesParams] = mockQuery.mock.calls[0] as [string, string[]];
+      const [salesSql, salesParams] = mockQuery.mock.calls[1] as [
+        string,
+        string[],
+      ];
       expect(salesSql).toContain("i.status = 'active'");
       expect(salesParams).toEqual(["2026-05-01", "2026-05-31"]);
 
@@ -177,6 +197,11 @@ describe("delta export route", () => {
   });
 
   it("forbids warehouse users from exporting", async () => {
+    // permission lookup for warehouse — lacks export.create
+    mockQuery.mockResolvedValueOnce(
+      resultRows([{ role: "warehouse", overrides: [] }]),
+    );
+
     const app = await buildApp("warehouse");
     try {
       const res = await app.inject({
@@ -185,7 +210,8 @@ describe("delta export route", () => {
       });
 
       expect(res.statusCode).toBe(403);
-      expect(mockQuery).not.toHaveBeenCalled();
+      // Permission lookup ran, but the export queries did not
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }

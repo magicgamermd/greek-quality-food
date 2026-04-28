@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { query } from "../db.js";
+import { hasPermission, PERMISSIONS } from "../lib/permissions.js";
 
 // Pre-computed bcrypt hash used for timing-attack protection when an
 // unknown email is supplied. Cost factor matches the one used for real
@@ -75,12 +76,20 @@ export default async function authRoutes(app: FastifyInstance) {
       );
       const isFirstUser = parseInt(existing[0].count, 10) === 0;
 
-      // If not first user, require auth + admin
+      // If not first user, require auth + users.manage permission.
+      // (Bootstrap: the very first user becomes admin without auth.)
       if (!isFirstUser) {
         try {
           await request.jwtVerify();
-          if (request.user.role !== "admin") {
-            return reply.status(403).send({ error: "Admin access required" });
+          const allowed = await hasPermission(
+            request.user as { id: string; role: string },
+            PERMISSIONS.USERS_MANAGE,
+          );
+          if (!allowed) {
+            return reply.status(403).send({
+              error: "Forbidden",
+              required_permission: PERMISSIONS.USERS_MANAGE,
+            });
           }
         } catch {
           return reply.status(401).send({ error: "Unauthorized" });

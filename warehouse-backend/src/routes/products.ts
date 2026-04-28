@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { query } from "../db.js";
+import { requirePermission, PERMISSIONS } from "../lib/permissions.js";
 
 const createProductSchema = z.object({
   name_bg: z.string().min(1),
@@ -165,6 +166,15 @@ function isLatin(text: string): boolean {
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   await request.jwtVerify();
 }
+
+const jwtVerify = async (request: FastifyRequest) => {
+  await request.jwtVerify();
+};
+
+const productsManagePreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.PRODUCTS_MANAGE),
+];
 
 async function ensureSkuAvailable(
   sku: string,
@@ -450,138 +460,135 @@ export default async function productRoutes(app: FastifyInstance) {
   );
 
   // POST /products
-  app.post("/", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (request.user.role === "accountant") {
-      return reply.status(403).send({ error: "Insufficient permissions" });
-    }
+  app.post(
+    "/",
+    { preHandler: productsManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = createProductSchema.parse(request.body);
 
-    const body = createProductSchema.parse(request.body);
+      const duplicateReply = await ensureSkuAvailable(body.sku, reply);
+      if (duplicateReply) return duplicateReply;
 
-    const duplicateReply = await ensureSkuAvailable(body.sku, reply);
-    if (duplicateReply) return duplicateReply;
-
-    try {
-      const { rows } = await query(
-        `INSERT INTO products (name_bg, name_en, sku, category_id, unit, description, image_url, low_stock_threshold, brand, purchase_price, selling_price,
+      try {
+        const { rows } = await query(
+          `INSERT INTO products (name_bg, name_en, sku, category_id, unit, description, image_url, low_stock_threshold, brand, purchase_price, selling_price,
           retail_price, price_group_1, price_group_2, price_group_3, price_group_4, price_group_5, price_group_6, price_group_7, price_group_8, weight_kg)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
          RETURNING *`,
-        [
-          body.name_bg,
-          body.name_en,
-          body.sku.trim(),
-          body.category_id,
-          body.unit,
-          body.description,
-          body.image_url,
-          body.low_stock_threshold,
-          body.brand ?? null,
-          body.purchase_price ?? null,
-          body.selling_price ?? null,
-          body.retail_price ?? null,
-          body.price_group_1 ?? null,
-          body.price_group_2 ?? null,
-          body.price_group_3 ?? null,
-          body.price_group_4 ?? null,
-          body.price_group_5 ?? null,
-          body.price_group_6 ?? null,
-          body.price_group_7 ?? null,
-          body.price_group_8 ?? null,
-          body.weight_kg ?? null,
-        ],
-      );
+          [
+            body.name_bg,
+            body.name_en,
+            body.sku.trim(),
+            body.category_id,
+            body.unit,
+            body.description,
+            body.image_url,
+            body.low_stock_threshold,
+            body.brand ?? null,
+            body.purchase_price ?? null,
+            body.selling_price ?? null,
+            body.retail_price ?? null,
+            body.price_group_1 ?? null,
+            body.price_group_2 ?? null,
+            body.price_group_3 ?? null,
+            body.price_group_4 ?? null,
+            body.price_group_5 ?? null,
+            body.price_group_6 ?? null,
+            body.price_group_7 ?? null,
+            body.price_group_8 ?? null,
+            body.weight_kg ?? null,
+          ],
+        );
 
-      return reply.status(201).send(rows[0]);
-    } catch (error: any) {
-      if (error?.code === "23505") {
-        return reply.status(409).send({
-          error: "duplicate_sku",
-          message: `SKU \"${body.sku.trim()}\" вече съществува. Моля използвайте друг SKU.`,
-        });
+        return reply.status(201).send(rows[0]);
+      } catch (error: any) {
+        if (error?.code === "23505") {
+          return reply.status(409).send({
+            error: "duplicate_sku",
+            message: `SKU \"${body.sku.trim()}\" вече съществува. Моля използвайте друг SKU.`,
+          });
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    },
+  );
 
   // PUT /products/:id
-  app.put("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (request.user.role === "accountant") {
-      return reply.status(403).send({ error: "Insufficient permissions" });
-    }
+  app.put(
+    "/:id",
+    { preHandler: productsManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const body = updateProductSchema.parse(request.body);
+      const productId = parseInt(id, 10);
 
-    const { id } = request.params as { id: string };
-    const body = updateProductSchema.parse(request.body);
-    const productId = parseInt(id, 10);
-
-    if (body.sku !== undefined) {
-      const duplicateReply = await ensureSkuAvailable(
-        body.sku,
-        reply,
-        productId,
-      );
-      if (duplicateReply) return duplicateReply;
-      body.sku = body.sku.trim();
-    }
-
-    const fields: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-
-    for (const [key, val] of Object.entries(body)) {
-      if (val !== undefined) {
-        fields.push(`${key} = $${idx++}`);
-        values.push(val);
+      if (body.sku !== undefined) {
+        const duplicateReply = await ensureSkuAvailable(
+          body.sku,
+          reply,
+          productId,
+        );
+        if (duplicateReply) return duplicateReply;
+        body.sku = body.sku.trim();
       }
-    }
 
-    if (fields.length === 0) {
-      return reply.status(400).send({ error: "No fields to update" });
-    }
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
 
-    fields.push(`updated_at = NOW()`);
-    values.push(id);
-
-    let rows;
-    try {
-      const result = await query(
-        `UPDATE products SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
-        values,
-      );
-      rows = result.rows;
-    } catch (error: any) {
-      if (error?.code === "23505" && body.sku) {
-        return reply.status(409).send({
-          error: "duplicate_sku",
-          message: `SKU \"${body.sku}\" вече съществува. Моля използвайте друг SKU.`,
-        });
+      for (const [key, val] of Object.entries(body)) {
+        if (val !== undefined) {
+          fields.push(`${key} = $${idx++}`);
+          values.push(val);
+        }
       }
-      throw error;
-    }
 
-    if (rows.length === 0) {
-      return reply.status(404).send({ error: "Product not found" });
-    }
-    return rows[0];
-  });
+      if (fields.length === 0) {
+        return reply.status(400).send({ error: "No fields to update" });
+      }
+
+      fields.push(`updated_at = NOW()`);
+      values.push(id);
+
+      let rows;
+      try {
+        const result = await query(
+          `UPDATE products SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+          values,
+        );
+        rows = result.rows;
+      } catch (error: any) {
+        if (error?.code === "23505" && body.sku) {
+          return reply.status(409).send({
+            error: "duplicate_sku",
+            message: `SKU \"${body.sku}\" вече съществува. Моля използвайте друг SKU.`,
+          });
+        }
+        throw error;
+      }
+
+      if (rows.length === 0) {
+        return reply.status(404).send({ error: "Product not found" });
+      }
+      return rows[0];
+    },
+  );
 
   // DELETE /products/:id
-  app.delete("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (request.user.role !== "admin") {
-      return reply.status(403).send({ error: "Admin access required" });
-    }
+  app.delete(
+    "/:id",
+    { preHandler: productsManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const { rowCount } = await query("DELETE FROM products WHERE id = $1", [
+        id,
+      ]);
 
-    const { id } = request.params as { id: string };
-    const { rowCount } = await query("DELETE FROM products WHERE id = $1", [
-      id,
-    ]);
-
-    if (rowCount === 0) {
-      return reply.status(404).send({ error: "Product not found" });
-    }
-    return { message: "Product deleted" };
-  });
+      if (rowCount === 0) {
+        return reply.status(404).send({ error: "Product not found" });
+      }
+      return { message: "Product deleted" };
+    },
+  );
 }

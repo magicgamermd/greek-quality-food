@@ -1,10 +1,20 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { query } from "../db.js";
 import * as iconv from "iconv-lite";
+import { requirePermission, PERMISSIONS } from "../lib/permissions.js";
 
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   await request.jwtVerify();
 }
+
+const jwtVerify = async (request: FastifyRequest) => {
+  await request.jwtVerify();
+};
+
+const exportCreatePreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.EXPORT_CREATE),
+];
 
 /** Format date as DD.MM.YYYY for Delta Pro */
 export function formatDate(date: Date | string): string {
@@ -119,13 +129,8 @@ export default async function exportRoutes(app: FastifyInstance) {
   // GET /export/delta-pro — Delta Pro accounting export
   app.get(
     "/delta-pro",
+    { preHandler: exportCreatePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-
-      if (request.user.role !== "admin" && request.user.role !== "accountant") {
-        return reply.status(403).send({ error: "Нямате достъп до експорт" });
-      }
-
       const { from, to, type } = request.query as {
         from?: string;
         to?: string;
@@ -276,13 +281,8 @@ export default async function exportRoutes(app: FastifyInstance) {
   // order matches what Delta Pro's "Операции → Брак" import expects.
   app.get(
     "/microinvest/writeoffs",
+    { preHandler: exportCreatePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-
-      if (request.user.role !== "admin" && request.user.role !== "accountant") {
-        return reply.status(403).send({ error: "Нямате достъп до експорт" });
-      }
-
       const { from, to } = request.query as { from?: string; to?: string };
       if (!from || !to) {
         return reply

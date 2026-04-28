@@ -69,12 +69,18 @@ describe("warehouse role route guards", () => {
   });
 
   it("forbids warehouse from payments list", async () => {
+    // permission lookup — warehouse lacks PAYMENTS_MANAGE
+    mockQuery.mockResolvedValueOnce(
+      resultRows([{ role: "warehouse", overrides: [] }]),
+    );
+
     const app = await buildAppWithRole("warehouse", paymentRoutes, "/payments");
     try {
       const res = await app.inject({ method: "GET", url: "/payments" });
 
       expect(res.statusCode).toBe(403);
-      expect(mockQuery).not.toHaveBeenCalled();
+      // Only the permission lookup query, no business-logic queries
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }
