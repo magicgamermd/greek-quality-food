@@ -42,8 +42,7 @@ External:
   80/443 → Nginx → routes to:
     /api/*     → backend:3000
     /ai/*      → ai-service:8000
-    /           → b2b-website (static)
-    /app/*     → warehouse-frontend (static build)
+    /          → warehouse-frontend (static build)
 
 Internal (Docker network):
   postgres:5432  — mertm_warehouse DB

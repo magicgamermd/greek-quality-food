@@ -13,13 +13,12 @@ for building, testing, and maintaining the MERT-M Warehouse Platform.
 | 2   | **Backend Dev**        | `backend-dev.md`        | Fastify routes, DB queries, business logic   | warehouse-backend    |
 | 3   | **Frontend Dev**       | `frontend-dev.md`       | React pages, components, UI/UX               | warehouse-frontend   |
 | 4   | **AI Engineer**        | `ai-engineer.md`        | FastAPI, Celery tasks, ML pipelines          | ai-service           |
-| 5   | **Mobile Dev**         | `mobile-dev.md`         | React Native screens, navigation, offline    | mobile-app           |
-| 6   | **B2B Web Dev**        | `b2b-web-dev.md`        | HTML/CSS/JS, portal, SEO                     | b2b-website          |
-| 7   | **QA Engineer**        | `qa-engineer.md`        | E2E tests, integration tests, bug hunting    | e2e-tests + all      |
-| 8   | **DevOps**             | `devops.md`             | Docker, nginx, CI/CD, monitoring, backups    | infra                |
-| 9   | **Code Reviewer**      | `code-reviewer.md`      | Review PRs, enforce standards, catch bugs    | all                  |
-| 10  | **Integration Tester** | `integration-tester.md` | Cross-service communication, API contracts   | all services         |
-| 11  | **Security Engineer**  | `security-agent.md`     | OWASP audit, secrets, vulnerability scanning | all services + infra |
+| 5   | **Mobile Dev**         | `mobile-dev.md`         | React Native screens, navigation, offline    | mobile-owner-app     |
+| 6   | **QA Engineer**        | `qa-engineer.md`        | E2E tests, integration tests, bug hunting    | e2e-tests + all      |
+| 7   | **DevOps**             | `devops.md`             | Docker, nginx, CI/CD, monitoring, backups    | infra                |
+| 8   | **Code Reviewer**      | `code-reviewer.md`      | Review PRs, enforce standards, catch bugs    | all                  |
+| 9   | **Integration Tester** | `integration-tester.md` | Cross-service communication, API contracts   | all services         |
+| 10  | **Security Engineer**  | `security-agent.md`     | OWASP audit, secrets, vulnerability scanning | all services + infra |
 
 ---
 

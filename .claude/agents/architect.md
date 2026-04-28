@@ -21,8 +21,7 @@ and ensure all services work together coherently.
 - **warehouse-backend**: Fastify 5 + TypeScript + PostgreSQL 16 + Redis 7 (port 3000)
 - **warehouse-frontend**: React 19 + Vite + Tailwind + Radix UI (port 5173)
 - **ai-service**: FastAPI + Python 3.11 + Celery + Redis (port 8000)
-- **mobile-app**: React Native + Expo
-- **b2b-website**: Vanilla HTML/CSS/JS
+- **mobile-owner-app**: React Native + Expo (owner-only)
 - **Database**: PostgreSQL with 18 tables, UUID/SERIAL PKs
 - **Infrastructure**: Docker Compose + Nginx reverse proxy
 
