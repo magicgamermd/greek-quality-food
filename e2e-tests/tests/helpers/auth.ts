@@ -1,7 +1,13 @@
 import { expect, type Page } from "@playwright/test";
 
-const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? "admin@greekfoods.bg";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "GreekFoods2026!";
+// Defaults align with the seeded MERT-M admin user. Override via env
+// (E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD) for non-default environments.
+// The password below is the local-dev default — production CI runs MUST
+// pass real credentials via env. See e2e-tests/.env.local for the
+// active dev value (gitignored).
+const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? "admin@mertm.bg";
+const ADMIN_PASSWORD =
+  process.env.E2E_ADMIN_PASSWORD ?? "36PWyyfdpxIt08VXlGjle1zf";
 
 export async function openLoginPage(page: Page) {
   await page.goto("/login");

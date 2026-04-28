@@ -138,8 +138,8 @@ function isAutoMatched(match: MatchResult | undefined): boolean {
 async function loginViaApi(request: APIRequestContext): Promise<AuthHeaders> {
   const response = await request.post(`${BACKEND_BASE_URL}/auth/login`, {
     data: {
-      email: "admin@greekfoods.bg",
-      password: "GreekFoods2026!",
+      email: "admin@mertm.bg",
+      password: "36PWyyfdpxIt08VXlGjle1zf",
     },
   });
   expect(response.ok()).toBeTruthy();

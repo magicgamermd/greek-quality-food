@@ -16,7 +16,7 @@ test.describe("Authentication", () => {
     page,
   }) => {
     await openLoginPage(page);
-    await submitLoginForm(page, "admin@greekfoods.bg", "WrongPassword123");
+    await submitLoginForm(page, "admin@mertm.bg", "WrongPassword123");
 
     await expect(page).toHaveURL(/\/login(?:[?#].*)?$/);
     await expect(
