@@ -8,7 +8,7 @@ from celery.schedules import crontab
 from app.config import settings
 
 celery_app = Celery(
-    "greek_foods_ai",
+    "mertm_ai",
     broker=settings.redis_url,
     backend=settings.redis_url,
     include=[

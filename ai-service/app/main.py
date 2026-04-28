@@ -1,5 +1,5 @@
 """
-Greek Foods AI Microservice
+MERT-M AI Microservice
 FastAPI application entry point.
 """
 import logging
@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Greek Foods AI Service starting up...")
+    logger.info("🚀 MERT-M AI Service starting up...")
     yield
-    logger.info("🛑 Greek Foods AI Service shutting down...")
+    logger.info("🛑 MERT-M AI Service shutting down...")
 
 
 app = FastAPI(
-    title="Greek Foods AI Service",
-    description="AI microservice for invoice OCR, payment matching, Comarch sync, forecasting and anomaly detection.",
+    title="MERT-M AI Service",
+    description="AI microservice for invoice OCR, product matching, payment reconciliation and stock forecasting.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -70,4 +70,4 @@ app.include_router(match.router, prefix="/ai", tags=["Product Matching"])
 @app.get("/health")
 async def health():
     """Unauthenticated liveness probe for Docker/Kubernetes healthchecks."""
-    return {"status": "ok", "service": "greek-foods-ai"}
+    return {"status": "ok", "service": "mertm-ai"}
