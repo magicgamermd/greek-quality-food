@@ -1,6 +1,11 @@
-# Greek Foods reconciliation checks
+# MERT-M reconciliation checks
 
-Minimal read-only reconciliation checks for the first three correctness-drift jobs in `docs/GREEK-FOODS-RECONCILIATION-SCOPE.md`.
+Minimal read-only reconciliation checks for correctness-drift jobs.
+
+> **Note for MERT-M**: scripts named `batch-expiry-consistency.ts` are
+> Greek Foods leftovers — MERT-M sells durable goods and does not track
+> batches/expiry, so that script is a no-op against the MERT-M schema.
+> Pending Phase 4 cleanup to remove batch/expiry-specific scripts.
 
 ## Commands
 
@@ -26,9 +31,9 @@ The scripts try, in order:
 
 1. `RECON_DATABASE_URL`
 2. `DATABASE_URL`
-3. `postgres://greekfoods:greekfoods_secret@127.0.0.1:5432/greekfoods_warehouse`
-4. `postgres://greekfoods:greekfoods_secret@localhost:5432/greekfoods_warehouse`
-5. Docker fallback via `warehouse-backend-postgres-1`
+3. `postgres://mertm:mertm_secret@127.0.0.1:5433/mertm_warehouse`
+4. `postgres://mertm:mertm_secret@localhost:5433/mertm_warehouse`
+5. Docker fallback via `mertm-postgres-1`
 
 Override Docker container name with `RECON_POSTGRES_CONTAINER` if needed.
 

@@ -8,7 +8,7 @@ import {
   measurePartyFieldsHeight,
 } from "../services/invoice-pdf.js";
 
-const TEST_OUTPUT_DIR = path.resolve("/tmp/greek-foods-test-pdfs");
+const TEST_OUTPUT_DIR = path.resolve("/tmp/mertm-test-pdfs");
 
 function getPdfPageCount(filePath: string): number {
   const content = fs.readFileSync(filePath, "latin1");
@@ -40,7 +40,7 @@ function getTestData(overrides: Record<string, any> = {}) {
       vat_number: "BG202860357",
       iban: "BG80UNCR76301078901234",
       phone: "00886291003",
-      email: "info@greekfoods.bg",
+      email: "info@mertm.bg",
       bank_name: "UniCredit Bulbank",
       bic: "UNCRBGSF",
       mol: "Евгени Терзийски",
@@ -244,7 +244,7 @@ describe("generateInvoicePdf", () => {
           vat_number: "BG202860357",
           iban: "BG80UNCR76301078901234",
           phone: "00886291003 / 00359889999888",
-          email: "very.long.finance.department@greekfoods.example.bg",
+          email: "very.long.finance.department@mertm.example.bg",
           bank_name: "UniCredit Bulbank Corporate Clients Division",
           bic: "UNCRBGSF",
           mol: "Евгени Терзийски - Управител и законен представител",

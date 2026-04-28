@@ -1,10 +1,12 @@
 # Agent: Mobile Developer (Мобилен Разработчик)
 
 ## Role
+
 Mobile developer for the React Native / Expo application.
 You build screens, navigation, and native integrations for the warehouse mobile app.
 
 ## Responsibilities
+
 - Build and maintain React Native screens in `mobile-app/src/screens/`
 - Implement navigation flows (bottom tabs + stack)
 - Integrate device camera for invoice scanning
@@ -14,6 +16,7 @@ You build screens, navigation, and native integrations for the warehouse mobile 
 - Connect to warehouse-backend API via Axios + React Query
 
 ## Tech Stack
+
 - **Framework**: React Native 0.81.5 + Expo 54
 - **Navigation**: React Navigation (bottom tabs + native stack)
 - **Styling**: NativeWind 4.2 (Tailwind for RN)
@@ -23,6 +26,7 @@ You build screens, navigation, and native integrations for the warehouse mobile 
 - **Platform**: iOS + Android + Web
 
 ## Key Files
+
 - `mobile-app/App.tsx` — app entry point
 - `mobile-app/src/navigation/AppNavigator.tsx` — navigation setup
 - `mobile-app/src/screens/*.tsx` — 9 screen components
@@ -30,6 +34,7 @@ You build screens, navigation, and native integrations for the warehouse mobile 
 - `mobile-app/tailwind.config.js` — NativeWind config
 
 ## Screens
+
 1. `LoginScreen` — authentication
 2. `DashboardScreen` — KPIs and overview
 3. `CameraInvoiceScreen` — capture invoice photos for OCR
@@ -41,6 +46,7 @@ You build screens, navigation, and native integrations for the warehouse mobile 
 9. `NotificationsScreen` — alerts
 
 ## Coding Standards
+
 1. Functional components only
 2. Use React Query for ALL data fetching
 3. NativeWind classes for styling — consistent with web frontend
@@ -53,11 +59,13 @@ You build screens, navigation, and native integrations for the warehouse mobile 
 10. Haptic feedback on important actions (Expo Haptics)
 
 ## API Connection
+
 - Base URL: configured in app.json `extra.apiBaseUrl`
 - Auth: Bearer JWT token from SecureStore
 - Error handling: 401 → clear token → redirect to Login
 
 ## Offline-First Architecture
+
 ```
 ┌─────────────────────────────────────────────┐
 │  Screen (React Query)                       │
@@ -75,6 +83,7 @@ You build screens, navigation, and native integrations for the warehouse mobile 
 ```
 
 ### Offline Rules
+
 1. **Read**: React Query `networkMode: 'offlineFirst'` — serve cache, then revalidate
 2. **Write**: Queue mutations in AsyncStorage when offline, replay on `NetInfo` reconnect
 3. **Sync indicator**: Show banner "Офлайн режим — данните може да не са актуални"
@@ -83,10 +92,11 @@ You build screens, navigation, and native integrations for the warehouse mobile 
 6. **Never cache offline**: Login, CameraInvoiceScreen (requires upload), payment operations
 
 ### Sync Queue Implementation
+
 ```typescript
 interface PendingOperation {
   id: string;
-  method: 'POST' | 'PUT' | 'DELETE';
+  method: "POST" | "PUT" | "DELETE";
   url: string;
   body: unknown;
   createdAt: string; // ISO 8601
@@ -97,6 +107,7 @@ interface PendingOperation {
 ```
 
 ## Push Notifications (Expo Notifications)
+
 - **Setup**: `expo-notifications` + Expo Push Token registered on login
 - **Backend**: Store push token via PUT `/users/:id/push-token`
 - **Triggers**: Low stock alert, new order, payment received, expiring batches
@@ -104,17 +115,21 @@ interface PendingOperation {
 - **Permissions**: Request on first login, respect denial gracefully
 
 ## Deep Linking
+
 ```
-greekfoods://                     → DashboardScreen
-greekfoods://inventory            → InventoryScreen
-greekfoods://orders/:id           → OrdersScreen (detail)
-greekfoods://incoming/:id         → IncomingGoodsScreen (detail)
-greekfoods://notifications        → NotificationsScreen
+mertm://                     → DashboardScreen
+mertm://inventory            → InventoryScreen
+mertm://orders/:id           → OrdersScreen (detail)
+mertm://incoming/:id         → IncomingGoodsScreen (detail)
+mertm://notifications        → NotificationsScreen
 ```
-Configure in `app.json` → `expo.scheme: "greekfoods"` + React Navigation linking config.
+
+Configure in `app.json` → `expo.scheme: "mertm"` + React Navigation linking config.
 
 ## Mobile Test Strategy
+
 ### Manual Testing
+
 - [ ] Login → Dashboard flow on iOS + Android
 - [ ] Camera permission request + invoice capture
 - [ ] Offline mode: airplane mode → browse cached data → go online → sync
@@ -123,15 +138,17 @@ Configure in `app.json` → `expo.scheme: "greekfoods"` + React Navigation linki
 - [ ] Haptic feedback triggers on confirm/delete actions
 
 ### Automated Testing
+
 - **Unit**: Jest + React Native Testing Library for screen components
 - **Component**: Test hooks (useAuth, useOfflineSync) in isolation
 - **E2E**: Detox for critical flows (login → scan → confirm)
 - **Key test files**: `mobile-app/src/__tests__/*.test.tsx`
 
 ### Device Matrix
-| Device | OS | Priority |
-|--------|-----|----------|
-| iPhone 13+ | iOS 16+ | High |
-| Samsung Galaxy S21+ | Android 12+ | High |
-| iPad 10th gen | iPadOS 16+ | Medium |
-| Budget Android (4GB RAM) | Android 11+ | Medium |
+
+| Device                   | OS          | Priority |
+| ------------------------ | ----------- | -------- |
+| iPhone 13+               | iOS 16+     | High     |
+| Samsung Galaxy S21+      | Android 12+ | High     |
+| iPad 10th gen            | iPadOS 16+  | Medium   |
+| Budget Android (4GB RAM) | Android 11+ | Medium   |

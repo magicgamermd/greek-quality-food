@@ -27,6 +27,7 @@ import productAliasRoutes from "./routes/product-aliases.js";
 import fiscalRoutes from "./routes/fiscal.js";
 import econtRoutes from "./routes/econt.js";
 import chatRoutes from "./routes/chat.js";
+import agentRoutes from "./routes/agent.js";
 
 dotenv.config();
 
@@ -58,9 +59,11 @@ export async function build() {
         .map((s) => s.trim())
         .filter(Boolean)
     : [];
-  const corsPreviewPatterns = [
-    /^https:\/\/([a-z0-9-]+\.)?greek-foods-platform\.pages\.dev$/i,
-  ];
+  // MERT-M deploys self-hosted on Mac Mini M4 — no Cloudflare Pages preview
+  // patterns are needed. If a CDN preview deploy is added later, add a
+  // MERT-M-specific regex here. Removed greek-foods-platform.pages.dev
+  // pattern that would otherwise allow Greek Foods preview origins.
+  const corsPreviewPatterns: RegExp[] = [];
   const devCorsOrigins = [
     "http://localhost:3010",
     "http://127.0.0.1:3010",
@@ -141,12 +144,14 @@ export async function build() {
   //   /internal/            — reserved for future internal-only endpoints
   //   /product-aliases/     — alias lookup + learn during product matching
   //   /products             — read-only catalog access for similarity scoring
+  //   /agent                — read-only agent connector (Telegram tester / AI agent)
   const internalApiKey = process.env.INTERNAL_API_KEY;
   const INTERNAL_ALLOWED_PREFIXES = [
     "/ai/",
     "/internal/",
     "/product-aliases",
     "/products",
+    "/agent",
   ];
   if (internalApiKey) {
     app.addHook("onRequest", async (request: any) => {
@@ -162,7 +167,7 @@ export async function build() {
 
       request.user = {
         id: "ai-service",
-        email: "ai@greekfoods.bg",
+        email: "ai@mertm.bg",
         role: "admin",
         name: "AI Service",
       };
@@ -236,6 +241,7 @@ export async function build() {
   await app.register(fiscalRoutes, { prefix: "/fiscal" });
   await app.register(econtRoutes, { prefix: "/econt" });
   await app.register(chatRoutes);
+  await app.register(agentRoutes, { prefix: "/agent" });
 
   return app;
 }
@@ -273,9 +279,7 @@ async function start() {
   const host = process.env.HOST || "0.0.0.0";
 
   await app.listen({ port, host });
-  console.log(
-    `🏛️  Greek Foods Warehouse API running on http://${host}:${port}`,
-  );
+  console.log(`🏛️  МЕРТ-М Warehouse API running on http://${host}:${port}`);
 }
 
 // Auto-start when running the server directly. Skipped under Vitest so

@@ -1,10 +1,12 @@
 # Agent: DevOps Engineer (DevOps Инженер)
 
 ## Role
+
 DevOps engineer responsible for infrastructure, deployment, and system reliability.
 You manage Docker, Nginx, CI/CD, environment configuration, and monitoring.
 
 ## Responsibilities
+
 - Maintain Docker Compose configurations for all services
 - Configure Nginx reverse proxy with SSL
 - Manage environment variables and secrets
@@ -15,6 +17,7 @@ You manage Docker, Nginx, CI/CD, environment configuration, and monitoring.
 - Optimize container images for production
 
 ## Tech Stack
+
 - **Containers**: Docker + Docker Compose
 - **Proxy**: Nginx (Alpine)
 - **Database**: PostgreSQL 16 (Alpine) + Redis 7 (Alpine)
@@ -23,6 +26,7 @@ You manage Docker, Nginx, CI/CD, environment configuration, and monitoring.
 - **SSL**: Let's Encrypt / self-signed for dev
 
 ## Key Files
+
 - `warehouse-backend/docker-compose.yml` — main services (postgres, redis, backend, nginx)
 - `ai-service/docker-compose.ai.yml` — AI services (ai-api, celery-worker, celery-beat)
 - `warehouse-backend/Dockerfile` — backend container
@@ -32,6 +36,7 @@ You manage Docker, Nginx, CI/CD, environment configuration, and monitoring.
 - `ai-service/Dockerfile` — AI service container
 
 ## Service Map & Ports
+
 ```
 External:
   80/443 → Nginx → routes to:
@@ -41,7 +46,7 @@ External:
     /app/*     → warehouse-frontend (static build)
 
 Internal (Docker network):
-  postgres:5432  — greekfoods_warehouse DB
+  postgres:5432  — mertm_warehouse DB
   redis:6379     — session cache + Celery broker
   backend:3000   — warehouse API
   ai-service:8000 — AI endpoints
@@ -50,6 +55,7 @@ Internal (Docker network):
 ```
 
 ## Coding Standards
+
 1. Multi-stage Docker builds for minimal image size
 2. Alpine-based images where possible
 3. Health checks on all services
@@ -62,6 +68,7 @@ Internal (Docker network):
 10. Database migrations run automatically on startup
 
 ## Docker Compose Template for New Service
+
 ```yaml
 service-name:
   build:
@@ -89,39 +96,43 @@ service-name:
 ## Monitoring & Alerting
 
 ### Health Check Endpoints
-| Service | Endpoint | Expected | Check Interval |
-|---------|----------|----------|----------------|
-| backend | GET /health | `{ status: "ok", db: "connected" }` | 30s |
-| ai-service | GET /health | `{ status: "ok" }` | 30s |
-| postgres | `pg_isready` | exit 0 | 30s |
-| redis | `redis-cli ping` | PONG | 30s |
-| nginx | GET / | 200 | 30s |
+
+| Service    | Endpoint         | Expected                            | Check Interval |
+| ---------- | ---------------- | ----------------------------------- | -------------- |
+| backend    | GET /health      | `{ status: "ok", db: "connected" }` | 30s            |
+| ai-service | GET /health      | `{ status: "ok" }`                  | 30s            |
+| postgres   | `pg_isready`     | exit 0                              | 30s            |
+| redis      | `redis-cli ping` | PONG                                | 30s            |
+| nginx      | GET /            | 200                                 | 30s            |
 
 ### Log Aggregation
+
 - All containers log to stdout/stderr → Docker JSON logging driver
 - Aggregate with `docker compose logs -f --tail=100`
 - Production: forward to centralized log (Loki / CloudWatch / file rotation)
 - Log format: `[timestamp] [service] [level] message`
 
 ### Alerts (trigger on)
-| Condition | Severity | Action |
-|-----------|----------|--------|
-| Health check fails 3x | Critical | Restart container, notify admin |
-| Disk usage > 85% | High | Clean old backups, notify admin |
-| PostgreSQL connections > 15/20 | High | Investigate connection leaks |
-| Celery task fails 5x | High | Check logs, notify AI Engineer |
-| Response time P95 > 2s | Medium | Profile slow endpoints |
-| SSL cert expires < 14 days | Medium | Renew Let's Encrypt |
-| Container restart loop | Critical | Stop container, investigate logs |
+
+| Condition                      | Severity | Action                           |
+| ------------------------------ | -------- | -------------------------------- |
+| Health check fails 3x          | Critical | Restart container, notify admin  |
+| Disk usage > 85%               | High     | Clean old backups, notify admin  |
+| PostgreSQL connections > 15/20 | High     | Investigate connection leaks     |
+| Celery task fails 5x           | High     | Check logs, notify AI Engineer   |
+| Response time P95 > 2s         | Medium   | Profile slow endpoints           |
+| SSL cert expires < 14 days     | Medium   | Renew Let's Encrypt              |
+| Container restart loop         | Critical | Stop container, investigate logs |
 
 ## Backup & Restore Strategy
 
 ### PostgreSQL Backup
+
 ```bash
 # Daily backup (cron: 0 2 * * *)
-pg_dump -h localhost -U greekfoods -d greekfoods_warehouse \
+pg_dump -h localhost -U mertm -d mertm_warehouse \
   --format=custom --compress=9 \
-  -f /backups/db/greekfoods_$(date +%Y%m%d_%H%M%S).dump
+  -f /backups/db/mertm_$(date +%Y%m%d_%H%M%S).dump
 
 # Retention: 7 daily, 4 weekly, 3 monthly
 find /backups/db -name "*.dump" -mtime +7 -delete  # daily cleanup
@@ -129,31 +140,35 @@ find /backups/db -name "*.dump" -mtime +7 -delete  # daily cleanup
 ```
 
 ### Restore Procedure
+
 ```bash
 # 1. Stop backend + ai-service (prevent writes)
 docker compose stop backend ai-service celery-worker celery-beat
 
 # 2. Restore from backup
-pg_restore -h localhost -U greekfoods -d greekfoods_warehouse \
-  --clean --if-exists /backups/db/greekfoods_YYYYMMDD.dump
+pg_restore -h localhost -U mertm -d mertm_warehouse \
+  --clean --if-exists /backups/db/mertm_YYYYMMDD.dump
 
 # 3. Restart services
 docker compose up -d backend ai-service celery-worker celery-beat
 
 # 4. Verify
-curl http://localhost:3003/health
+curl http://localhost:3004/health
 ```
 
 ### Redis Backup
+
 - RDB snapshots: `save 900 1` (every 15min if 1+ key changed)
 - Backup `/data/dump.rdb` alongside PostgreSQL backups
 - Redis data is cache-only — can be rebuilt from PostgreSQL
 
 ### File Uploads Backup
+
 - Sync `/app/uploads/` to external storage daily
 - Include invoice PDFs, scanned images, generated reports
 
 ## Deployment Rollback Procedure
+
 ```
 1. DETECT: Health check fails after deployment
    ↓
@@ -176,24 +191,27 @@ curl http://localhost:3003/health
 ```
 
 ### Rollback Rules
+
 1. NEVER rollback PostgreSQL without stopping writers first
 2. Keep previous Docker image tags for at least 7 days
 3. Tag every deployment: `git tag deploy-YYYYMMDD-HHMM`
 4. Test rollback procedure quarterly
 
 ## Performance Benchmarks
-| Metric | Target | Critical |
-|--------|--------|----------|
-| API response P50 | < 200ms | > 500ms |
-| API response P95 | < 800ms | > 2000ms |
-| Page load (frontend) | < 2s | > 5s |
-| Invoice PDF generation | < 3s | > 10s |
-| AI OCR scan | < 15s | > 45s |
-| Docker compose up (cold) | < 60s | > 180s |
-| Database query (simple) | < 50ms | > 200ms |
-| Database query (report) | < 500ms | > 2000ms |
+
+| Metric                   | Target  | Critical |
+| ------------------------ | ------- | -------- |
+| API response P50         | < 200ms | > 500ms  |
+| API response P95         | < 800ms | > 2000ms |
+| Page load (frontend)     | < 2s    | > 5s     |
+| Invoice PDF generation   | < 3s    | > 10s    |
+| AI OCR scan              | < 15s   | > 45s    |
+| Docker compose up (cold) | < 60s   | > 180s   |
+| Database query (simple)  | < 50ms  | > 200ms  |
+| Database query (report)  | < 500ms | > 2000ms |
 
 ## Deployment Checklist
+
 - [ ] All .env files configured (no .example values)
 - [ ] SSL certificates in place (nginx)
 - [ ] Database backup taken before deploy

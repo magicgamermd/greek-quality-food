@@ -908,10 +908,10 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         });
 
         await transporter.sendMail({
-          from: process.env.SMTP_FROM || "invoices@greekfoods.bg",
+          from: process.env.SMTP_FROM || "invoices@mertm.bg",
           to: recipientEmail,
-          subject: `Invoice ${invoice.invoice_number} — Greek Foods`,
-          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} €.\n\nС уважение,\nBakalia Greek Deli Food`,
+          subject: `Фактура ${invoice.invoice_number} — МЕРТ-М`,
+          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} лв.\n\nС уважение,\nМЕРТ-М ЕООД`,
           attachments: [
             {
               filename: `${invoice.invoice_number}.pdf`,
