@@ -5,9 +5,10 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-28 (after Phase 4 completion)
+**Last updated:** 2026-04-28 (mid-session: Phase 1 + 75% of Phase 2 done on permissions feature)
 **Active branch:** `feature/MERTM-tester-attachments-buttons`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
+**Active feature:** Employee role + per-user permission overrides — see `docs/superpowers/specs/2026-04-28-employee-role-permissions-design.md` and plan `docs/superpowers/plans/2026-04-28-employee-role-permissions.md`. **8 of 27 tasks committed** (foundation + 3 of 4 route refactors). Resume at Task 9.
 
 ---
 
@@ -87,7 +88,20 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - `aa59d6a` `docker-compose.backup.yml` header fixed + nightly-pg-dump
   defaults rebranded (DB name, dump filename pattern)
 
-**Earlier (pre-summary):**
+**Permission system feature — in progress** (2026-04-28):
+
+- `a3b7d24` Task 1 — DB migration 053 (sales role + user_permission_overrides table)
+- `43e2f3a` Task 2 — Redis singleton at `lib/redis.ts` (uses `ioredis`)
+- `de9e1f6` Task 3 — Permission registry constants (16 perms, 4 roles, ROLE_DEFAULTS, PERMISSION_REGISTRY)
+- `85c77d0` Task 4 — getUserPermissions + hasPermission + invalidateUserPermissions + 9 tests
+- `40964ab` Task 5 — requirePermission middleware + stripFieldsForUser + 5 tests
+- `b62b055` Task 6 — users.ts + settings.ts refactor (2 sites → USERS_MANAGE / SETTINGS_MANAGE)
+- `cb1c9f9` Task 7 — invoices.ts refactor (10 sites; **accountants now can create invoices**, fixed inverted bug)
+- `e429e3b` Task 8 — orders.ts + incoming.ts refactor (15 sites; GET /incoming now gated by INCOMING_MANAGE)
+
+**Tasks 9-27 remain.** Resume in next session via subagent-driven-development OR executing-plans skill, using the plan file. Test baseline: 248 passed, 2 pre-existing failures.
+
+**Earlier (pre-permissions feature):**
 
 - `aac0cf3` Overnight QA + production-readiness report
 - Razpiska payments feature shipped (commits up to `2e6886b`)
