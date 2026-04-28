@@ -40,22 +40,15 @@ production-readiness blockers are next.
 Greek Foods Docker stack is allowed to run in parallel; MERT-M dev
 ports are picked specifically to avoid collision.
 
-### Start everything (Phase 4 boot script — TODO)
-
-For now, manual start (until `scripts/start-mertm.sh` lands):
+### Start everything
 
 ```bash
-# Backend (tsx watch, picks up .env from warehouse-backend/.env)
-cd warehouse-backend && nohup npm run dev > /tmp/mertm-backend.log 2>&1 &
-
-# Frontend
-cd warehouse-frontend && nohup npm run dev > /tmp/mertm-frontend.log 2>&1 &
-
-# AI service
-cd ai-service && nohup bash -c 'set -a && source .env && set +a && \
-  ./.venv311/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000' \
-  > /tmp/mertm-ai.log 2>&1 &
+./scripts/start-mertm.sh           # idempotent boot of full dev stack
+./scripts/start-mertm.sh --status  # health probe only
+./scripts/start-mertm.sh --stop    # stop dev processes (Docker stays up)
 ```
+
+Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ### Admin login (dev only)
 
