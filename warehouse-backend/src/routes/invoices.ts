@@ -369,9 +369,13 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         }
 
         const { rows: items } = await client.query(
-          `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+          `SELECT oi.*,
+                  oi.name_bg_snapshot AS name_bg,
+                  oi.name_en_snapshot AS name_en,
+                  oi.sku_snapshot     AS sku,
+                  p.unit, p.brand
          FROM order_items oi
-         JOIN products p ON p.id = oi.product_id
+         LEFT JOIN products p ON p.id = oi.product_id
          WHERE oi.order_id = $1
          ORDER BY oi.id`,
           [body.order_id],
@@ -514,9 +518,13 @@ export default async function invoiceRoutes(app: FastifyInstance) {
 
         // Get current order items
         const { rows: items } = await client.query(
-          `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+          `SELECT oi.*,
+                  oi.name_bg_snapshot AS name_bg,
+                  oi.name_en_snapshot AS name_en,
+                  oi.sku_snapshot     AS sku,
+                  p.unit, p.brand
            FROM order_items oi
-           JOIN products p ON p.id = oi.product_id
+           LEFT JOIN products p ON p.id = oi.product_id
            WHERE oi.order_id = $1
            ORDER BY oi.id`,
           [order.id],
@@ -778,9 +786,13 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               .send({ error: "PDF not yet generated (no linked order)" });
           }
           const { rows: rawItems } = await query(
-            `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+            `SELECT oi.*,
+                    oi.name_bg_snapshot AS name_bg,
+                    oi.name_en_snapshot AS name_en,
+                    oi.sku_snapshot     AS sku,
+                    p.unit, p.brand
              FROM order_items oi
-             JOIN products p ON p.id = oi.product_id
+             LEFT JOIN products p ON p.id = oi.product_id
              WHERE oi.order_id = $1
              ORDER BY oi.id`,
             [order.id],
@@ -895,9 +907,13 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               .send({ error: "PDF not yet generated (no linked order)" });
           }
           const { rows: rawItems } = await query(
-            `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+            `SELECT oi.*,
+                    oi.name_bg_snapshot AS name_bg,
+                    oi.name_en_snapshot AS name_en,
+                    oi.sku_snapshot     AS sku,
+                    p.unit, p.brand
            FROM order_items oi
-           JOIN products p ON p.id = oi.product_id
+           LEFT JOIN products p ON p.id = oi.product_id
            WHERE oi.order_id = $1
            ORDER BY oi.id`,
             [order.id],
@@ -1177,9 +1193,13 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           if (orders.length > 0) {
             sourceOrderId = orders[0].id;
             const { rows: items } = await client.query(
-              `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+              `SELECT oi.*,
+                      oi.name_bg_snapshot AS name_bg,
+                      oi.name_en_snapshot AS name_en,
+                      oi.sku_snapshot     AS sku,
+                      p.unit, p.brand
                FROM order_items oi
-               JOIN products p ON p.id = oi.product_id
+               LEFT JOIN products p ON p.id = oi.product_id
                WHERE oi.order_id = $1
                ORDER BY oi.id`,
               [orders[0].id],

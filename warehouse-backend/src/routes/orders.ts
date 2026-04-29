@@ -613,11 +613,17 @@ export default async function orderRoutes(app: FastifyInstance) {
     // MERT-M: no batches — order items carry only product metadata.
     // total_stock is included so the partner-history drawer can disable the
     // "+" button for products that are currently out of stock.
+    // Identity (name_bg / name_en / sku) is read from the per-row
+    // snapshot so historical orders preserve the name that was on the
+    // document at issuance, even after the product is renamed in the
+    // catalog. Operational fields (unit / brand / weight / purchase_price)
+    // still LEFT-JOIN the live products row.
     const { rows: items } = await query(
       `SELECT oi.*,
-              COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
-              COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand, pr.weight_kg, pr.purchase_price,
+              oi.name_bg_snapshot AS name_bg,
+              oi.name_en_snapshot AS name_en,
+              oi.sku_snapshot     AS sku,
+              pr.unit, pr.brand, pr.weight_kg, pr.purchase_price,
               (
                 SELECT COALESCE(SUM(quantity), 0)
                 FROM inventory
@@ -694,10 +700,12 @@ export default async function orderRoutes(app: FastifyInstance) {
             ? priceGroupColumnMap[partner.price_group] || "selling_price"
             : "selling_price";
 
-          // Load product data including the partner's price group column
+          // Load product data including the partner's price group column.
+          // name_en / sku come along so we can snapshot them onto the new
+          // order_items rows (Batch B — historical document accuracy).
           const productIds = [...new Set(body.items.map((i) => i.product_id))];
           const { rows: productData } = await client.query(
-            `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg, purchase_price FROM products WHERE id = ANY($1)`,
+            `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg, name_en, sku, purchase_price FROM products WHERE id = ANY($1)`,
             [productIds],
           );
           const productMap = new Map(productData.map((p: any) => [p.id, p]));
@@ -835,7 +843,7 @@ export default async function orderRoutes(app: FastifyInstance) {
 
           for (const item of body.items) {
             // Price resolution chain: explicit > partner price list > product selling_price > 0
-            const prod = productMap.get(item.product_id);
+            const prod = productMap.get(item.product_id) as any;
             const unitPrice =
               item.unit_price ??
               priceMap.get(item.product_id) ??
@@ -850,11 +858,20 @@ export default async function orderRoutes(app: FastifyInstance) {
             );
             totalAmount += totalPrice;
 
+            if (!prod) {
+              throw Object.assign(
+                new Error(`Product ${item.product_id} not found`),
+                { statusCode: 400 },
+              );
+            }
+
             const {
               rows: [orderItem],
             } = await client.query(
-              `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+              `INSERT INTO order_items
+                 (order_id, product_id, quantity, unit_price, discount_percent, total_price,
+                  name_bg_snapshot, name_en_snapshot, sku_snapshot)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
               [
                 order.id,
                 item.product_id,
@@ -862,6 +879,9 @@ export default async function orderRoutes(app: FastifyInstance) {
                 unitPrice,
                 discountPct,
                 totalPrice,
+                prod.name_bg,
+                prod.name_en,
+                prod.sku,
               ],
             );
             items.push(orderItem);
@@ -1047,12 +1067,36 @@ export default async function orderRoutes(app: FastifyInstance) {
             item.total_price || item.quantity * item.unit_price;
           calculatedTotal += totalPrice;
 
+          // Snapshot product identity at the moment of INSERT (Batch B).
+          const {
+            rows: [snap],
+          } = await client.query(
+            `SELECT name_bg, name_en, sku FROM products WHERE id = $1`,
+            [productId],
+          );
+          if (!snap) {
+            throw Object.assign(new Error(`Product ${productId} not found`), {
+              statusCode: 400,
+            });
+          }
+
           const {
             rows: [orderItem],
           } = await client.query(
-            `INSERT INTO order_items (order_id, product_id, quantity, unit_price, total_price)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [order.id, productId, item.quantity, item.unit_price, totalPrice],
+            `INSERT INTO order_items
+               (order_id, product_id, quantity, unit_price, total_price,
+                name_bg_snapshot, name_en_snapshot, sku_snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+            [
+              order.id,
+              productId,
+              item.quantity,
+              item.unit_price,
+              totalPrice,
+              snap.name_bg,
+              snap.name_en,
+              snap.sku,
+            ],
           );
           items.push(orderItem);
         }
@@ -1231,7 +1275,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               ...new Set(body.items.map((i) => i.product_id)),
             ];
             const { rows: productData } = await client.query(
-              "SELECT id, name_bg, selling_price, purchase_price FROM products WHERE id = ANY($1)",
+              "SELECT id, name_bg, name_en, sku, selling_price, purchase_price FROM products WHERE id = ANY($1)",
               [productIds],
             );
             const productMap = new Map(productData.map((p: any) => [p.id, p]));
@@ -1343,11 +1387,25 @@ export default async function orderRoutes(app: FastifyInstance) {
                 );
               }
 
+              // Snapshot the product identity AT THE MOMENT this line is
+              // (re-)created. Existing rows that the user did not change are
+              // not touched here — the loop DELETEs all order_items first and
+              // re-creates them with snapshot from the current products row.
+              const snap = productMap.get(item.product_id) as any;
+              if (!snap) {
+                throw Object.assign(
+                  new Error(`Product ${item.product_id} not found`),
+                  { statusCode: 400 },
+                );
+              }
+
               const {
                 rows: [orderItem],
               } = await client.query(
-                `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+                `INSERT INTO order_items
+                   (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
                 [
                   id,
                   item.product_id,
@@ -1356,6 +1414,9 @@ export default async function orderRoutes(app: FastifyInstance) {
                   discountPct,
                   totalPrice,
                   costUnitPrice,
+                  snap.name_bg,
+                  snap.name_en,
+                  snap.sku,
                 ],
               );
               items.push(orderItem);
@@ -1837,9 +1898,13 @@ export default async function orderRoutes(app: FastifyInstance) {
     }
 
     const { rows: items } = await db.query(
-      `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+      `SELECT oi.*,
+              oi.name_bg_snapshot AS name_bg,
+              oi.name_en_snapshot AS name_en,
+              oi.sku_snapshot     AS sku,
+              p.unit, p.brand
        FROM order_items oi
-       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN products p ON p.id = oi.product_id
        WHERE oi.order_id = $1
        ORDER BY oi.id`,
       [orderId],
@@ -2053,9 +2118,10 @@ export default async function orderRoutes(app: FastifyInstance) {
 
     const { rows: items } = await db.query(
       `SELECT oi.*,
-              COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
-              COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand,
+              oi.name_bg_snapshot AS name_bg,
+              oi.name_en_snapshot AS name_en,
+              oi.sku_snapshot     AS sku,
+              pr.unit, pr.brand,
               NULL::text AS batch_number,
               NULL::date AS expiry_date
        FROM order_items oi

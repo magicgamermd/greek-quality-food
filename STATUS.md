@@ -61,6 +61,17 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Done — Recent Sessions
 
+**Batch B — Product name snapshot in order_items** (2026-04-29, branch `feature/MERTM-batch-b-snapshot` from main):
+
+- Migration 057 — `order_items.name_bg_snapshot` (NOT NULL), `name_en_snapshot`, `sku_snapshot`; backfill from current products (55 rows). All future rows snapshot at INSERT time.
+- INSERT paths in `routes/orders.ts` (3 sites: main POST, from-comarch import, PUT edit) populate snapshot from current products
+- Read paths swap `JOIN products` for `oi.*_snapshot` columns: 2 sites in `routes/orders.ts` (drawer detail, edit-fetch + dispatch/commercial PDF data fetcher) + 5 sites in `routes/invoices.ts` (invoice create, regenerate, copies=2 PDF, credit-note PDF, credit-note create). Inner JOIN downgraded to LEFT JOIN throughout — deleted product no longer collapses the row.
+- UPDATE paths verified by tests not to touch snapshot columns
+- Frontend untouched (response shape preserved — `items[].name_bg/name_en/sku` still come back)
+- 4 new integration tests (3 write-path + 1 read-path)
+- BE tests: 276 passed, 2 pre-existing failures unrelated; BE TS clean except 2 pre-existing
+- **Open item:** manual rename-and-reopen E2E (Task 10 in plan, 7-step script) deferred to post-merge user verification
+
 **Batch A — Permission features** (2026-04-29, 16 commits on `feature/MERTM-batch-a-permissions`, branched off `feature/MERTM-tester-attachments-buttons`):
 
 - Migration 056 — `orders.below_cost_approved_by/at/details` audit columns + partial index
