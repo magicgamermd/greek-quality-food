@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../db.js", () => ({ query: vi.fn() }));
+vi.mock("../db.js", () => ({ query: vi.fn(), transaction: vi.fn() }));
 vi.mock("../lib/redis.js", () => ({
   getRedis: vi.fn(async () => ({
     get: vi.fn(async () => null),
@@ -10,10 +10,11 @@ vi.mock("../lib/redis.js", () => ({
   })),
 }));
 
-import { query } from "../db.js";
+import { query, transaction } from "../db.js";
 import usersRoutes from "../routes/users.js";
 
 const mockQuery = vi.mocked(query);
+const mockTransaction = vi.mocked(transaction);
 
 async function buildApp(role: string, userId = "admin1") {
   const app = Fastify();
@@ -94,7 +95,12 @@ describe("GET /users/:id/permissions", () => {
 });
 
 describe("PATCH /users/:id/permissions/:permission", () => {
-  beforeEach(() => mockQuery.mockReset());
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockTransaction.mockImplementation(async (fn) =>
+      fn({ query: mockQuery } as any),
+    );
+  });
 
   it("upserts override + writes audit + invalidates cache", async () => {
     // Target user lookup
@@ -149,7 +155,7 @@ describe("PATCH /users/:id/permissions/:permission", () => {
 
   it("rejects 400 when target is self", async () => {
     mockQuery.mockResolvedValueOnce({
-      rows: [{ id: "admin1", role: "admin" }],
+      rows: [{ id: "admin1", role: "sales" }],
     } as any);
 
     const app = await buildApp("admin", "admin1");
@@ -159,7 +165,8 @@ describe("PATCH /users/:id/permissions/:permission", () => {
         url: "/users/admin1/permissions/users.manage",
         payload: { granted: false },
       });
-      expect([400]).toContain(res.statusCode);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("self_modification_forbidden");
     } finally {
       await app.close();
     }

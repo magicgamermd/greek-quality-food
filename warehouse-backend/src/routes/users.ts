@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { query } from "../db.js";
+import { query, transaction } from "../db.js";
 import {
   requirePermission,
   PERMISSIONS,
@@ -270,48 +270,57 @@ export default async function usersRoutes(app: FastifyInstance) {
       }
       const target = targetResult.rows[0];
 
-      if (target.role === "admin") {
-        return reply.status(400).send({ error: "admin_lockout_protection" });
-      }
       if ((request.user as any).id === id) {
         return reply.status(400).send({ error: "self_modification_forbidden" });
       }
+      if (target.role === "admin") {
+        return reply.status(400).send({ error: "admin_lockout_protection" });
+      }
 
-      await query(
-        `INSERT INTO user_permission_overrides (user_id, permission, granted, reason, created_by)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (user_id, permission)
-         DO UPDATE SET granted = EXCLUDED.granted,
-                       reason = EXCLUDED.reason,
-                       created_by = EXCLUDED.created_by,
-                       created_at = now()
-         RETURNING id, granted, reason`,
-        [id, permission, granted, reason ?? null, (request.user as any).id],
-      );
+      const auditResult = await transaction(async (client) => {
+        await client.query(
+          `INSERT INTO user_permission_overrides (user_id, permission, granted, reason, created_by)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (user_id, permission)
+           DO UPDATE SET granted = EXCLUDED.granted,
+                         reason = EXCLUDED.reason,
+                         created_by = EXCLUDED.created_by,
+                         created_at = now()
+           RETURNING id, granted, reason`,
+          [id, permission, granted, reason ?? null, (request.user as any).id],
+        );
 
-      // CORRECTED: real audit_events schema has columns
-      //   (actor_user_id, actor_email, action, entity_type, entity_id, diff)
-      // entity_id is BIGINT and cannot hold a UUID, so we store the target user_id inside diff.
-      const auditResult = await query(
-        `INSERT INTO audit_events
-           (actor_user_id, actor_email, action, entity_type, entity_id, diff)
-         VALUES ($1, $2, $3, 'user', NULL, $4::jsonb)
-         RETURNING id`,
-        [
-          (request.user as any).id,
-          (request.user as any).email ?? null,
-          "permission_override",
-          JSON.stringify({
-            user_id: id,
-            permission,
-            action: granted ? "grant" : "revoke",
-            new: granted,
-            reason: reason ?? null,
-          }),
-        ],
-      );
+        // CORRECTED: real audit_events schema has columns
+        //   (actor_user_id, actor_email, action, entity_type, entity_id, diff)
+        // entity_id is BIGINT and cannot hold a UUID, so we store the target user_id inside diff.
+        return client.query(
+          `INSERT INTO audit_events
+             (actor_user_id, actor_email, action, entity_type, entity_id, diff)
+           VALUES ($1, $2, $3, 'user', NULL, $4::jsonb)
+           RETURNING id`,
+          [
+            (request.user as any).id,
+            (request.user as any).email ?? null,
+            "permission_override",
+            JSON.stringify({
+              user_id: id,
+              permission,
+              action: granted ? "grant" : "revoke",
+              new: granted,
+              reason: reason ?? null,
+            }),
+          ],
+        );
+      });
 
-      await invalidateUserPermissions(id);
+      try {
+        await invalidateUserPermissions(id);
+      } catch (err) {
+        request.log.warn(
+          { err, user_id: id },
+          "permission cache invalidation failed (non-fatal)",
+        );
+      }
 
       return {
         user_id: id,
