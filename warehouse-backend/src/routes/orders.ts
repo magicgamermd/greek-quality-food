@@ -1898,9 +1898,13 @@ export default async function orderRoutes(app: FastifyInstance) {
     }
 
     const { rows: items } = await db.query(
-      `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+      `SELECT oi.*,
+              oi.name_bg_snapshot AS name_bg,
+              oi.name_en_snapshot AS name_en,
+              oi.sku_snapshot     AS sku,
+              p.unit, p.brand
        FROM order_items oi
-       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN products p ON p.id = oi.product_id
        WHERE oi.order_id = $1
        ORDER BY oi.id`,
       [orderId],
@@ -2114,9 +2118,10 @@ export default async function orderRoutes(app: FastifyInstance) {
 
     const { rows: items } = await db.query(
       `SELECT oi.*,
-              COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
-              COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand,
+              oi.name_bg_snapshot AS name_bg,
+              oi.name_en_snapshot AS name_en,
+              oi.sku_snapshot     AS sku,
+              pr.unit, pr.brand,
               NULL::text AS batch_number,
               NULL::date AS expiry_date
        FROM order_items oi
