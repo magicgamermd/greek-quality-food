@@ -239,6 +239,11 @@ export interface Order {
   econt_shipment_number?: string | null;
   econt_tracking_url?: string | null;
   econt_pdf_url?: string | null;
+  // Search by article — populated by GET /orders?article=...
+  matched_items?: Array<{
+    name_bg: string;
+    sku: string | null;
+  }>;
 }
 
 export interface OrderItem {
