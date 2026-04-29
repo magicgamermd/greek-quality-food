@@ -284,6 +284,21 @@ interface ProductOption {
   product: OrderProduct;
 }
 
+// Batch D — invoice partner override. Either points to an existing partner
+// from the catalog (carrying name/EIK for the chip preview), or carries the
+// full new-partner data the server will upsert by EIK.
+type PartnerOverride =
+  | { partner_id: number; name: string; eik: string }
+  | {
+      name: string;
+      eik: string;
+      vat_number?: string;
+      address?: string;
+      city?: string;
+      contact_person?: string;
+      phone?: string;
+    };
+
 export interface ProductSearchHandle {
   focus: () => void;
 }
@@ -500,6 +515,13 @@ function OrderDetailModal({
   // exposed when the order's partner is an individual (физ. лице). When
   // empty we fall back to partner.name server-side.
   const [clientDisplayName, setClientDisplayName] = useState("");
+  // Batch D — issue invoice in the name of a different (company) partner.
+  // Only available when the order's partner is an individual. Either pick
+  // an existing company partner, or supply full new-partner data — the
+  // server upserts by EIK.
+  const [partnerOverride, setPartnerOverride] =
+    useState<PartnerOverride | null>(null);
+  const [partnerOverrideOpen, setPartnerOverrideOpen] = useState(false);
   const [generatedInvoiceId, setGeneratedInvoiceId] = useState<number | null>(
     null,
   );
@@ -529,6 +551,8 @@ function OrderDetailModal({
     setClientDisplayName("");
     setPaymentMethod("bank");
     setPaymentMenuOpen(false);
+    setPartnerOverride(null);
+    setPartnerOverrideOpen(false);
     // Close any in-flight oversell dialog — its `proceed` closure captured
     // the previous order's id, so leaving it open would fulfill the wrong
     // order if the user confirms after switching drawers.
@@ -672,6 +696,7 @@ function OrderDetailModal({
     onSuccess: (res) => {
       const newInvoiceId = res.data?.id ?? null;
       setGeneratedInvoiceId(newInvoiceId);
+      setPartnerOverride(null);
       invalidateAllOrderRelated();
       // Auto-open PDF for printing immediately after generation
       if (newInvoiceId) {
