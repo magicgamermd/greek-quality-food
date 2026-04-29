@@ -131,6 +131,10 @@ const createOrderSchema = z.object({
   // are priced below products.purchase_price. Backend re-validates and
   // hard-rejects when this flag is omitted but lines are below cost.
   allow_below_cost: z.boolean().optional().default(false),
+  // Initial status — only "pending" (default) or "quoted" allowed at create
+  // time. Quoted orders skip stock validation and never deduct inventory
+  // until they're moved to pending → confirmed.
+  status: z.enum(["pending", "quoted"]).optional().default("pending"),
 });
 
 const updateStatusSchema = z.object({
@@ -886,7 +890,7 @@ export default async function orderRoutes(app: FastifyInstance) {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22, $23,
-                 'pending', nextval('order_number_seq'))
+                 $24, nextval('order_number_seq'))
          RETURNING *`,
             [
               body.partner_id,
@@ -914,6 +918,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               belowCostDetails != null
                 ? JSON.stringify(belowCostDetails)
                 : null,
+              body.status,
             ],
           );
 
