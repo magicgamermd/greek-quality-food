@@ -34,6 +34,9 @@ import { OwnerDeliveries } from "@/pages/owner/OwnerDeliveries";
 import { NotFound } from "@/pages/NotFound";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { PermissionProvider } from "@/contexts/PermissionContext";
+import { UsersListPage } from "@/pages/admin/UsersListPage";
+import { RequirePermission } from "@/components/RequirePermission";
+import { PERMISSIONS } from "@/lib/permissions";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -235,6 +238,14 @@ function AppRoutes() {
             <ProtectedRoute allowedRoles={["admin"]}>
               <Settings />
             </ProtectedRoute>
+          }
+        />
+        <Route
+          path="settings/users"
+          element={
+            <RequirePermission permission={PERMISSIONS.USERS_MANAGE}>
+              <UsersListPage />
+            </RequirePermission>
           }
         />
         <Route path="*" element={<NotFound />} />

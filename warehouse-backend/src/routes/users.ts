@@ -44,10 +44,13 @@ export default async function usersRoutes(app: FastifyInstance) {
       const offset = (pageNum - 1) * pageSize;
 
       const { rows } = await query(
-        `SELECT id, name, email, role, created_at
-       FROM users
-       ORDER BY created_at DESC
-       LIMIT $1 OFFSET $2`,
+        `SELECT u.id, u.name, u.email, u.role, u.created_at,
+                COUNT(upo.id)::int AS overrides_count
+         FROM users u
+         LEFT JOIN user_permission_overrides upo ON upo.user_id = u.id
+         GROUP BY u.id
+         ORDER BY u.created_at DESC
+         LIMIT $1 OFFSET $2`,
         [pageSize, offset],
       );
 
@@ -56,8 +59,13 @@ export default async function usersRoutes(app: FastifyInstance) {
       );
       const total = parseInt(countResult[0].count, 10);
 
+      const enriched = rows.map((r: any) => ({
+        ...r,
+        has_overrides: r.overrides_count > 0,
+      }));
+
       return {
-        data: rows,
+        data: enriched,
         pagination: {
           total,
           page: pageNum,
