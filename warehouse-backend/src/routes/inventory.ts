@@ -12,6 +12,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { query, transaction } from "../db.js";
+import { stripFieldsForUser, PERMISSIONS } from "../lib/permissions.js";
 
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   await request.jwtVerify();
@@ -131,8 +132,15 @@ export default async function inventoryRoutes(app: FastifyInstance) {
     const { rows: countRows } = await query(countSql, filterParams);
     const total = parseInt(countRows[0]?.total || "0");
 
+    const filtered = await stripFieldsForUser(request.user as any, rows, [
+      {
+        permission: PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+        fields: ["purchase_price"],
+      },
+    ]);
+
     return {
-      data: rows,
+      data: filtered,
       pagination: { page: pageNum, limit: pageSize, total },
     };
   });

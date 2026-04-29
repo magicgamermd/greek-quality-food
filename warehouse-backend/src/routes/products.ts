@@ -1,7 +1,11 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { query } from "../db.js";
-import { requirePermission, PERMISSIONS } from "../lib/permissions.js";
+import {
+  requirePermission,
+  stripFieldsForUser,
+  PERMISSIONS,
+} from "../lib/permissions.js";
 
 const createProductSchema = z.object({
   name_bg: z.string().min(1),
@@ -363,8 +367,15 @@ export default async function productRoutes(app: FastifyInstance) {
       `SELECT COUNT(*) as total FROM products`,
     );
 
+    const filtered = await stripFieldsForUser(request.user as any, rows, [
+      {
+        permission: PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+        fields: ["purchase_price"],
+      },
+    ]);
+
     return {
-      data: rows,
+      data: filtered,
       pagination: {
         page: pageNum,
         limit: pageSize,

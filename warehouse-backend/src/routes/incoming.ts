@@ -5,6 +5,7 @@ import { query, transaction } from "../db.js";
 import {
   requirePermission,
   hasPermission,
+  stripFieldsForUser,
   PERMISSIONS,
 } from "../lib/permissions.js";
 import fs from "node:fs";
@@ -788,7 +789,18 @@ export default async function incomingRoutes(app: FastifyInstance) {
       [id],
     );
 
-    return reply.send({ ...docs[0], items });
+    const filteredItems = await stripFieldsForUser(
+      (request as any).user,
+      items,
+      [
+        {
+          permission: PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+          fields: ["product_purchase_price"],
+        },
+      ],
+    );
+
+    return reply.send({ ...docs[0], items: filteredItems });
   });
 
   // POST /incoming — create incoming goods document with items
