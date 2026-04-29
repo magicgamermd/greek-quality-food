@@ -103,6 +103,11 @@ interface InvoiceData {
   relatedInvoiceNumber?: string;
   sourceCurrency?: string | null;
   outputPath: string;
+  /**
+   * Number of identical „Оригинал"-labeled pages to render. Default `1`.
+   * When `2`, both pages get the „Оригинал" label.
+   */
+  copies?: 1 | 2;
 }
 
 function formatEur(
@@ -597,6 +602,8 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
 
     const stream = fs.createWriteStream(data.outputPath);
     doc.pipe(stream);
+
+    const copies = data.copies ?? 1;
 
     // Register Cyrillic-capable fonts
     doc.registerFont("Main", FONT_REGULAR);
@@ -1126,8 +1133,10 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     };
 
     renderCopy("Оригинал");
-    doc.addPage({ size: "A4", margins: pageMargins });
-    renderCopy(null);
+    if (copies === 2) {
+      doc.addPage({ size: "A4", margins: pageMargins });
+      renderCopy("Оригинал");
+    }
 
     doc.end();
 

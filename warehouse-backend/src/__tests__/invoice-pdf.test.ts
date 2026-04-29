@@ -193,7 +193,7 @@ describe("generateInvoicePdf", () => {
     let renderedStrings: string[] = [];
 
     try {
-      await generateInvoicePdf(getTestData({ outputPath, copies: 2 }) as any);
+      await generateInvoicePdf(getTestData({ outputPath, copies: 2 }));
       renderedStrings = textSpy.mock.calls
         .map(([text]) => (typeof text === "string" ? text : String(text ?? "")))
         .filter(Boolean);
