@@ -63,6 +63,7 @@ import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
 import { usePermissions } from "@/contexts/PermissionContext";
 import { PERMISSIONS } from "@/lib/permissions";
+import { VAT_EXEMPTION_REASONS } from "@/lib/vatExemptionReasons";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -489,6 +490,8 @@ function OrderDetailModal({
   const items: OrderItem[] = detail?.items ?? [];
 
   // VAT toggle for invoice/documents
+  const [invoiceNote, setInvoiceNote] = useState("");
+  const [vatExemptionReason, setVatExemptionReason] = useState("");
   const [includeVat, setIncludeVat] = useState(true);
   // Payment basis printed on the invoice ("Начин на плащане:").
   const [paymentMethod, setPaymentMethod] =
@@ -527,6 +530,8 @@ function OrderDetailModal({
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
+    setInvoiceNote("");
+    setVatExemptionReason("");
     setPaymentMethod("bank");
     setPaymentMenuOpen(false);
     // Close any in-flight oversell dialog — its `proceed` closure captured
@@ -668,6 +673,10 @@ function OrderDetailModal({
         include_vat: includeVat,
         payment_method: paymentMethod,
         client_display_name: clientDisplayName.trim() || undefined,
+        invoice_note: invoiceNote.trim() || undefined,
+        vat_exemption_reason: !includeVat
+          ? vatExemptionReason.trim() || undefined
+          : undefined,
       }),
     onSuccess: (res) => {
       const newInvoiceId = res.data?.id ?? null;
@@ -1398,7 +1407,7 @@ function OrderDetailModal({
                 )}
 
                 {!hasInvoice ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {(detail as any)?.partner_partner_type === "individual" && (
                       <Input
                         value={clientDisplayName}
@@ -1407,6 +1416,44 @@ function OrderDetailModal({
                         className="w-60 h-9"
                         title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
                       />
+                    )}
+                    {/* Free-text note printed below totals on the PDF */}
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border w-full">
+                      <span className="text-xs text-gray-500 shrink-0">
+                        Забележка:
+                      </span>
+                      <input
+                        type="text"
+                        value={invoiceNote}
+                        onChange={(e) => setInvoiceNote(e.target.value)}
+                        placeholder="напр. по проект X (по желание)"
+                        maxLength={2000}
+                        className="flex-1 px-2 py-1 text-xs border rounded"
+                      />
+                    </div>
+                    {/* VAT-exemption legal basis — only when issuing without VAT */}
+                    {!includeVat && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 rounded-lg border border-amber-200 w-full">
+                        <span className="text-xs text-amber-700 shrink-0">
+                          Основание (без ДДС):
+                        </span>
+                        <input
+                          type="text"
+                          list="vat-exemption-suggestions"
+                          value={vatExemptionReason}
+                          onChange={(e) =>
+                            setVatExemptionReason(e.target.value)
+                          }
+                          placeholder="избери или въведи свободно"
+                          maxLength={500}
+                          className="flex-1 px-2 py-1 text-xs border rounded"
+                        />
+                        <datalist id="vat-exemption-suggestions">
+                          {VAT_EXEMPTION_REASONS.map((r) => (
+                            <option key={r} value={r} />
+                          ))}
+                        </datalist>
+                      </div>
                     )}
                     <Button
                       onClick={() => invoiceMutation.mutate(detail.id)}
