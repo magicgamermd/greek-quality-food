@@ -700,6 +700,24 @@ function OrderDetailModal({
     },
   });
 
+  // Batch E — Quotation transitions. /quote moves pending → quoted (and
+  // opens the offer PDF in a new tab on success). /unquote takes a quoted
+  // order back to pending so the normal workflow can resume.
+  const quoteMutation = useMutation({
+    mutationFn: (id: number) => api.post(`/orders/${id}/quote`),
+    onSuccess: (_res, id) => {
+      invalidateAllOrderRelated();
+      window.open(`/api/orders/${id}/offer-pdf`, "_blank");
+    },
+  });
+
+  const unquoteMutation = useMutation({
+    mutationFn: (id: number) => api.post(`/orders/${id}/unquote`),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+    },
+  });
+
   const regenerateInvoiceMutation = useMutation({
     mutationFn: (
       input: number | { id: number; payment_method?: InvoicePaymentMethod },
