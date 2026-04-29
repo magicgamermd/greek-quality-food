@@ -35,6 +35,7 @@ import {
   Truck,
   ShieldCheck,
   History,
+  Building2,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -1423,28 +1424,67 @@ function OrderDetailModal({
                 )}
 
                 {!hasInvoice ? (
-                  <div className="flex items-center gap-2">
-                    {(detail as any)?.partner_partner_type === "individual" && (
-                      <Input
-                        value={clientDisplayName}
-                        onChange={(e) => setClientDisplayName(e.target.value)}
-                        placeholder="Име на клиента (по желание)"
-                        className="w-60 h-9"
-                        title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
-                      />
-                    )}
-                    <Button
-                      onClick={() => invoiceMutation.mutate(detail.id)}
-                      disabled={invoiceMutation.isPending}
-                      className="bg-[#f97316] hover:bg-[#ea580c]"
-                    >
-                      {invoiceMutation.isPending ? (
-                        <Spinner size="sm" />
-                      ) : (
-                        <FileText className="h-4 w-4" />
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {(detail as any)?.partner_partner_type ===
+                        "individual" && (
+                        <>
+                          <Input
+                            value={clientDisplayName}
+                            onChange={(e) =>
+                              setClientDisplayName(e.target.value)
+                            }
+                            placeholder="Име на клиента (по желание)"
+                            className="w-60 h-9"
+                            disabled={!!partnerOverride}
+                            title={
+                              partnerOverride
+                                ? "Не се ползва, докато фактурата е насочена към фирма."
+                                : "Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
+                            }
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={() => setPartnerOverrideOpen(true)}
+                            className="border-blue-600 text-blue-700 hover:bg-blue-50"
+                          >
+                            <Building2 className="h-4 w-4" />
+                            {partnerOverride
+                              ? "Промени фирма"
+                              : "Издай на фирма"}
+                          </Button>
+                        </>
                       )}
-                      Генерирай фактура {!includeVat && "(без ДДС)"}
-                    </Button>
+                      <Button
+                        onClick={() => invoiceMutation.mutate(detail.id)}
+                        disabled={invoiceMutation.isPending}
+                        className="bg-[#f97316] hover:bg-[#ea580c]"
+                      >
+                        {invoiceMutation.isPending ? (
+                          <Spinner size="sm" />
+                        ) : (
+                          <FileText className="h-4 w-4" />
+                        )}
+                        Генерирай фактура {!includeVat && "(без ДДС)"}
+                      </Button>
+                    </div>
+                    {partnerOverride && (
+                      <div className="text-xs flex items-center gap-1 px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 self-start">
+                        <span>
+                          Фактура на: <b>{partnerOverride.name}</b> (ЕИК{" "}
+                          {partnerOverride.eik})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPartnerOverride(null)}
+                          className="ml-1 text-amber-600 hover:text-amber-900"
+                          title="Премахни"
+                          aria-label="Премахни override-а"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -1603,26 +1643,51 @@ function OrderDetailModal({
                 <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
                   Документи:
                 </span>
-                <Button
-                  variant="outline"
-                  onClick={() => handleDocDownload(detail.id, "stock-dispatch")}
-                  className="text-emerald-600 border-emerald-300 hover:bg-emerald-50"
-                >
-                  <ClipboardList className="h-4 w-4" />
-                  Стокова разписка
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    handleDocDownload(detail.id, "stock-dispatch", {
-                      pricingMode: "gross",
-                    })
-                  }
-                  className="text-emerald-700 border-emerald-400 hover:bg-emerald-50"
-                >
-                  <ClipboardList className="h-4 w-4" />
-                  Стокова разписка (с ДДС)
-                </Button>
+                <div className="inline-flex">
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      handleDocDownload(detail.id, "stock-dispatch", {
+                        pricingMode: "gross",
+                      })
+                    }
+                    className="text-emerald-700 border-emerald-400 hover:bg-emerald-50 rounded-r-none border-r-0"
+                    title="Стокова разписка с ДДС (по подразбиране)"
+                  >
+                    <ClipboardList className="h-4 w-4" />
+                    Стокова разписка
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="text-emerald-700 border-emerald-400 hover:bg-emerald-50 rounded-l-none px-2"
+                        title="Избери дали с или без ДДС"
+                        aria-label="Избери дали с или без ДДС"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem
+                        onClick={() =>
+                          handleDocDownload(detail.id, "stock-dispatch", {
+                            pricingMode: "gross",
+                          })
+                        }
+                      >
+                        💶 Стокова разписка (с ДДС)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() =>
+                          handleDocDownload(detail.id, "stock-dispatch")
+                        }
+                      >
+                        🧾 Стокова разписка (без ДДС)
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
                 <Button
                   variant="outline"
                   onClick={() => handleDocDownload(detail.id, "commercial-doc")}
@@ -1634,7 +1699,7 @@ function OrderDetailModal({
                 <Button
                   variant="outline"
                   onClick={() => handleDocDownload(detail.id, "warranty")}
-                  className="text-amber-700 border-amber-300 hover:bg-amber-50 ml-auto"
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50 ml-auto mr-2"
                   title="Гаранционна карта (сериен номер = номер на поръчката)"
                 >
                   <ShieldCheck className="h-4 w-4" />

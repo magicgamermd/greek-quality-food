@@ -312,9 +312,19 @@ export function EcontShipmentActions({
           <>
             <button
               type="button"
+              className="px-3 py-1.5 border rounded text-sm flex items-center gap-1.5"
+              onClick={startEdit}
+              title="Редактирай данните и натисни Актуализирай за да се обнови товарителницата в Еконт"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Редактирай
+            </button>
+            <button
+              type="button"
               className="px-3 py-1.5 bg-accent text-white rounded text-sm disabled:opacity-60"
               onClick={() => updateMutation.mutate()}
               disabled={updateMutation.isPending}
+              title="Преиздай товарителницата в Еконт с актуалните данни от поръчката"
             >
               {updateMutation.isPending ? "Актуализиране…" : "Актуализирай"}
             </button>
