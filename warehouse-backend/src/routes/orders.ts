@@ -414,6 +414,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       object_query,
       q,
       below_cost_only,
+      article,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -491,6 +492,26 @@ export default async function orderRoutes(app: FastifyInstance) {
       where += ` AND (${ORDER_OBJECT_NAME_SQL} ILIKE $${paramIdx} OR ${ORDER_OBJECT_CODE_SQL} ILIKE $${paramIdx})`;
       params.push(`%${objectQuery}%`);
       paramIdx++;
+    }
+
+    // Article search: matches orders containing a product whose snapshot
+    // name or SKU matches the query. Uses oi.*_snapshot from Batch B so a
+    // rename in the products catalog does not retroactively hide a match
+    // (the historical document's name is what's searchable).
+    const articleQuery = normalizeOptionalText(article);
+    if (articleQuery) {
+      where += ` AND EXISTS (
+        SELECT 1
+        FROM order_items oi
+        WHERE oi.order_id = o.id
+          AND (
+            oi.name_bg_snapshot ILIKE $${paramIdx}
+            OR oi.name_en_snapshot ILIKE $${paramIdx}
+            OR oi.sku_snapshot = $${paramIdx + 1}
+          )
+      )`;
+      params.push(`%${articleQuery}%`, articleQuery);
+      paramIdx += 2;
     }
 
     const freeText = normalizeOptionalText(q);
