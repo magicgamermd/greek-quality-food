@@ -107,6 +107,7 @@ const statusLabels: Record<string, string> = {
   fulfilled: "Изпълнена",
   cancelled: "Анулирана",
   invoiced: "Фактурирана",
+  quoted: "Оферта",
 };
 const statusVariants: Record<
   string,
@@ -118,6 +119,7 @@ const statusVariants: Record<
   fulfilled: "success",
   cancelled: "destructive",
   invoiced: "default",
+  quoted: "warning",
 };
 
 function hasAnnulledInvoice(order: Pick<Order, "annulled_invoice_at">) {
