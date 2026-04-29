@@ -173,13 +173,16 @@ function getEffectiveStock(item: OrderItemRow) {
   return item.stock;
 }
 
-async function openInvoicePdf(invoiceId: number) {
+async function openInvoicePdf(invoiceId: number, copies: 1 | 2 = 1) {
   try {
     // Append a timestamp so the browser never serves a stale cached
     // PDF after "Регенерирай" rewrites the file on disk.
-    const res = await api.get(`/invoices/${invoiceId}/pdf?t=${Date.now()}`, {
-      responseType: "blob",
-    });
+    const res = await api.get(
+      `/invoices/${invoiceId}/pdf?copies=${copies}&t=${Date.now()}`,
+      {
+        responseType: "blob",
+      },
+    );
 
     const blob = new Blob([res.data], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
