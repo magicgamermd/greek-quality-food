@@ -2,7 +2,13 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { query } from "../db.js";
-import { requirePermission, PERMISSIONS } from "../lib/permissions.js";
+import {
+  requirePermission,
+  PERMISSIONS,
+  ROLE_DEFAULTS,
+  getUserPermissions,
+} from "../lib/permissions.js";
+import type { UserRole } from "../lib/permissions.js";
 
 const createUserSchema = z.object({
   name: z.string().min(2),
@@ -149,6 +155,68 @@ export default async function usersRoutes(app: FastifyInstance) {
       await query("DELETE FROM users WHERE id = $1", [id]);
 
       return { message: "User deleted successfully" };
+    },
+  );
+
+  // GET /users/:id/permissions — Get role defaults, overrides, and effective permissions (admin only)
+  app.get(
+    "/:id/permissions",
+    {
+      preHandler: [
+        async (req: FastifyRequest) => {
+          await req.jwtVerify();
+        },
+        requirePermission(PERMISSIONS.USERS_MANAGE),
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+
+      const userResult = await query(
+        "SELECT id, email, role, name FROM users WHERE id = $1",
+        [id],
+      );
+      if (userResult.rows.length === 0) {
+        return reply.status(404).send({ error: "User not found" });
+      }
+      const user = userResult.rows[0];
+
+      const overridesResult = await query(
+        `SELECT upo.permission, upo.granted, upo.reason, upo.created_at,
+                c.id AS created_by_id, c.email AS created_by_email, c.name AS created_by_name
+         FROM user_permission_overrides upo
+         LEFT JOIN users c ON c.id = upo.created_by
+         WHERE upo.user_id = $1
+         ORDER BY upo.created_at DESC`,
+        [id],
+      );
+
+      const overrides = overridesResult.rows.map((r) => ({
+        permission: r.permission,
+        granted: r.granted,
+        reason: r.reason,
+        created_at: r.created_at,
+        created_by: r.created_by_id
+          ? {
+              id: r.created_by_id,
+              email: r.created_by_email,
+              name: r.created_by_name,
+            }
+          : null,
+      }));
+
+      const role = user.role as UserRole;
+      const role_defaults = ROLE_DEFAULTS[role] ?? [];
+
+      const effective = [...(await getUserPermissions(id))];
+
+      return {
+        user_id: id,
+        role,
+        role_defaults,
+        overrides,
+        effective,
+      };
     },
   );
 }
