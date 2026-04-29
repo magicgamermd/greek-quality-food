@@ -260,3 +260,68 @@ describe("order_items snapshot — write path", () => {
     }
   });
 });
+
+describe("order_items snapshot — read path", () => {
+  let app: FastifyInstance;
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockTx.mockReset();
+  });
+
+  afterEach(async () => {
+    if (app) await app.close();
+  });
+
+  it("GET /orders/:id returns snapshot name even when product was renamed", async () => {
+    // Top-level: SELECT order then SELECT items.
+    mockQuery
+      // 1. SELECT * FROM orders ... (drawer detail)
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 1,
+            partner_id: 1,
+            status: "fulfilled",
+            partner_name: "P",
+            below_cost_approved_by_name: null,
+          },
+        ]),
+      )
+      // 2. SELECT oi.*, oi.name_bg_snapshot AS name_bg ... (items)
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 1001,
+            product_id: 100,
+            quantity: "1",
+            unit_price: "20",
+            name_bg: "OLD скара (snapshot)",
+            name_en: "OLD grill",
+            sku: "GR-100",
+            unit: "бр.",
+          },
+        ]),
+      );
+
+    app = await buildApp("admin");
+    const res = await app.inject({ method: "GET", url: "/orders/1" });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    // The drawer payload's items array carries the snapshot name as
+    // name_bg, regardless of what the live products row says today.
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].name_bg).toBe("OLD скара (snapshot)");
+    expect(body.items[0].sku).toBe("GR-100");
+
+    // Crucially: the SQL the route ran must read from the snapshot
+    // column, not from products.name_bg.
+    const itemsCall = mockQuery.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("FROM order_items"),
+    );
+    expect(itemsCall).toBeDefined();
+    expect(String(itemsCall![0])).toMatch(/oi\.name_bg_snapshot/);
+    expect(String(itemsCall![0])).not.toMatch(/COALESCE\(pr\.name_bg/);
+  });
+});
