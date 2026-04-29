@@ -2734,7 +2734,9 @@ function CreateOrderModal({
   }, [totalItemsWeight]);
 
   const mutation = useMutation({
-    mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
+    mutationFn: async (
+      vars: { allow_below_cost?: boolean; asQuoted?: boolean } = {},
+    ) => {
       const res = await api.post("/orders", {
         partner_id: Number(form.partner_id),
         delivery_date: form.delivery_date || undefined,
@@ -2762,6 +2764,7 @@ function CreateOrderModal({
           discount_percent: Number(i.discount_percent) || 0,
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
+        status: vars.asQuoted ? "quoted" : undefined,
       });
 
       // Persist any edited weights back to the product catalog so
@@ -2800,6 +2803,11 @@ function CreateOrderModal({
       }
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
+      // If saved as quoted, open the offer PDF in a new tab so the cashier
+      // can hand it to the customer immediately.
+      if (createdOrder?.status === "quoted" && createdOrder.id) {
+        window.open(`/api/orders/${createdOrder.id}/offer-pdf`, "_blank");
+      }
       if (onCreated && createdOrder && createdOrder.id) {
         // Open detail modal directly — user sees order summary
         onClose();
@@ -2867,7 +2875,7 @@ function CreateOrderModal({
   // already a UI-level gate (button visibility) so we don't double-check
   // it here. allow_below_cost is sent to the API only when the admin
   // explicitly confirmed the dialog.
-  const submitCreateOrder = async () => {
+  const submitCreateOrder = async ({ asQuoted = false } = {}) => {
     setErrorMsg("");
     if (hasBelowCost) {
       if (!canOverrideBelowCost) {
@@ -2885,15 +2893,19 @@ function CreateOrderModal({
       });
       if (!ok) return;
     }
-    const oversell = computeOversellItems();
-    if (oversell.length > 0) {
-      setPendingOversell({
-        items: oversell,
-        proceed: () => mutation.mutate({ allow_below_cost: hasBelowCost }),
-      });
-      return;
+    // Skip oversell guard for quoted orders — they don't deduct stock.
+    if (!asQuoted) {
+      const oversell = computeOversellItems();
+      if (oversell.length > 0) {
+        setPendingOversell({
+          items: oversell,
+          proceed: () =>
+            mutation.mutate({ allow_below_cost: hasBelowCost, asQuoted }),
+        });
+        return;
+      }
     }
-    mutation.mutate({ allow_below_cost: hasBelowCost });
+    mutation.mutate({ allow_below_cost: hasBelowCost, asQuoted });
   };
 
   // Ctrl/Cmd+Enter anywhere in the dialog submits the order.
@@ -3432,6 +3444,18 @@ function CreateOrderModal({
               >
                 <AlertTriangle className="h-4 w-4" />
                 Потвърди въпреки липсата
+              </Button>
+            )}
+            {!orderCreated && (
+              <Button
+                variant="outline"
+                onClick={() => void submitCreateOrder({ asQuoted: true })}
+                disabled={!canSubmit || mutation.isPending}
+                className="border-amber-500 text-amber-700 hover:bg-amber-50"
+                title="Запази без изваждане от наличности и отвори PDF на офертата"
+              >
+                <FileText className="h-4 w-4" />
+                Запази като оферта
               </Button>
             )}
             {!orderCreated && (!hasStockIssues || confirmOverstock) && (
