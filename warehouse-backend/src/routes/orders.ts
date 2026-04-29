@@ -1061,12 +1061,36 @@ export default async function orderRoutes(app: FastifyInstance) {
             item.total_price || item.quantity * item.unit_price;
           calculatedTotal += totalPrice;
 
+          // Snapshot product identity at the moment of INSERT (Batch B).
+          const {
+            rows: [snap],
+          } = await client.query(
+            `SELECT name_bg, name_en, sku FROM products WHERE id = $1`,
+            [productId],
+          );
+          if (!snap) {
+            throw Object.assign(new Error(`Product ${productId} not found`), {
+              statusCode: 400,
+            });
+          }
+
           const {
             rows: [orderItem],
           } = await client.query(
-            `INSERT INTO order_items (order_id, product_id, quantity, unit_price, total_price)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [order.id, productId, item.quantity, item.unit_price, totalPrice],
+            `INSERT INTO order_items
+               (order_id, product_id, quantity, unit_price, total_price,
+                name_bg_snapshot, name_en_snapshot, sku_snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+            [
+              order.id,
+              productId,
+              item.quantity,
+              item.unit_price,
+              totalPrice,
+              snap.name_bg,
+              snap.name_en,
+              snap.sku,
+            ],
           );
           items.push(orderItem);
         }
