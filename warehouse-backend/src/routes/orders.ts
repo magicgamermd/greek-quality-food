@@ -18,6 +18,7 @@ import {
 } from "../services/document-pdf.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { generateWarrantyCardPdf } from "../services/warranty-pdf.js";
+import { generateOfferPdf } from "../services/offer-pdf.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -2532,6 +2533,95 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const stream = fs.createReadStream(outputPath);
       const filename = `Търговски_документ_${docNumber}.pdf`;
+      const encodedFilename = encodeURIComponent(filename);
+
+      return reply
+        .header("Content-Type", "application/pdf")
+        .header(
+          "Content-Disposition",
+          `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+        )
+        .send(stream);
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // GET /:id/offer-pdf — ОФЕРТА (Quotation)
+  // ════════════════════════════════════════════════════════════════════
+  // Only available while the order is in `quoted` status. Renders an
+  // OF-NNNNNNN PDF used by the cashier to print a take-home offer for
+  // the customer. Stock is NOT deducted; the order is still convertible
+  // to pending → confirmed via POST /:id/unquote.
+  app.get<{ Params: { id: string } }>(
+    "/:id/offer-pdf",
+    { preHandler: ordersManagePreHandler },
+    async (request, reply) => {
+      const id = Number(request.params.id);
+      const data = await loadOrderWithBatches(id);
+      if (!data) return reply.status(404).send({ error: "Order not found" });
+
+      const { order, items } = data;
+      if (order.status !== "quoted") {
+        return reply.status(400).send({
+          error:
+            "Оферта може да се генерира само за поръчки в статус 'Оферта'.",
+        });
+      }
+
+      const offerNumber = `OF-${String(order.order_number || order.id).padStart(7, "0")}`;
+      const company = await getCompanySettings();
+
+      const totalNet = items.reduce(
+        (sum: number, it: any) => sum + parseFloat(it.total_price || 0),
+        0,
+      );
+      const totalVat = totalNet * 0.2;
+      const totalGross = totalNet + totalVat;
+
+      const pdfDir = path.resolve(process.cwd(), "data", "documents");
+      if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+      const outputPath = path.join(pdfDir, `offer-${id}.pdf`);
+
+      await generateOfferPdf({
+        offerNumber,
+        date: (order.order_date || order.created_at || new Date().toISOString())
+          .toString()
+          .slice(0, 10),
+        partner: {
+          name: order.partner_name,
+          eik: order.partner_eik,
+          vat_number: order.partner_vat,
+          address: order.partner_address,
+          city: order.partner_city,
+          phone: order.partner_phone,
+          contact_person: order.partner_contact_person,
+        },
+        company: {
+          name: company.company_name,
+          eik: company.eik,
+          vat_number: company.vat_number,
+          address: company.address,
+          city: company.city,
+          phone: company.phone,
+          email: company.email,
+          mol: company.mol,
+        },
+        items: items.map((i: any) => ({
+          name_bg: i.name_bg,
+          quantity: parseFloat(i.quantity),
+          unit: i.unit || "бр",
+          unit_price: parseFloat(i.unit_price),
+          discount_percent: parseFloat(i.discount_percent ?? 0),
+          total_price: parseFloat(i.total_price),
+        })),
+        totalNet,
+        totalVat,
+        totalGross,
+        outputPath,
+      });
+
+      const stream = fs.createReadStream(outputPath);
+      const filename = `Оферта_${offerNumber}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
 
       return reply
