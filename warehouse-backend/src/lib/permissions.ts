@@ -301,6 +301,7 @@ export async function stripFieldsForUser<T extends Record<string, unknown>>(
   rows: T[],
   rules: { permission: Permission; fields: string[] }[],
 ): Promise<T[]> {
+  if (rows.length === 0) return rows;
   let result = rows;
   for (const rule of rules) {
     if (await hasPermission(user, rule.permission)) continue;
