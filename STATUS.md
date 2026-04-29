@@ -61,6 +61,18 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Done — Recent Sessions
 
+**Batch C — Orders search by article** (2026-04-29, branch `feature/MERTM-batch-c-search-by-article` from main):
+
+- Backend `GET /orders?article=…` — EXISTS subquery on `order_items` using `oi.name_bg_snapshot` / `oi.name_en_snapshot` / `oi.sku_snapshot` (Batch B's snapshots → renames don't retroactively hide matches)
+- `matched_items` enrichment — when `?article=` is set, response carries `data[].matched_items: [{ name_bg, sku }]` (single batched query for the whole page, LIMIT 1000)
+- Order TS interface gets `matched_items?: Array<{ name_bg, sku }>`
+- Frontend "Артикул" inline filter (300ms debounce via `useDebouncedValue`)
+- Conditional "Намерен артикул" table column with `HighlightMatch` (only renders when `filters.article.trim()` is non-empty); shows up to 3 matches + "+N още"
+- Combines naturally with existing `?status=`, `?date_from/to=`, `?below_cost_only=` filters
+- 4 new integration tests (whitespace skip, EXISTS-with-snapshot, no-matched-items absence, AND-with-date-range)
+- BE+FE TS clean (only 2 pre-existing); plan's "Follow-up after Batch B merges" consolidated into Task 1 (snapshot used directly, no second commit needed)
+- **Open item:** manual E2E (Task 8 in plan, 8-step script) deferred to post-merge user verification
+
 **Batch B — Product name snapshot in order_items** (2026-04-29, branch `feature/MERTM-batch-b-snapshot` from main):
 
 - Migration 057 — `order_items.name_bg_snapshot` (NOT NULL), `name_en_snapshot`, `sku_snapshot`; backfill from current products (55 rows). All future rows snapshot at INSERT time.
