@@ -44,6 +44,8 @@ import {
 } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { HighlightMatch } from "@/lib/highlight";
+import { Can } from "@/components/Can";
+import { PERMISSIONS } from "@/lib/permissions";
 
 const PRICE_GROUP_FIELDS = [
   { key: "purchase_price", label: "Доставна цена" },
@@ -907,9 +909,13 @@ export function Products() {
                   <TableHead>SKU</TableHead>
                   <TableHead>Мярка</TableHead>
                   <TableHead>Категория</TableHead>
-                  <TableHead>Доставна цена</TableHead>
+                  <Can permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}>
+                    <TableHead>Доставна цена</TableHead>
+                  </Can>
                   <TableHead>Цена на едро</TableHead>
-                  <TableHead>Марж</TableHead>
+                  <Can permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}>
+                    <TableHead>Марж</TableHead>
+                  </Can>
                   <TableHead>Наличност</TableHead>
                   <TableHead className="text-right">Действия</TableHead>
                 </TableRow>
@@ -968,19 +974,27 @@ export function Products() {
                           "—"
                         )}
                       </TableCell>
-                      <TableCell>
-                        {p.purchase_price
-                          ? formatCurrency(p.purchase_price)
-                          : "—"}
-                      </TableCell>
+                      <Can
+                        permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}
+                      >
+                        <TableCell>
+                          {p.purchase_price
+                            ? formatCurrency(p.purchase_price)
+                            : "—"}
+                        </TableCell>
+                      </Can>
                       <TableCell>
                         {p.selling_price
                           ? formatCurrency(p.selling_price)
                           : "—"}
                       </TableCell>
-                      <TableCell className={marginColor}>
-                        {margin !== null ? `${margin.toFixed(1)}%` : "—"}
-                      </TableCell>
+                      <Can
+                        permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}
+                      >
+                        <TableCell className={marginColor}>
+                          {margin !== null ? `${margin.toFixed(1)}%` : "—"}
+                        </TableCell>
+                      </Can>
                       <TableCell>
                         {p.total_stock !== null &&
                         p.total_stock !== undefined ? (
@@ -999,14 +1013,16 @@ export function Products() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label="Редактирай продукт"
-                            onClick={() => openEdit(p)}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
+                          <Can permission={PERMISSIONS.PRODUCTS_MANAGE}>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              aria-label="Редактирай продукт"
+                              onClick={() => openEdit(p)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </Can>
                           <Button
                             size="icon"
                             variant="ghost"
