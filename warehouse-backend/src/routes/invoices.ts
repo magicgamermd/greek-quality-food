@@ -465,10 +465,33 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         // Only accept a display-name override when the buyer is an individual.
         // Storing it on legal-entity invoices would make the DB state misleading
         // even though the PDF ignores it.
-        const clientDisplayName =
+        let invoicePartnerId: number = order.partner_id;
+        let clientDisplayName: string | null =
           partner?.partner_type === "individual"
             ? (body.client_display_name ?? null)
             : null;
+
+        // Batch D — partner override (only for individual orders).
+        // The order's partner_id is left alone; the invoice points to the
+        // resolved (existing or freshly upserted) company partner.
+        if (body.partner_override) {
+          if (partner?.partner_type !== "individual") {
+            throw Object.assign(
+              new Error(
+                "partner_override is allowed only for individual orders",
+              ),
+              { statusCode: 400 },
+            );
+          }
+          invoicePartnerId = await resolveOverridePartner(
+            client,
+            body.partner_override,
+          );
+          // Override and client_display_name are mutually exclusive — once we
+          // have a real company partner, the "free-text individual name" no
+          // longer makes sense.
+          clientDisplayName = null;
+        }
 
         // Calculate totals
         const totalNet = items.reduce(
@@ -498,7 +521,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
          RETURNING *`,
           [
             invoiceNumber,
-            order.partner_id,
+            invoicePartnerId,
             totalNet,
             totalVat,
             totalGross,
@@ -522,10 +545,22 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         const invoicesDir = path.resolve("uploads", "invoices");
         fs.mkdirSync(invoicesDir, { recursive: true });
 
+        // Re-fetch the partner row for the PDF when an override was used —
+        // otherwise the original `partner` (the individual) would be printed
+        // on the invoice instead of the company.
+        let invoicePartner = partner;
+        if (body.partner_override) {
+          const { rows } = await client.query(
+            "SELECT * FROM partners WHERE id = $1",
+            [invoicePartnerId],
+          );
+          invoicePartner = rows[0] ?? partner;
+        }
+
         const pdfPath = path.join(invoicesDir, `${invoiceNumber}.pdf`);
         await generateInvoicePdf({
           invoice,
-          partner,
+          partner: invoicePartner,
           company,
           items,
           vatRate: effectiveVatRate,
