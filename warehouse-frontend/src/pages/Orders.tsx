@@ -34,6 +34,7 @@ import {
   X as XIcon,
   Truck,
   ShieldCheck,
+  FileSignature,
   History,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -63,6 +64,7 @@ import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
 import { usePermissions } from "@/contexts/PermissionContext";
 import { PERMISSIONS } from "@/lib/permissions";
+import { VAT_EXEMPTION_REASONS } from "@/lib/vatExemptionReasons";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -489,6 +491,15 @@ function OrderDetailModal({
   const items: OrderItem[] = detail?.items ?? [];
 
   // VAT toggle for invoice/documents
+  const [invoiceNote, setInvoiceNote] = useState("");
+  const [vatExemptionReason, setVatExemptionReason] = useState("");
+  const [protocolDialogOpen, setProtocolDialogOpen] = useState(false);
+  const [protocolPlace, setProtocolPlace] = useState("");
+  const [protocolDate, setProtocolDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [protocolSellerRep, setProtocolSellerRep] = useState("");
+  const [protocolBuyerRep, setProtocolBuyerRep] = useState("");
   const [includeVat, setIncludeVat] = useState(true);
   // Payment basis printed on the invoice ("Начин на плащане:").
   const [paymentMethod, setPaymentMethod] =
@@ -527,6 +538,8 @@ function OrderDetailModal({
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
+    setInvoiceNote("");
+    setVatExemptionReason("");
     setPaymentMethod("bank");
     setPaymentMenuOpen(false);
     // Close any in-flight oversell dialog — its `proceed` closure captured
@@ -668,6 +681,10 @@ function OrderDetailModal({
         include_vat: includeVat,
         payment_method: paymentMethod,
         client_display_name: clientDisplayName.trim() || undefined,
+        invoice_note: invoiceNote.trim() || undefined,
+        vat_exemption_reason: !includeVat
+          ? vatExemptionReason.trim() || undefined
+          : undefined,
       }),
     onSuccess: (res) => {
       const newInvoiceId = res.data?.id ?? null;
@@ -1398,7 +1415,7 @@ function OrderDetailModal({
                 )}
 
                 {!hasInvoice ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {(detail as any)?.partner_partner_type === "individual" && (
                       <Input
                         value={clientDisplayName}
@@ -1407,6 +1424,44 @@ function OrderDetailModal({
                         className="w-60 h-9"
                         title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
                       />
+                    )}
+                    {/* Free-text note printed below totals on the PDF */}
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border w-full">
+                      <span className="text-xs text-gray-500 shrink-0">
+                        Забележка:
+                      </span>
+                      <input
+                        type="text"
+                        value={invoiceNote}
+                        onChange={(e) => setInvoiceNote(e.target.value)}
+                        placeholder="напр. по проект X (по желание)"
+                        maxLength={2000}
+                        className="flex-1 px-2 py-1 text-xs border rounded"
+                      />
+                    </div>
+                    {/* VAT-exemption legal basis — only when issuing without VAT */}
+                    {!includeVat && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 rounded-lg border border-amber-200 w-full">
+                        <span className="text-xs text-amber-700 shrink-0">
+                          Основание (без ДДС):
+                        </span>
+                        <input
+                          type="text"
+                          list="vat-exemption-suggestions"
+                          value={vatExemptionReason}
+                          onChange={(e) =>
+                            setVatExemptionReason(e.target.value)
+                          }
+                          placeholder="избери или въведи свободно"
+                          maxLength={500}
+                          className="flex-1 px-2 py-1 text-xs border rounded"
+                        />
+                        <datalist id="vat-exemption-suggestions">
+                          {VAT_EXEMPTION_REASONS.map((r) => (
+                            <option key={r} value={r} />
+                          ))}
+                        </datalist>
+                      </div>
                     )}
                     <Button
                       onClick={() => invoiceMutation.mutate(detail.id)}
@@ -1615,6 +1670,22 @@ function OrderDetailModal({
                   <ShieldCheck className="h-4 w-4" />
                   Гаранция
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // Pre-fill from the loaded order detail; user can override
+                    // anything in the dialog before downloading.
+                    setProtocolBuyerRep(
+                      (detail as any)?.partner?.contact_person ?? "",
+                    );
+                    setProtocolDialogOpen(true);
+                  }}
+                  className="text-purple-700 border-purple-300 hover:bg-purple-50"
+                  title="Приемо-предавателен протокол"
+                >
+                  <FileSignature className="h-4 w-4" />
+                  Приемо-предавателен
+                </Button>
               </div>
             )}
           </DialogFooter>
@@ -1777,6 +1848,83 @@ function OrderDetailModal({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      </Dialog>
+      {/* Acceptance protocol — manual override dialog before PDF download */}
+      <Dialog
+        open={protocolDialogOpen}
+        onOpenChange={setProtocolDialogOpen}
+        modal={false}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Приемо-предавателен протокол</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-xs">Място</Label>
+              <Input
+                value={protocolPlace}
+                onChange={(e) => setProtocolPlace(e.target.value)}
+                placeholder="напр. София (default: фирмен град)"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Дата</Label>
+              <Input
+                type="date"
+                value={protocolDate}
+                onChange={(e) => setProtocolDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Продавач — представител</Label>
+              <Input
+                value={protocolSellerRep}
+                onChange={(e) => setProtocolSellerRep(e.target.value)}
+                placeholder="default: МОЛ от настройки"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Купувач — представител</Label>
+              <Input
+                value={protocolBuyerRep}
+                onChange={(e) => setProtocolBuyerRep(e.target.value)}
+                placeholder="default: лице за контакт от партньора"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setProtocolDialogOpen(false)}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={() => {
+                if (!detail) return;
+                const params = new URLSearchParams();
+                if (protocolPlace.trim())
+                  params.set("place", protocolPlace.trim());
+                if (protocolDate) params.set("date", protocolDate);
+                if (protocolSellerRep.trim())
+                  params.set("seller_rep", protocolSellerRep.trim());
+                if (protocolBuyerRep.trim())
+                  params.set("buyer_rep", protocolBuyerRep.trim());
+                const qs = params.toString();
+                window.open(
+                  `/api/orders/${detail.id}/protocol-pdf${qs ? "?" + qs : ""}`,
+                  "_blank",
+                );
+                setProtocolDialogOpen(false);
+              }}
+              className="bg-purple-600 hover:bg-purple-700"
+            >
+              <FileSignature className="h-4 w-4" />
+              Свали PDF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
       <OversellConfirmDialog
         open={!!pendingFulfillOversell}

@@ -61,6 +61,22 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Done — Recent Sessions
 
+**Batch G+H — Invoice extra fields + Acceptance protocol** (2026-04-29, branch `feature/MERTM-batch-gh-invoice-fields-protocol` from main):
+
+- Migration 058 — `invoices.vat_exemption_reason` (TEXT) + `invoice_note` (TEXT)
+- Shared `VAT_EXEMPTION_REASONS` BE+FE constant — five common BG legal-basis suggestions
+- `createInvoiceSchema` accepts both new fields with empty-string-to-null transform; `regenerateInvoiceSchema` accepts them as plain optional strings
+- POST /invoices INSERT writes both fields; PUT /invoices/:id/regenerate UPDATE uses COALESCE for both → preserves stored values when the body omits them
+- `invoice-pdf.ts` renders `invoice_note` as a 'Забележка: <text>' line below the totals, before the payment-method block
+- New `protocol-pdf.ts` service generates an A4 'Приемо-предавателен протокол' (title + place/date + items table + signature lines) — built from scratch with pdfkit (mirroring `document-pdf.ts`)
+- New endpoint `GET /orders/:id/protocol-pdf` accepts `?place / ?date / ?seller_rep / ?buyer_rep` overrides; defaults from company settings + partner row
+- Frontend invoice dialog gains 'Забележка' input (always) + 'Основание (без ДДС)' input with VAT-exemption datalist (only when no-VAT)
+- Frontend order-detail Документи row gains a 'Приемо-предавателен' button + override dialog
+- 4 new integration tests (2 invoice-fields capture-and-throw + 2 protocol-pdf smoke)
+- BE TS clean except 1 pre-existing; FE TS clean
+- BE tests: 295 passed, 2 pre-existing failures
+- **Open item:** manual E2E (Task 13 in plan, 4-section script) deferred to post-merge user verification
+
 **Batch C — Orders search by article** (2026-04-29, branch `feature/MERTM-batch-c-search-by-article` from main):
 
 - Backend `GET /orders?article=…` — EXISTS subquery on `order_items` using `oi.name_bg_snapshot` / `oi.name_en_snapshot` / `oi.sku_snapshot` (Batch B's snapshots → renames don't retroactively hide matches)

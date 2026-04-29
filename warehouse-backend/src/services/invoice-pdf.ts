@@ -80,6 +80,8 @@ interface InvoiceData {
     transaction_basis?: string | null;
     /** Buyer name override for individual customers who want the invoice on a specific name */
     client_display_name?: string | null;
+    /** Свободен текст към фактура (например "по проект X"), printed below totals */
+    invoice_note?: string | null;
   };
   partner: {
     name: string;
@@ -1051,6 +1053,16 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         align: "right",
       });
       y += 18;
+
+      // Free-text invoice note (e.g. "по проект Алфа"). Rendered below
+      // the totals block on the left, before the payment-method line.
+      const noteText = data.invoice.invoice_note?.trim();
+      if (noteText) {
+        doc.fontSize(7.5).font("Main");
+        doc.text("Забележка: ", L, y, { width: 70, continued: true });
+        doc.font("MainBold").text(noteText, { width: pageW - 70 });
+        y += 14;
+      }
 
       drawLine(doc, L, y, pageW, 0.5);
       y += 8;

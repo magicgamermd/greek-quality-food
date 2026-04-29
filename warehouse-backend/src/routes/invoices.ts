@@ -68,10 +68,31 @@ const createInvoiceSchema = z.object({
     .max(255)
     .optional()
     .transform((v) => (v && v.length > 0 ? v : null)),
+  // Legal basis printed in the "Основание за сделката" line of the PDF
+  // when the invoice is issued without VAT. Free text; empty → null.
+  vat_exemption_reason: z
+    .string()
+    .trim()
+    .max(500)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
+  // Free-text note (e.g. "по проект Алфа") printed below the totals.
+  invoice_note: z
+    .string()
+    .trim()
+    .max(2000)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
 });
 
 const regenerateInvoiceSchema = z.object({
   payment_method: invoicePaymentMethodSchema.optional(),
+  // For regenerate, an absent field means "keep the previously stored
+  // value" — handled via COALESCE in the UPDATE. Empty string is
+  // treated the same as absent (no override). Length capped to match
+  // createInvoiceSchema.
+  vat_exemption_reason: z.string().trim().max(500).optional(),
+  invoice_note: z.string().trim().max(2000).optional(),
 });
 
 const createCreditNoteSchema = z.object({
@@ -424,8 +445,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           `INSERT INTO invoices
            (invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross, include_vat,
-            client_display_name, payment_method)
-         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8)
+            client_display_name, payment_method,
+            vat_exemption_reason, invoice_note)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
           [
             invoiceNumber,
@@ -436,6 +458,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             body.include_vat,
             clientDisplayName,
             body.payment_method,
+            body.vat_exemption_reason ?? null,
+            body.invoice_note ?? null,
           ],
         );
 
@@ -569,7 +593,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           );
         }
 
-        // Update invoice record (payment_method updated only if provided)
+        // Update invoice record. payment_method / vat_exemption_reason /
+        // invoice_note are updated only when the regenerate request
+        // explicitly carries a value — absent means "preserve". Empty
+        // string is treated as absent (the FE sends undefined when the
+        // user clears the input but doesn't intend to override).
+        const overrideExemption =
+          body.vat_exemption_reason && body.vat_exemption_reason.length > 0
+            ? body.vat_exemption_reason
+            : null;
+        const overrideNote =
+          body.invoice_note && body.invoice_note.length > 0
+            ? body.invoice_note
+            : null;
         const {
           rows: [updated],
         } = await client.query(
@@ -577,9 +613,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
              SET total_net = $1,
                  total_vat = $2,
                  total_gross = $3,
-                 payment_method = COALESCE($4, payment_method)
-           WHERE id = $5 RETURNING *`,
-          [totalNet, totalVat, totalGross, body.payment_method ?? null, id],
+                 payment_method = COALESCE($4, payment_method),
+                 vat_exemption_reason = COALESCE($5, vat_exemption_reason),
+                 invoice_note = COALESCE($6, invoice_note)
+           WHERE id = $7 RETURNING *`,
+          [
+            totalNet,
+            totalVat,
+            totalGross,
+            body.payment_method ?? null,
+            overrideExemption,
+            overrideNote,
+            id,
+          ],
         );
 
         // Regenerate PDF
