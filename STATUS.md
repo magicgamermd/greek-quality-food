@@ -5,10 +5,10 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-29 (Phase 6 complete — 21 of 27 tasks)
+**Last updated:** 2026-04-29 (Phase 9 complete — feature SHIPPED, 27 of 27 tasks)
 **Active branch:** `feature/MERTM-tester-attachments-buttons`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active feature:** Employee role + per-user permission overrides — see `docs/superpowers/specs/2026-04-28-employee-role-permissions-design.md` and plan `docs/superpowers/plans/2026-04-28-employee-role-permissions.md`. **21 of 27 tasks committed** (Phases 1–6 complete — backend foundation + 41 route role-checks + permission management API + FE infra + FE page gating). **Resume at Task 22** (UsersListPage scaffold, the first of 4 admin UI tasks).
+**Active feature:** Employee role + per-user permission overrides — **COMPLETE** (Phases 1–9). All 27 tasks committed. Backend: DB migration 053 + 16-permission registry + Redis-cached resolver + 5 REST endpoints (/auth/me extended, /permissions/registry, GET/PATCH/DELETE /users/:id/permissions, GET /users/:id/audit). Frontend: PermissionContext + Can/RequirePermission + permission-driven sidebar + admin UI at /settings/users/:id. E2E test scenarios cover sales role + admin matrix + lockout. Pending follow-ups documented below.
 
 ---
 
@@ -88,7 +88,7 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - `aa59d6a` `docker-compose.backup.yml` header fixed + nightly-pg-dump
   defaults rebranded (DB name, dump filename pattern)
 
-**Permission system feature — in progress** (2026-04-28):
+**Permission system feature — shipped** (2026-04-28 → 2026-04-29):
 
 - `a3b7d24` Task 1 — DB migration 053 (sales role + user_permission_overrides table)
 - `43e2f3a` Task 2 — Redis singleton at `lib/redis.ts` (uses `ioredis`)
@@ -129,7 +129,18 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - `eb337e3` Task 20 — hide purchase_price columns + margin widgets for unauthorised users
 - `f7e61ab` Task 21 — hide invoice cancel button for users without INVOICES_CANCEL
 
-**Tasks 22-27 remain** (Phase 7: admin UI Tasks 22–25; Phase 8: E2E + final Tasks 26–27). Resume via executing-plans skill using the plan file. Test baseline: **262 passed, 2 pre-existing payments-razpiska failures** (unrelated to permissions work).
+**Phase 7 — Admin UI (2026-04-29):**
+
+- `46b105b` Task 22 — UsersListPage at /settings/users + overrides count in API
+- `a298c71` Task 23 — PermissionMatrix + PermissionRow components
+- `7fabcbf` Task 24 — OverrideDialog + RoleSelector + AuditTrail + audit endpoint
+- `5464476` Task 25 — UserDetailPage with PermissionMatrix + RoleSelector + AuditTrail (full admin UI at /settings/users/:id)
+
+**Phase 8–9 — E2E + verification (2026-04-29):**
+
+- `0f6e43b` Task 26 — E2E test scenarios: sales role + admin matrix + lockout
+
+Test baseline: **262 passed, 2 pre-existing payments-razpiska failures** (unrelated to permissions work).
 
 **Behavioral changes from Phase 2 alignments with spec ROLE_DEFAULTS** (intentional — flagged in commit messages):
 
@@ -155,6 +166,8 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - 404 test for GET /users/:id/permissions + `return reply` cleanup in `requirePermission`
 - 4 missing test cases for DELETE override (404, self, admin, unknown_permission)
 - PermissionContext polish: enabled gate for /me; treat /me 401 as logout
+- Task 25: transaction wrap for PATCH /users/:id/role + audit log row for role change
+- Task 26: optional `data-permission` attribute on PermissionRow checkbox for stable E2E selectors
 
 **Earlier (pre-permissions feature):**
 
