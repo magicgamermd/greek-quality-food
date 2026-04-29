@@ -3688,6 +3688,18 @@ export function Orders() {
             className="pl-8 h-9 text-sm"
           />
         </div>
+        {/* Article search — finds orders containing this product (snapshot match) */}
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Input
+            value={filters.article}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, article: e.target.value }))
+            }
+            placeholder="Артикул"
+            className="pl-8 h-9 text-sm"
+          />
+        </div>
       </div>
 
       {(hasActiveTextFilters || showHistory) && (
@@ -3708,6 +3720,7 @@ export function Orders() {
                 invoice: "",
                 stock_dispatch: "",
                 commercial_doc: "",
+                article: "",
               });
               setShowHistory(false);
             }}
