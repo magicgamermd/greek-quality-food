@@ -51,7 +51,7 @@ import {
   stockColorClass,
 } from "@/lib/utils";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
-import { HighlightMatch } from "@/lib/highlight";
+import { HighlightMatch, HighlightMultiToken } from "@/lib/highlight";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,7 +64,6 @@ import { confirm } from "@/components/ConfirmDialog";
 import { usePermissions } from "@/contexts/PermissionContext";
 import { PERMISSIONS } from "@/lib/permissions";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
-import { HighlightMatch } from "@/lib/highlight";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -95,6 +94,11 @@ import {
   OversellConfirmDialog,
   type OversellItem,
 } from "@/components/OversellConfirmDialog";
+import {
+  INVOICE_PAYMENT_METHOD_OPTIONS,
+  INVOICE_PAYMENT_METHOD_LABELS,
+  type InvoicePaymentMethod,
+} from "@/lib/invoicePaymentMethod";
 
 const statusLabels: Record<string, string> = {
   pending: "Чакаща",
@@ -486,6 +490,12 @@ function OrderDetailModal({
 
   // VAT toggle for invoice/documents
   const [includeVat, setIncludeVat] = useState(true);
+  // Payment basis printed on the invoice ("Начин на плащане:").
+  const [paymentMethod, setPaymentMethod] =
+    useState<InvoicePaymentMethod>("bank");
+  // Open/close state for the post-invoice payment-method dropdown.
+  const [paymentMenuOpen, setPaymentMenuOpen] = useState(false);
+  const paymentMenuRef = useRef<HTMLDivElement | null>(null);
   // Optional override of the buyer name on the printed invoice. Only
   // exposed when the order's partner is an individual (физ. лице). When
   // empty we fall back to partner.name server-side.
@@ -517,11 +527,28 @@ function OrderDetailModal({
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
+    setPaymentMethod("bank");
+    setPaymentMenuOpen(false);
     // Close any in-flight oversell dialog — its `proceed` closure captured
     // the previous order's id, so leaving it open would fulfill the wrong
     // order if the user confirms after switching drawers.
     setPendingFulfillOversell(null);
   }, [order?.id]);
+
+  // Close the payment-method dropdown when clicking outside it.
+  useEffect(() => {
+    if (!paymentMenuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (
+        paymentMenuRef.current &&
+        !paymentMenuRef.current.contains(e.target as Node)
+      ) {
+        setPaymentMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [paymentMenuOpen]);
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
@@ -529,12 +556,15 @@ function OrderDetailModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["order-detail"] });
+      refetchDetail();
     },
   });
 
   // Invalidate all queries that depend on orders/invoices/stock state.
   // Any mutation that touches stock, invoices, or order status must call this
   // so every page reflects the new data (not stale cached).
+  // Also forces an immediate refetch of the open drawer's detail query so
+  // the UI updates without requiring the user to close + reopen.
   const invalidateAllOrderRelated = () => {
     qc.invalidateQueries({ queryKey: ["orders"] });
     qc.invalidateQueries({ queryKey: ["order-detail"] });
@@ -544,6 +574,7 @@ function OrderDetailModal({
     qc.invalidateQueries({ queryKey: ["products"] });
     qc.invalidateQueries({ queryKey: ["partner-history"] });
     qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
+    refetchDetail();
   };
 
   const fulfillMutation = useMutation({
@@ -623,11 +654,19 @@ function OrderDetailModal({
     },
   });
 
+  const dispatchToWarehouseMutation = useMutation({
+    mutationFn: (id: number) => api.post(`/orders/${id}/dispatch-to-warehouse`),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+    },
+  });
+
   const invoiceMutation = useMutation({
     mutationFn: (id: number) =>
       api.post("/invoices", {
         order_id: id,
         include_vat: includeVat,
+        payment_method: paymentMethod,
         client_display_name: clientDisplayName.trim() || undefined,
       }),
     onSuccess: (res) => {
@@ -660,8 +699,16 @@ function OrderDetailModal({
   });
 
   const regenerateInvoiceMutation = useMutation({
-    mutationFn: (invoiceId: number) =>
-      api.put(`/invoices/${invoiceId}/regenerate`),
+    mutationFn: (
+      input: number | { id: number; payment_method?: InvoicePaymentMethod },
+    ) => {
+      const id = typeof input === "number" ? input : input.id;
+      const body =
+        typeof input === "number" || !input.payment_method
+          ? undefined
+          : { payment_method: input.payment_method };
+      return api.put(`/invoices/${id}/regenerate`, body);
+    },
     onSuccess: () => {
       invalidateAllOrderRelated();
     },
@@ -762,6 +809,15 @@ function OrderDetailModal({
     detail.invoice_include_vat ??
     invoiceMutation.data?.data?.include_vat ??
     includeVat;
+  // Read the most recent value: a successful regenerate response wins over
+  // the cached order detail (which may not have refetched yet), which wins
+  // over the original invoice creation response, with the local toggle
+  // state as a final fallback for never-invoiced orders.
+  const invoicePaymentMethod = (regenerateInvoiceMutation.data?.data
+    ?.payment_method ??
+    (detail as any).invoice_payment_method ??
+    invoiceMutation.data?.data?.payment_method ??
+    paymentMethod) as InvoicePaymentMethod;
 
   const orderTotal = items.reduce(
     (sum, i) => sum + (i.total_price ?? i.quantity * i.unit_price),
@@ -783,15 +839,43 @@ function OrderDetailModal({
       <Dialog open={!!order} onOpenChange={onClose} modal={false}>
         <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col">
           <DialogHeader className="shrink-0">
-            <DialogTitle className="flex items-center gap-3 flex-wrap">
-              <span>Поръчка #{detail.order_number ?? detail.id}</span>
-              <Badge variant={statusVariants[detail.status] ?? "secondary"}>
-                {statusLabels[detail.status] ?? detail.status}
-              </Badge>
-              {hasAnnulledInvoice(detail) && (
-                <Badge variant="destructive">Анулирана фактура</Badge>
-              )}
-            </DialogTitle>
+            <div className="flex items-start justify-between gap-3 pr-8">
+              <DialogTitle className="flex items-center gap-3 flex-wrap">
+                <span>Поръчка #{detail.order_number ?? detail.id}</span>
+                <Badge variant={statusVariants[detail.status] ?? "secondary"}>
+                  {statusLabels[detail.status] ?? detail.status}
+                </Badge>
+                {hasAnnulledInvoice(detail) && (
+                  <Badge variant="destructive">Анулирана фактура</Badge>
+                )}
+              </DialogTitle>
+              <div className="flex items-center gap-2 shrink-0">
+                {hasInvoice && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      effectiveInvoiceId &&
+                      sendInvoiceEmailMutation.mutate(effectiveInvoiceId)
+                    }
+                    disabled={sendInvoiceEmailMutation.isPending}
+                    title="Изпрати фактурата по имейл на партньора"
+                  >
+                    {sendInvoiceEmailMutation.isPending ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <span className="text-base leading-none mr-1">
+                        &#x2709;
+                      </span>
+                    )}
+                    Имейл
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={onClose}>
+                  Затвори
+                </Button>
+              </div>
+            </div>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
@@ -894,14 +978,31 @@ function OrderDetailModal({
             )}
 
             {detail && authToken && (
-              <EcontShipmentActions
-                order={detail}
-                token={authToken}
-                onOrderUpdated={() => {
-                  refetchDetail();
-                  qc.invalidateQueries({ queryKey: ["orders"] });
-                }}
-              />
+              <div className="flex items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <EcontShipmentActions
+                    order={detail}
+                    token={authToken}
+                    onOrderUpdated={() => {
+                      refetchDetail();
+                      qc.invalidateQueries({ queryKey: ["orders"] });
+                    }}
+                  />
+                </div>
+                {detail.status !== "cancelled" &&
+                  ((detail.status !== "fulfilled" &&
+                    detail.status !== "invoiced") ||
+                    canEditAfterFulfill) && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setEditOpen(true)}
+                      className="shrink-0"
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Редактирай артикули
+                    </Button>
+                  )}
+              </div>
             )}
 
             {/* Items table */}
@@ -918,16 +1019,25 @@ function OrderDetailModal({
                 <TableHeader>
                   <TableRow>
                     <TableHead>Продукт</TableHead>
-                    <TableHead className="w-20 text-right">К-во</TableHead>
-                    <TableHead className="w-24 text-right">Ед. цена</TableHead>
-                    <TableHead className="w-24 text-right">Сума</TableHead>
+                    <TableHead className="w-24 text-right whitespace-nowrap">
+                      К-во
+                    </TableHead>
+                    <TableHead className="w-28 text-right whitespace-nowrap">
+                      Ед. цена
+                    </TableHead>
+                    <TableHead className="w-24 text-right whitespace-nowrap">
+                      Отстъпка
+                    </TableHead>
+                    <TableHead className="w-28 text-right whitespace-nowrap">
+                      Сума
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {items.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={4}
+                        colSpan={5}
                         className="text-center text-gray-400 py-6"
                       >
                         Няма артикули
@@ -937,6 +1047,9 @@ function OrderDetailModal({
                     items.map((item: any) => {
                       const lineTotal =
                         item.total_price ?? item.quantity * item.unit_price;
+                      const discountPct = parseFloat(
+                        item.discount_percent ?? 0,
+                      );
                       const prodName =
                         item.product?.name_bg ||
                         item.product?.name_en ||
@@ -967,6 +1080,15 @@ function OrderDetailModal({
                           </TableCell>
                           <TableCell className="text-right text-sm">
                             {formatCurrency(item.unit_price)}
+                          </TableCell>
+                          <TableCell className="text-right text-sm">
+                            {discountPct > 0 ? (
+                              <span className="text-amber-600 font-medium">
+                                {discountPct.toFixed(2).replace(/\.?0+$/, "")}%
+                              </span>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
                           </TableCell>
                           <TableCell className="text-right text-sm font-medium">
                             {formatCurrency(lineTotal)}
@@ -1080,23 +1202,8 @@ function OrderDetailModal({
               </div>
             )}
 
-            {/* Row 1 — navigation + primary workflow action */}
-            <div className="flex flex-wrap gap-2 items-center">
-              <Button variant="outline" onClick={onClose}>
-                Затвори
-              </Button>
-              {detail.status !== "cancelled" &&
-                ((detail.status !== "fulfilled" &&
-                  detail.status !== "invoiced") ||
-                  canEditAfterFulfill) && (
-                  <Button variant="outline" onClick={() => setEditOpen(true)}>
-                    <Pencil className="h-4 w-4" />
-                    Редактирай артикули
-                  </Button>
-                )}
-
-              <div className="flex-1" />
-
+            {/* Row 1 — primary workflow action */}
+            <div className="flex flex-wrap gap-2 items-center justify-end">
               {detail.status === "pending" && (
                 <Button
                   onClick={() => confirmOrderMutation.mutate(detail.id)}
@@ -1111,26 +1218,43 @@ function OrderDetailModal({
                   Потвърди поръчка
                 </Button>
               )}
-              {detail.status === "confirmed" && (
-                <Button
-                  onClick={() =>
-                    statusMutation.mutate({
-                      id: detail.id,
-                      status: "processing",
-                    })
-                  }
-                  disabled={statusMutation.isPending}
-                  className="bg-blue-600 hover:bg-blue-700"
-                >
-                  {statusMutation.isPending ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <Truck className="h-4 w-4" />
-                  )}
-                  Изпрати към склад
-                </Button>
-              )}
-              {detail.status === "processing" && (
+              {detail.status !== "pending" &&
+                detail.status !== "cancelled" &&
+                (() => {
+                  const dispatched = Boolean(detail.dispatched_to_warehouse_at);
+                  return (
+                    <Button
+                      onClick={() =>
+                        dispatchToWarehouseMutation.mutate(detail.id)
+                      }
+                      disabled={
+                        dispatched || dispatchToWarehouseMutation.isPending
+                      }
+                      variant="outline"
+                      className={
+                        dispatched
+                          ? "border-emerald-300 text-emerald-700 bg-emerald-50 disabled:opacity-100 disabled:cursor-default"
+                          : "border-blue-600 text-blue-600 hover:bg-blue-50"
+                      }
+                      title={
+                        dispatched
+                          ? "Поръчката вече е изпратена към склад"
+                          : "Уведоми склад да приготви стоката"
+                      }
+                    >
+                      {dispatchToWarehouseMutation.isPending ? (
+                        <Spinner size="sm" />
+                      ) : dispatched ? (
+                        <CheckCircle className="h-4 w-4" />
+                      ) : (
+                        <Truck className="h-4 w-4" />
+                      )}
+                      {dispatched ? "Изпратена към склад" : "Изпрати към склад"}
+                    </Button>
+                  );
+                })()}
+              {(detail.status === "confirmed" ||
+                detail.status === "processing") && (
                 <Button
                   onClick={() => handleFulfillClick(detail.id)}
                   disabled={fulfillMutation.isPending}
@@ -1192,6 +1316,84 @@ function OrderDetailModal({
                     >
                       {invoiceIncludesVat !== false ? "С ДДС" : "Без ДДС"}
                     </span>
+                  </div>
+                )}
+
+                {/* Payment method — printed on the invoice as "Начин на плащане" */}
+                {!hasInvoice ? (
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
+                    <span className="text-xs text-gray-500">Плащане:</span>
+                    {INVOICE_PAYMENT_METHOD_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setPaymentMethod(opt.value)}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
+                          paymentMethod === opt.value
+                            ? "bg-[#f97316] text-white"
+                            : "bg-white text-gray-600 border hover:bg-gray-100"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    ref={paymentMenuRef}
+                    className="relative flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border"
+                  >
+                    <span className="text-xs text-gray-500">Плащане:</span>
+                    <button
+                      type="button"
+                      disabled={
+                        detail.invoice_status === "cancelled" ||
+                        regenerateInvoiceMutation.isPending
+                      }
+                      onClick={() => setPaymentMenuOpen((v) => !v)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-[#f97316]/10 text-[#f97316] border border-[#f97316]/20 hover:bg-[#f97316]/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                      title="Натисни за смяна — фактурата ще се регенерира"
+                    >
+                      {regenerateInvoiceMutation.isPending ? (
+                        <Spinner size="sm" />
+                      ) : (
+                        <>
+                          {INVOICE_PAYMENT_METHOD_LABELS[
+                            invoicePaymentMethod
+                          ] ?? "Банков превод"}
+                          <ChevronDown className="h-3 w-3" />
+                        </>
+                      )}
+                    </button>
+                    {paymentMenuOpen && (
+                      <div className="absolute left-0 bottom-full mb-1 z-50 w-44 rounded-md border bg-white shadow-lg py-1">
+                        {INVOICE_PAYMENT_METHOD_OPTIONS.map((opt) => {
+                          const isCurrent = opt.value === invoicePaymentMethod;
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              disabled={isCurrent}
+                              onClick={() => {
+                                setPaymentMenuOpen(false);
+                                if (isCurrent || !effectiveInvoiceId) return;
+                                regenerateInvoiceMutation.mutate({
+                                  id: effectiveInvoiceId,
+                                  payment_method: opt.value,
+                                });
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-xs ${
+                                isCurrent
+                                  ? "bg-[#f97316]/10 text-[#f97316] cursor-default"
+                                  : "text-gray-700 hover:bg-gray-100"
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1264,88 +1466,74 @@ function OrderDetailModal({
                     </div>
                     <Button
                       variant="outline"
+                      size="sm"
                       onClick={() =>
                         regenerateInvoiceMutation.mutate(effectiveInvoiceId!)
                       }
                       disabled={regenerateInvoiceMutation.isPending}
-                      className="text-orange-600 border-orange-300 hover:bg-orange-50"
+                      className="text-orange-600 border-orange-300 hover:bg-orange-50 px-2"
+                      title="Регенерирай фактурата (пресъздай PDF)"
+                      aria-label="Регенерирай фактурата"
                     >
                       <RefreshCw
                         className={`h-4 w-4 ${regenerateInvoiceMutation.isPending ? "animate-spin" : ""}`}
                       />
-                      Регенерирай
                     </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() =>
-                        effectiveInvoiceId &&
-                        sendInvoiceEmailMutation.mutate(effectiveInvoiceId)
-                      }
-                      disabled={sendInvoiceEmailMutation.isPending}
-                      title="Изпрати фактурата по имейл на партньора"
-                    >
-                      {sendInvoiceEmailMutation.isPending ? (
-                        <Spinner size="sm" />
+                    <div className="ml-auto flex flex-wrap gap-2 items-center">
+                      {detail.credit_note_id ? (
+                        <Button
+                          variant="outline"
+                          onClick={() =>
+                            void openInvoicePdf(detail.credit_note_id!)
+                          }
+                          className="text-amber-700 border-amber-300 bg-amber-50"
+                          title="Отвори издаденото Кредитно известие"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                          Сторнирана (
+                          <span className="font-mono">
+                            {detail.credit_note_number ??
+                              `КИ-${detail.credit_note_id}`}
+                          </span>
+                          )
+                        </Button>
                       ) : (
-                        <span className="text-base leading-none mr-1">
-                          &#x2709;
-                        </span>
-                      )}
-                      Имейл
-                    </Button>
-                    {detail.credit_note_id ? (
-                      <Button
-                        variant="outline"
-                        onClick={() =>
-                          void openInvoicePdf(detail.credit_note_id!)
-                        }
-                        className="text-amber-700 border-amber-300 bg-amber-50"
-                        title="Отвори издаденото Кредитно известие"
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                        Сторнирана (
-                        <span className="font-mono">
-                          {detail.credit_note_number ??
-                            `КИ-${detail.credit_note_id}`}
-                        </span>
-                        )
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setCreditNoteOpen(true);
-                          setCreditNoteReason("");
-                          setCreditNoteRestoreStock(true);
-                        }}
-                        className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                        title="Издай Кредитно известие (пълно сторниране на фактурата)"
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                        Сторнирай
-                      </Button>
-                    )}
-                    {!detail.credit_note_id &&
-                      detail.invoice_status !== "cancelled" && (
                         <Button
                           variant="outline"
                           onClick={() => {
-                            setCancelInvoiceOpen(true);
-                            setCancelInvoiceReason("");
+                            setCreditNoteOpen(true);
+                            setCreditNoteReason("");
+                            setCreditNoteRestoreStock(true);
                           }}
-                          className="text-red-600 border-red-300 hover:bg-red-50"
-                          title="Анулирай фактурата (само ако не е ползвана от получателя)"
+                          className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                          title="Издай Кредитно известие (пълно сторниране на фактурата)"
                         >
-                          <XCircle className="h-4 w-4" />
-                          Анулирай
+                          <RefreshCw className="h-4 w-4" />
+                          Сторнирай
                         </Button>
                       )}
-                    {detail.invoice_status === "cancelled" && (
-                      <span className="text-xs text-red-600 flex items-center gap-1">
-                        <XCircle className="h-3 w-3" />
-                        Фактурата е анулирана
-                      </span>
-                    )}
+                      {!detail.credit_note_id &&
+                        detail.invoice_status !== "cancelled" && (
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setCancelInvoiceOpen(true);
+                              setCancelInvoiceReason("");
+                            }}
+                            className="text-red-600 border-red-300 hover:bg-red-50"
+                            title="Анулирай фактурата (само ако не е ползвана от получателя)"
+                          >
+                            <XCircle className="h-4 w-4" />
+                            Анулирай
+                          </Button>
+                        )}
+                      {detail.invoice_status === "cancelled" && (
+                        <span className="text-xs text-red-600 flex items-center gap-1">
+                          <XCircle className="h-3 w-3" />
+                          Фактурата е анулирана
+                        </span>
+                      )}
+                    </div>
                   </>
                 )}
 
@@ -1381,8 +1569,9 @@ function OrderDetailModal({
               </div>
             )}
 
-            {/* Row 3 — Document downloads (available from processing onwards) */}
-            {(detail.status === "processing" ||
+            {/* Row 3 — Document downloads (available from confirmed onwards) */}
+            {(detail.status === "confirmed" ||
+              detail.status === "processing" ||
               detail.status === "fulfilled" ||
               detail.status === "invoiced") && (
               <div className="flex flex-wrap gap-2 items-center border-t pt-2">
@@ -1420,7 +1609,7 @@ function OrderDetailModal({
                 <Button
                   variant="outline"
                   onClick={() => handleDocDownload(detail.id, "warranty")}
-                  className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50 ml-auto"
                   title="Гаранционна карта (сериен номер = номер на поръчката)"
                 >
                   <ShieldCheck className="h-4 w-4" />
@@ -1436,6 +1625,10 @@ function OrderDetailModal({
             open={editOpen}
             order={detail}
             onClose={() => setEditOpen(false)}
+            onSaved={() => {
+              refetchDetail();
+              invalidateAllOrderRelated();
+            }}
           />
         )}
 
@@ -1606,10 +1799,12 @@ function EditOrderItemsModal({
   open,
   onClose,
   order,
+  onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   order: Order;
+  onSaved?: () => void;
 }) {
   const qc = useQueryClient();
   const { hasPermission } = usePermissions();
@@ -1775,6 +1970,9 @@ function EditOrderItemsModal({
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["order-detail", order.id] });
       qc.invalidateQueries({ queryKey: ["order-detail"] });
+      // Tell the parent drawer to refetch its detail query immediately so
+      // the items list refreshes without having to close + reopen.
+      onSaved?.();
 
       const payload = res.data?.data ?? res.data;
       if (payload?.regenerated_invoice_id) {
@@ -1822,7 +2020,7 @@ function EditOrderItemsModal({
 
   return (
     <Dialog open={open} onOpenChange={onClose} modal={false}>
-      <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col">
+      <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col border-2 border-[#f97316] shadow-[0_0_0_1px_rgba(249,115,22,0.25)]">
         <DialogHeader className="shrink-0">
           <DialogTitle>
             Редакция на поръчка #{order.order_number ?? order.id}
@@ -3741,21 +3939,27 @@ export function Orders() {
               <ErrorMessage message="Грешка при зареждане" />
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed [&_th]:px-2 [&_td]:px-2 [&_th]:py-2 [&_td]:py-3">
               <TableHeader>
                 <TableRow>
-                  <TableHead>№</TableHead>
-                  <TableHead>Партньор</TableHead>
-                  <TableHead>Дата</TableHead>
-                  <TableHead>Сума</TableHead>
-                  <TableHead>Статус</TableHead>
-                  <TableHead>Фактура</TableHead>
-                  <TableHead>Документи</TableHead>
+                  <TableHead className="w-[44px]">№</TableHead>
+                  <TableHead className="w-[200px]">Партньор</TableHead>
+                  <TableHead className="w-[96px] whitespace-nowrap">
+                    Дата
+                  </TableHead>
+                  <TableHead className="w-[88px] whitespace-nowrap text-right">
+                    Сума
+                  </TableHead>
+                  <TableHead className="w-[150px]">Статус</TableHead>
+                  <TableHead className="w-[110px]">Фактура</TableHead>
+                  <TableHead className="w-[140px]">Документи</TableHead>
                   {filters.article.trim() && (
                     <TableHead className="w-[200px]">Намерен артикул</TableHead>
                   )}
-                  <TableHead>Източник</TableHead>
-                  <TableHead className="text-right">Действия</TableHead>
+                  <TableHead className="w-[72px]">Източник</TableHead>
+                  <TableHead className="w-[110px] text-right">
+                    Действия
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -3783,7 +3987,14 @@ export function Orders() {
                           query={filters.order_number}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">
+                      <TableCell
+                        className="font-medium truncate max-w-[220px]"
+                        title={
+                          order.partner?.name ??
+                          order.partner_name ??
+                          `#${order.partner_id}`
+                        }
+                      >
                         <HighlightMatch
                           text={
                             order.partner?.name ??
@@ -3793,12 +4004,14 @@ export function Orders() {
                           query={filters.partner}
                         />
                       </TableCell>
-                      <TableCell>{formatDate(order.order_date)}</TableCell>
-                      <TableCell className="font-medium">
+                      <TableCell className="whitespace-nowrap">
+                        {formatDate(order.order_date)}
+                      </TableCell>
+                      <TableCell className="font-medium text-right whitespace-nowrap">
                         {formatCurrency(order.total_amount)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <Badge
                             variant={
                               statusVariants[order.status] ?? "secondary"
@@ -3814,6 +4027,28 @@ export function Orders() {
                               <AlertTriangle className="h-3 w-3" />
                             </span>
                           )}
+                          {order.dispatched_to_warehouse_at &&
+                            (order.status === "fulfilled" ||
+                            order.status === "invoiced" ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                title={`Изпълнена от склад · изпратена ${formatDate(
+                                  order.dispatched_to_warehouse_at,
+                                )}`}
+                              >
+                                <CheckCircle className="h-3 w-3" />
+                                от склад
+                              </span>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200"
+                                title={`Чака изпълнение от склад · изпратена ${formatDate(
+                                  order.dispatched_to_warehouse_at,
+                                )}`}
+                              >
+                                <Truck className="h-3 w-3" />в склад
+                              </span>
+                            ))}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -3981,7 +4216,7 @@ export function Orders() {
                                 key={`${it.sku ?? "no-sku"}-${idx}`}
                                 className="truncate"
                               >
-                                <HighlightMatch
+                                <HighlightMultiToken
                                   text={it.name_bg}
                                   query={filters.article}
                                 />
@@ -4004,20 +4239,6 @@ export function Orders() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {/* View */}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDetailOrder(order);
-                            }}
-                            title="Преглед"
-                            aria-label="Преглед на поръчка"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                          </Button>
-
                           {/* Status change dropdown */}
                           {statusTransitions[order.status] && (
                             <div className="relative">
@@ -4036,9 +4257,10 @@ export function Orders() {
                                   statusMutation.isPending ||
                                   fulfillMutation.isPending
                                 }
+                                title="Промени статуса"
+                                aria-label="Промени статуса"
                               >
                                 <ChevronDown className="h-3.5 w-3.5" />
-                                Статус
                               </Button>
                               {statusDropdownId === order.id && (
                                 <div className="absolute right-0 top-full mt-1 z-50 bg-white border rounded-lg shadow-lg py-1 min-w-[160px]">
@@ -4086,9 +4308,10 @@ export function Orders() {
                                   invoiceMutation.mutate(order.id);
                                 }}
                                 disabled={invoiceMutation.isPending}
+                                title="Генерирай фактура"
+                                aria-label="Генерирай фактура"
                               >
                                 <FileText className="h-3.5 w-3.5" />
-                                Фактура
                               </Button>
                             )}
 

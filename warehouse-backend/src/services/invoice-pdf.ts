@@ -67,7 +67,7 @@ interface InvoiceData {
     total_gross: string | number;
     currency?: string | null;
     /** Payment method — defaults to "bank" if not set (most common for B2B) */
-    payment_method?: "cash" | "bank" | "card" | null;
+    payment_method?: "cash" | "bank" | "cod" | null;
     /** Optional override label — if set, used verbatim instead of mapping */
     payment_method_label?: string | null;
     /** ЗДДС чл. 114, ал. 1, т.12 — reason when VAT is not charged */
@@ -1061,8 +1061,8 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         data.invoice.payment_method_label ||
         (data.invoice.payment_method === "cash"
           ? "В брой"
-          : data.invoice.payment_method === "card"
-            ? "С карта"
+          : data.invoice.payment_method === "cod"
+            ? "Наложен платеж"
             : "Банков превод");
       doc.font("MainBold").text(paymentLabel, L + 90, y, { width: 200 });
       y += 13;

@@ -200,6 +200,7 @@ export interface Order {
   commercial_document_number?: string | null;
   warranty_number?: string | null;
   warranty_issued_at?: string | null;
+  dispatched_to_warehouse_at?: string | null;
   invoiced?: boolean;
   item_count?: number;
   partner?: Partner;
@@ -270,6 +271,7 @@ export interface Invoice {
   total_vat: number;
   total_gross: number;
   include_vat?: boolean;
+  payment_method?: "cash" | "bank" | "cod";
   document_type?: "invoice" | "credit_note";
   related_invoice_id?: number;
   related_invoice_number?: string | null;

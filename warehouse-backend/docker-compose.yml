@@ -3,6 +3,14 @@ version: "3.9"
 # Development / local compose. For production use docker-compose.prod.yml (no exposed DB/Redis ports).
 # Secrets are loaded from .env (never commit .env to git — use .env.production.example as template).
 
+# Explicit project + volume names са КРИТИЧНИ когато имаш повече от един
+# клиентски проект клониран от същия template. Без този name-директив
+# docker-compose извлича project name от basename-а на папката — и тъй
+# като и двата проекта имат подпапка "warehouse-backend", volume-ите
+# стават със съвпадащо име и си презаписват данните. Вж. incident
+# 2026-04-24 (Greek Foods DB overwrite).
+name: mertm
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -45,8 +53,10 @@ services:
     env_file: .env
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
     ports:
-      # NOTE: remove this line for production (keep Redis internal-only)
-      - "6379:6379"
+      # NOTE: remove this line for production (keep Redis internal-only).
+      # External port 6380 избегнато от Greek Foods (6379) — иначе двата
+      # проекта не могат да са пуснати паралелно дори за smoke check.
+      - "6380:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -69,7 +79,8 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "3003:3000"
+      # External port 3004 да избегне сблъсък с Greek Foods (3003).
+      - "3004:3000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://warehouse:${POSTGRES_PASSWORD}@postgres:5432/mertm_warehouse}
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
@@ -125,5 +136,8 @@ services:
 
 volumes:
   pgdata:
+    name: mertm_pgdata
   redisdata:
+    name: mertm_redisdata
   uploads:
+    name: mertm_uploads

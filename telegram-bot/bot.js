@@ -1295,9 +1295,40 @@ async function _processUserMessageInner(bot, chatId, userId, userName, text) {
   // === Otherwise: send to AI ===
   bot.sendChatAction(chatId, "typing");
 
+  // --- Fast path: detect "create order + invoice + waybill" combos ---
+  // When the user asks for invoice and/or Econt waybill in the SAME message
+  // as a new order, instruct the AI to ONLY create the order, then run
+  // invoice/waybill deterministically here. Avoids ~97s generic AI loop.
+  const wantsInvoiceAfterOrder = /\b(faktura|фактура|invoice)\b/i.test(
+    text,
+  );
+  const wantsWaybillAfterOrder =
+    /\b(tovaritelnica|tovaritelnitsa|товарителниц[аи]?|econt|еконт|shipment|waybill)\b/i.test(
+      text,
+    );
+  const wantsOrderCreation =
+    /\b(poruchka|order)\b/i.test(text) || /поръчк[а-я]*/i.test(text);
+  const fastPathActive =
+    wantsOrderCreation && (wantsInvoiceAfterOrder || wantsWaybillAfterOrder);
+  let messageForBackend = text;
+  if (fastPathActive) {
+    const skipParts = [];
+    if (wantsInvoiceAfterOrder) skipParts.push("фактура");
+    if (wantsWaybillAfterOrder) skipParts.push("товарителница/Econt");
+    messageForBackend =
+      text +
+      `\n\n[СИСТЕМНО УКАЗАНИЕ — СЛЕДВАЙ СТРИКТНО]\n` +
+      `Създай САМО поръчката. НЕ генерирай ${skipParts.join(" и ")} — ` +
+      `ботът ще ги направи детерминистично след създаване на поръчката. ` +
+      `Върни стандартния отговор за създадена поръчка с #номер и спри.`;
+    console.log(
+      `[FAST-PATH] invoice=${wantsInvoiceAfterOrder} waybill=${wantsWaybillAfterOrder} → asking AI for order only`,
+    );
+  }
+
   try {
     const history = getHistory(userId);
-    const response = await sendToBackend(text, history, userId);
+    const response = await sendToBackend(messageForBackend, history, userId);
     const aiReply =
       response.reply ||
       response.message ||
@@ -1395,6 +1426,21 @@ async function _processUserMessageInner(bot, chatId, userId, userName, text) {
           });
         } catch {
           await bot.sendMessage(chatId, formatted, opts);
+        }
+
+        // Fast path follow-up: run requested business documents directly in bot code.
+        // The AI was instructed to create ONLY the order, so this avoids a slow
+        // generic agent loop for invoice + Econt generation.
+        if (fastPathActive) {
+          if (wantsInvoiceAfterOrder) {
+            console.log(`[FAST-PATH] Generating invoice for order #${orderId}`);
+            await handleGenerateInvoice(bot, chatId, userId, orderId);
+          }
+          if (wantsWaybillAfterOrder) {
+            console.log(`[FAST-PATH] Creating waybill for order #${orderId}`);
+            await handleCreateWaybill(bot, chatId, userId, orderId);
+          }
+          return;
         }
 
         // If AI also created invoice in same response → send PDF too

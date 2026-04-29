@@ -9,6 +9,7 @@ import {
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
 import { formatEurAmount } from "../utils/currency.js";
+import { invoicePaymentMethodSchema } from "../lib/invoice-payment-method.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -57,6 +58,7 @@ const createInvoiceSchema = z.object({
   order_id: z.number().int(),
   vat_rate: z.number().default(20), // Bulgarian VAT 20%
   include_vat: z.boolean().default(true),
+  payment_method: invoicePaymentMethodSchema,
   // Optional — only meaningful when the order's partner is an individual.
   // If set, this name is printed on the invoice PDF instead of the partner's
   // generic name. Trim + normalise empty string → null so the DB stays clean.
@@ -66,6 +68,10 @@ const createInvoiceSchema = z.object({
     .max(255)
     .optional()
     .transform((v) => (v && v.length > 0 ? v : null)),
+});
+
+const regenerateInvoiceSchema = z.object({
+  payment_method: invoicePaymentMethodSchema.optional(),
 });
 
 const createCreditNoteSchema = z.object({
@@ -418,8 +424,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           `INSERT INTO invoices
            (invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross, include_vat,
-            client_display_name)
-         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7)
+            client_display_name, payment_method)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
           [
             invoiceNumber,
@@ -429,6 +435,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             totalGross,
             body.include_vat,
             clientDisplayName,
+            body.payment_method,
           ],
         );
 
@@ -477,6 +484,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
     { preHandler: invoiceManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string };
+      const body = regenerateInvoiceSchema.parse(request.body || {});
 
       const result = await transaction(async (client) => {
         // Get invoice
@@ -561,13 +569,17 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           );
         }
 
-        // Update invoice record
+        // Update invoice record (payment_method updated only if provided)
         const {
           rows: [updated],
         } = await client.query(
-          `UPDATE invoices SET total_net = $1, total_vat = $2, total_gross = $3
-           WHERE id = $4 RETURNING *`,
-          [totalNet, totalVat, totalGross, id],
+          `UPDATE invoices
+             SET total_net = $1,
+                 total_vat = $2,
+                 total_gross = $3,
+                 payment_method = COALESCE($4, payment_method)
+           WHERE id = $5 RETURNING *`,
+          [totalNet, totalVat, totalGross, body.payment_method ?? null, id],
         );
 
         // Regenerate PDF

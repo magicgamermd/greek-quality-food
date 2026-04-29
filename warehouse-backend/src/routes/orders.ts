@@ -498,20 +498,31 @@ export default async function orderRoutes(app: FastifyInstance) {
     // name or SKU matches the query. Uses oi.*_snapshot from Batch B so a
     // rename in the products catalog does not retroactively hide a match
     // (the historical document's name is what's searchable).
+    //
+    // The query is split on whitespace so 'колбасо реза' matches
+    // 'Колбасорезачка' (each token must appear, in any order). The full
+    // un-split query is also kept for exact SKU match.
     const articleQuery = normalizeOptionalText(article);
-    if (articleQuery) {
+    const articleTokens = articleQuery
+      ? articleQuery.split(/\s+/).filter((t) => t.length > 0)
+      : [];
+    if (articleQuery && articleTokens.length > 0) {
+      const tokenClauses = articleTokens.map(() => {
+        const idx = paramIdx++;
+        return `(oi.name_bg_snapshot ILIKE $${idx} OR oi.name_en_snapshot ILIKE $${idx})`;
+      });
+      const skuIdx = paramIdx++;
       where += ` AND EXISTS (
         SELECT 1
         FROM order_items oi
         WHERE oi.order_id = o.id
           AND (
-            oi.name_bg_snapshot ILIKE $${paramIdx}
-            OR oi.name_en_snapshot ILIKE $${paramIdx}
-            OR oi.sku_snapshot = $${paramIdx + 1}
+            (${tokenClauses.join(" AND ")})
+            OR oi.sku_snapshot = $${skuIdx}
           )
       )`;
-      params.push(`%${articleQuery}%`, articleQuery);
-      paramIdx += 2;
+      for (const t of articleTokens) params.push(`%${t}%`);
+      params.push(articleQuery);
     }
 
     const freeText = normalizeOptionalText(q);
@@ -580,8 +591,19 @@ export default async function orderRoutes(app: FastifyInstance) {
     // FE can display which order line(s) matched. One batched query
     // covers every order on the current page.
     let enrichedRows: any[] = rows;
-    if (articleQuery && rows.length > 0) {
+    if (articleQuery && rows.length > 0 && articleTokens.length > 0) {
       const orderIds = rows.map((r: any) => r.id);
+      // Same tokenized predicate as the EXISTS clause above so the
+      // enrichment is consistent with the filter that selected the rows.
+      const enrichParams: any[] = [orderIds];
+      let pIdx = 2;
+      const tokenClauses = articleTokens.map(() => {
+        const idx = pIdx++;
+        return `(oi.name_bg_snapshot ILIKE $${idx} OR oi.name_en_snapshot ILIKE $${idx})`;
+      });
+      const skuIdx = pIdx++;
+      for (const t of articleTokens) enrichParams.push(`%${t}%`);
+      enrichParams.push(articleQuery);
       const { rows: matched } = await query(
         `SELECT oi.order_id,
                 oi.name_bg_snapshot AS name_bg,
@@ -589,13 +611,12 @@ export default async function orderRoutes(app: FastifyInstance) {
            FROM order_items oi
           WHERE oi.order_id = ANY($1::int[])
             AND (
-              oi.name_bg_snapshot ILIKE $2
-              OR oi.name_en_snapshot ILIKE $2
-              OR oi.sku_snapshot = $3
+              (${tokenClauses.join(" AND ")})
+              OR oi.sku_snapshot = $${skuIdx}
             )
           ORDER BY oi.order_id, oi.id
           LIMIT 1000`,
-        [orderIds, `%${articleQuery}%`, articleQuery],
+        enrichParams,
       );
       const matchedByOrder = new Map<
         number,
@@ -640,6 +661,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     } = await query(
       `SELECT o.*, p.name AS partner_name, p.partner_type AS partner_partner_type,
               inv.include_vat AS invoice_include_vat,
+              inv.payment_method AS invoice_payment_method,
               inv.invoice_number,
               inv.invoice_date,
               inv.status AS invoice_status,
@@ -1599,6 +1621,67 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /orders/:id/dispatch-to-warehouse — mark order as handed over to
+  // warehouse staff for picking. Idempotent: setting it again is a no-op.
+  // For backwards compatibility, an order still in 'confirmed' status is
+  // also moved to 'processing' so the legacy stock-dispatch / commercial
+  // document downloads (gated on processing+) become available.
+  app.post(
+    "/:id/dispatch-to-warehouse",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+
+      const result = await transaction(async (client) => {
+        const {
+          rows: [order],
+        } = await client.query(
+          "SELECT * FROM orders WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+
+        if (!order) {
+          throw Object.assign(new Error("Order not found"), {
+            statusCode: 404,
+          });
+        }
+        if (order.status === "cancelled") {
+          throw Object.assign(
+            new Error("Cancelled order cannot be dispatched"),
+            { statusCode: 400 },
+          );
+        }
+        if (order.status === "pending") {
+          throw Object.assign(
+            new Error(
+              "Order must be confirmed before dispatching to warehouse",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        const newStatus =
+          order.status === "confirmed" ? "processing" : order.status;
+
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE orders
+             SET dispatched_to_warehouse_at = COALESCE(dispatched_to_warehouse_at, NOW()),
+                 status = $1,
+                 updated_at = NOW()
+           WHERE id = $2
+           RETURNING *`,
+          [newStatus, id],
+        );
+
+        return updated;
+      });
+
+      return result;
+    },
+  );
+
   // POST /orders/:id/fulfill — deduct per-product stock and snapshot COGS
   app.post(
     "/:id/fulfill",
@@ -2207,13 +2290,14 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const { order, items } = data;
       if (
+        order.status !== "confirmed" &&
         order.status !== "processing" &&
         order.status !== "fulfilled" &&
         order.status !== "invoiced"
       ) {
         return reply.status(400).send({
           error:
-            "Стокова разписка може да се генерира само за поръчки в обработка или изпълнени",
+            "Стокова разписка може да се генерира само за потвърдени поръчки нататък",
         });
       }
 
@@ -2304,13 +2388,14 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const { order, items } = data;
       if (
+        order.status !== "confirmed" &&
         order.status !== "processing" &&
         order.status !== "fulfilled" &&
         order.status !== "invoiced"
       ) {
         return reply.status(400).send({
           error:
-            "Търговски документ може да се генерира само за поръчки в обработка или изпълнени",
+            "Търговски документ може да се генерира само за потвърдени поръчки нататък",
         });
       }
 

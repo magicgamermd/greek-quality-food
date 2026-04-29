@@ -36,6 +36,63 @@ export function HighlightMatch({
 }
 
 /**
+ * Like HighlightMatch, but accepts a multi-token query. Splits the query
+ * on whitespace and wraps every matching range. Useful when the backend
+ * tokenized the search (e.g. 'колбасо реза' → matches 'Колбасорезачка'
+ * via tokens 'колбасо' + 'реза').
+ */
+export function HighlightMultiToken({
+  text,
+  query,
+  className = "bg-yellow-200 text-gray-900 rounded-sm px-0.5",
+}: {
+  text: string | null | undefined;
+  query: string | null | undefined;
+  className?: string;
+}): React.ReactElement {
+  const safe = text ?? "";
+  const tokens = (query ?? "")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return <>{safe}</>;
+
+  // Collect non-overlapping match ranges for every token.
+  const ranges: Array<[number, number]> = [];
+  for (const t of tokens) {
+    const r = computeMatchRange(safe, t);
+    if (r) ranges.push(r);
+  }
+  if (ranges.length === 0) return <>{safe}</>;
+
+  // Sort + merge overlapping ranges so we don't emit nested <mark>s.
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [s, e] of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && s <= last[1]) {
+      last[1] = Math.max(last[1], e);
+    } else {
+      merged.push([s, e]);
+    }
+  }
+
+  const out: React.ReactNode[] = [];
+  let cursor = 0;
+  merged.forEach(([s, e], i) => {
+    if (s > cursor) out.push(safe.slice(cursor, s));
+    out.push(
+      <mark key={i} className={className}>
+        {safe.slice(s, e)}
+      </mark>,
+    );
+    cursor = e;
+  });
+  if (cursor < safe.length) out.push(safe.slice(cursor));
+  return <>{out}</>;
+}
+
+/**
  * Compute [start, end) indices in `original` that correspond to the first
  * occurrence of `query` under the translit-aware normalization.
  * Returns null if no match.
