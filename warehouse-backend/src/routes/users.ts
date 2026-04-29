@@ -331,4 +331,89 @@ export default async function usersRoutes(app: FastifyInstance) {
       };
     },
   );
+
+  // DELETE /users/:id/permissions/:permission — Remove per-user permission override (admin only)
+  app.delete(
+    "/:id/permissions/:permission",
+    {
+      preHandler: [
+        async (req: FastifyRequest) => {
+          await req.jwtVerify();
+        },
+        requirePermission(PERMISSIONS.USERS_MANAGE),
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, permission } = request.params as {
+        id: string;
+        permission: string;
+      };
+
+      if (!VALID_PERMISSION_VALUES.includes(permission as Permission)) {
+        return reply.status(400).send({ error: "unknown_permission" });
+      }
+
+      const targetResult = await query(
+        "SELECT id, role FROM users WHERE id = $1",
+        [id],
+      );
+      if (targetResult.rows.length === 0) {
+        return reply.status(404).send({ error: "User not found" });
+      }
+      // self check first (matches Task 14 ordering fix)
+      if ((request.user as any).id === id) {
+        return reply.status(400).send({ error: "self_modification_forbidden" });
+      }
+      if (targetResult.rows[0].role === "admin") {
+        return reply.status(400).send({ error: "admin_lockout_protection" });
+      }
+
+      const previousResult = await query(
+        "SELECT permission, granted FROM user_permission_overrides WHERE user_id = $1 AND permission = $2",
+        [id, permission],
+      );
+      const previous = previousResult.rows[0] ?? null;
+
+      const auditResult = await transaction(async (client) => {
+        await client.query(
+          "DELETE FROM user_permission_overrides WHERE user_id = $1 AND permission = $2",
+          [id, permission],
+        );
+
+        return client.query(
+          `INSERT INTO audit_events
+             (actor_user_id, actor_email, action, entity_type, entity_id, diff)
+           VALUES ($1, $2, $3, 'user', NULL, $4::jsonb)
+           RETURNING id`,
+          [
+            (request.user as any).id,
+            (request.user as any).email ?? null,
+            "permission_override",
+            JSON.stringify({
+              user_id: id,
+              permission,
+              action: "reset_to_default",
+              previous: previous?.granted ?? null,
+            }),
+          ],
+        );
+      });
+
+      try {
+        await invalidateUserPermissions(id);
+      } catch (err) {
+        request.log.warn(
+          { err, user_id: id },
+          "permission cache invalidation failed (non-fatal)",
+        );
+      }
+
+      return {
+        user_id: id,
+        permission,
+        reset_to_default: true,
+        audit_event_id: auditResult.rows[0].id,
+      };
+    },
+  );
 }

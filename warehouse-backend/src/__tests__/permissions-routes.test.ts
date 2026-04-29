@@ -190,3 +190,41 @@ describe("PATCH /users/:id/permissions/:permission", () => {
     }
   });
 });
+
+describe("DELETE /users/:id/permissions/:permission", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockTransaction.mockImplementation(async (fn) =>
+      fn({ query: mockQuery } as any),
+    );
+  });
+
+  it("removes override + writes audit + invalidates cache", async () => {
+    // Target user
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: "u1", role: "sales" }],
+    } as any);
+    // Lookup previous override (for audit)
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ permission: "invoices.cancel", granted: true }],
+    } as any);
+    // DELETE
+    mockQuery.mockResolvedValueOnce({ rowCount: 1 } as any);
+    // Audit insert
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 200 }] } as any);
+
+    const app = await buildApp("admin");
+    try {
+      const res = await app.inject({
+        method: "DELETE",
+        url: "/users/u1/permissions/invoices.cancel",
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.reset_to_default).toBe(true);
+      expect(body.audit_event_id).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+});
