@@ -617,7 +617,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       `SELECT oi.*,
               COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
               COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand, pr.weight_kg,
+              pr.sku, pr.unit, pr.brand, pr.weight_kg, pr.purchase_price,
               (
                 SELECT COALESCE(SUM(quantity), 0)
                 FROM inventory

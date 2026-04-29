@@ -1545,6 +1545,8 @@ function EditOrderItemsModal({
   order: Order;
 }) {
   const qc = useQueryClient();
+  const { hasPermission } = usePermissions();
+  const canOverrideBelowCost = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
   const [deliveryDate, setDeliveryDate] = useState("");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
@@ -1563,6 +1565,8 @@ function EditOrderItemsModal({
           (item as any).weight_kg ?? (item as any).product?.weight_kg ?? null;
         const w = rawW != null ? parseFloat(String(rawW)) : NaN;
         const productWeight = Number.isFinite(w) && w > 0 ? w : null;
+        const rawCost = (item as any).purchase_price;
+        const costNum = rawCost != null ? parseFloat(String(rawCost)) : NaN;
         return makeOrderItemRow({
           product_id: String(item.product_id),
           product_name:
@@ -1579,6 +1583,7 @@ function EditOrderItemsModal({
           stock: -1, // unknown until product is re-selected from search
           weight_kg: productWeight != null ? String(productWeight) : "",
           original_weight_kg: productWeight,
+          cost_price: Number.isFinite(costNum) && costNum > 0 ? costNum : 0,
         });
       }) || [];
 
@@ -1596,6 +1601,11 @@ function EditOrderItemsModal({
       const wRaw =
         product.weight_kg != null ? parseFloat(String(product.weight_kg)) : NaN;
       const productWeight = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : null;
+      const costRaw =
+        product.purchase_price != null
+          ? parseFloat(String(product.purchase_price))
+          : NaN;
+      const cost = Number.isFinite(costRaw) && costRaw > 0 ? costRaw : 0;
       setItems((prev) =>
         prev.map((item, i) =>
           i === idx
@@ -1610,6 +1620,7 @@ function EditOrderItemsModal({
                 stock,
                 weight_kg: productWeight != null ? String(productWeight) : "",
                 original_weight_kg: productWeight,
+                cost_price: cost,
               }
             : item,
         ),
@@ -1643,8 +1654,21 @@ function EditOrderItemsModal({
       getEffectiveStock(i) >= 0 && Number(i.quantity) > getEffectiveStock(i),
   );
 
+  const belowCostItems = validItems.filter((i) => {
+    const disc = Number(i.discount_percent) || 0;
+    const effectivePrice = Number(i.unit_price) * (1 - disc / 100);
+    return (
+      i.cost_price > 0 && effectivePrice > 0 && effectivePrice < i.cost_price
+    );
+  });
+  const hasBelowCost = belowCostItems.length > 0;
+  const totalBelowCostLoss = belowCostItems.reduce((sum, i) => {
+    const qty = Number(i.quantity) || 0;
+    return sum + (i.cost_price - Number(i.unit_price)) * qty;
+  }, 0);
+
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
       const res = await api.put(`/orders/${order.id}`, {
         delivery_date: deliveryDate || undefined,
         notes: notes || undefined,
@@ -1654,6 +1678,7 @@ function EditOrderItemsModal({
           unit_price: Number(i.unit_price),
           discount_percent: Number(i.discount_percent) || 0,
         })),
+        allow_below_cost: vars.allow_below_cost === true ? true : undefined,
       });
 
       // Persist edited weights back to the product catalog.
@@ -1706,6 +1731,27 @@ function EditOrderItemsModal({
 
   const canSubmit =
     validItems.length > 0 && !mutation.isPending && !hasStockIssues;
+
+  const submitEdit = async () => {
+    setErrorMsg("");
+    if (hasBelowCost) {
+      if (!canOverrideBelowCost) {
+        setErrorMsg(
+          "Има артикули под доставна цена. Свържи се с admin за одобрение.",
+        );
+        return;
+      }
+      const ok = await confirm({
+        title: "Продажба под доставна цена",
+        description: `${belowCostItems.length} артикул(а) са под доставна цена. Обща загуба: ${formatCurrency(totalBelowCostLoss)}. Сигурен ли си?`,
+        confirmText: "Разреши",
+        cancelText: "Отказ",
+        variant: "danger",
+      });
+      if (!ok) return;
+    }
+    mutation.mutate({ allow_below_cost: hasBelowCost });
+  };
 
   return (
     <Dialog open={open} onOpenChange={onClose} modal={false}>
@@ -1938,6 +1984,35 @@ function EditOrderItemsModal({
             Количеството надвишава наличността за някои артикули.
           </div>
         )}
+        {hasBelowCost && (
+          <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium mb-1">
+                Внимание: артикули под доставна цена
+              </div>
+              <ul className="list-disc list-inside space-y-0.5">
+                {belowCostItems.map((i, idx) => {
+                  const qty = Number(i.quantity) || 0;
+                  const loss = (i.cost_price - Number(i.unit_price)) * qty;
+                  return (
+                    <li key={idx}>
+                      {i.product_name}: продаваш на{" "}
+                      {formatCurrency(Number(i.unit_price))}, ДЦ{" "}
+                      {formatCurrency(i.cost_price)} (загуба{" "}
+                      {formatCurrency(loss)})
+                    </li>
+                  );
+                })}
+              </ul>
+              {!canOverrideBelowCost && (
+                <div className="mt-2 font-medium text-red-700">
+                  Свържи се с admin за одобрение.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {errorMsg && <ErrorMessage message={errorMsg} />}
         {successMsg && (
           <div className="text-sm bg-green-50 border border-green-200 rounded-md px-3 py-2 text-green-700">
@@ -1949,13 +2024,7 @@ function EditOrderItemsModal({
           <Button variant="outline" onClick={onClose}>
             Отказ
           </Button>
-          <Button
-            onClick={() => {
-              setErrorMsg("");
-              mutation.mutate();
-            }}
-            disabled={!canSubmit}
-          >
+          <Button onClick={() => void submitEdit()} disabled={!canSubmit}>
             {mutation.isPending ? (
               <>
                 <Spinner size="sm" />
