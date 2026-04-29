@@ -981,6 +981,22 @@ function OrderDetailModal({
             </div>
           </div>
 
+          {/* ── Below-cost approval audit banner ── */}
+          {detail.below_cost_approved_at && (
+            <div className="shrink-0 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm text-amber-800 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div>
+                <div className="font-medium">
+                  Поръчка с одобрение под доставна цена
+                </div>
+                <div className="text-xs opacity-80">
+                  Одобрена от {detail.below_cost_approved_by_name ?? "admin"} на{" "}
+                  {formatDate(detail.below_cost_approved_at)}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ── Workflow step indicator ── */}
           {detail.status !== "cancelled" && (
             <div className="shrink-0 border-t pt-3">
