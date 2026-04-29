@@ -28,6 +28,7 @@ import fiscalRoutes from "./routes/fiscal.js";
 import econtRoutes from "./routes/econt.js";
 import chatRoutes from "./routes/chat.js";
 import agentRoutes from "./routes/agent.js";
+import permissionsRoutes from "./routes/permissions.js";
 
 dotenv.config();
 
@@ -233,6 +234,7 @@ export async function build() {
   await app.register(categoriesRoutes, { prefix: "/categories" });
   await app.register(suppliersRoutes, { prefix: "/suppliers" });
   await app.register(usersRoutes, { prefix: "/users" });
+  await app.register(permissionsRoutes, { prefix: "/permissions" });
   await app.register(settingsRoutes, { prefix: "/settings" });
   await app.register(notificationRoutes, { prefix: "/notifications" });
   await app.register(importRoutes, { prefix: "/import" });
