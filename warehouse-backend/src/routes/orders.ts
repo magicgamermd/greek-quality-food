@@ -1098,6 +1098,25 @@ export default async function orderRoutes(app: FastifyInstance) {
           .send({ error: "Cannot edit a cancelled order" });
       }
 
+      // Admin-only guard for edits to already-completed orders. Sales/
+      // warehouse users with orders.manage can still edit pending /
+      // confirmed / processing orders, but once stock is committed
+      // (fulfilled) or the order is invoiced, only admin (or a user with
+      // an explicit ORDERS_EDIT_AFTER_FULFILL override) can change it.
+      if (order.status === "fulfilled" || order.status === "invoiced") {
+        const allowed = await hasPermission(
+          request.user as { id: string; role: string },
+          PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
+        );
+        if (!allowed) {
+          return reply.status(403).send({
+            error: "Forbidden",
+            message: "Само admin може да редактира приключени поръчки.",
+            required_permission: PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
+          });
+        }
+      }
+
       const orderId = Number(id);
 
       let result;

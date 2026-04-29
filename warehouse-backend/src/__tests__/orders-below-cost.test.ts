@@ -276,3 +276,121 @@ describe("POST /orders below-cost guard", () => {
     expect(params[22]).toBeNull(); // below_cost_details
   });
 });
+
+describe("PUT /orders/:id edit-after-fulfill guard", () => {
+  let app: FastifyInstance;
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockTransaction.mockReset();
+  });
+
+  afterEach(async () => {
+    if (app) await app.close();
+  });
+
+  it("rejects 403 on PUT for fulfilled order when sales user lacks ORDERS_EDIT_AFTER_FULFILL", async () => {
+    // (1) ORDERS_MANAGE check passes for sales
+    mockQuery.mockResolvedValueOnce(rows([{ role: "sales", overrides: [] }]));
+    // (2) SELECT * FROM orders WHERE id = $1 — returns fulfilled order
+    mockQuery.mockResolvedValueOnce(
+      rows([{ id: 1, status: "fulfilled", partner_id: 1 }]),
+    );
+    // (3) hasPermission(ORDERS_EDIT_AFTER_FULFILL) lookup for sales
+    mockQuery.mockResolvedValueOnce(rows([{ role: "sales", overrides: [] }]));
+
+    app = await buildApp("sales");
+    const res = await app.inject({
+      method: "PUT",
+      url: "/orders/1",
+      payload: { notes: "trying to edit" },
+    });
+
+    expect(res.statusCode).toBe(403);
+    const body = JSON.parse(res.body);
+    expect(body.required_permission).toBe("orders.edit_after_fulfill");
+  });
+
+  it("rejects 403 on PUT for invoiced order for non-admin", async () => {
+    mockQuery.mockResolvedValueOnce(rows([{ role: "sales", overrides: [] }]));
+    mockQuery.mockResolvedValueOnce(
+      rows([{ id: 1, status: "invoiced", partner_id: 1 }]),
+    );
+    mockQuery.mockResolvedValueOnce(rows([{ role: "sales", overrides: [] }]));
+
+    app = await buildApp("sales");
+    const res = await app.inject({
+      method: "PUT",
+      url: "/orders/1",
+      payload: { notes: "edit attempt" },
+    });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("admin can PUT a fulfilled order (gate short-circuits)", async () => {
+    // Admin: ORDERS_MANAGE skips DB. SELECT * FROM orders is the only
+    // top-level query before the transaction.
+    mockQuery.mockResolvedValueOnce(
+      rows([{ id: 1, status: "fulfilled", partner_id: 1, invoice_id: null }]),
+    );
+
+    // No items in the body → transaction does only the field UPDATE.
+    const clientQuery = vi.fn().mockResolvedValueOnce(
+      rows([
+        {
+          id: 1,
+          status: "fulfilled",
+          notes: "edited by admin",
+          partner_id: 1,
+          invoice_id: null,
+        },
+      ]),
+    );
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    app = await buildApp("admin");
+    const res = await app.inject({
+      method: "PUT",
+      url: "/orders/1",
+      payload: { notes: "edited by admin" },
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("non-admin can still PUT a pending order", async () => {
+    mockQuery.mockResolvedValueOnce(rows([{ role: "sales", overrides: [] }]));
+    mockQuery.mockResolvedValueOnce(
+      rows([{ id: 1, status: "pending", partner_id: 1, invoice_id: null }]),
+    );
+
+    const clientQuery = vi.fn().mockResolvedValueOnce(
+      rows([
+        {
+          id: 1,
+          status: "pending",
+          notes: "edited",
+          partner_id: 1,
+          invoice_id: null,
+        },
+      ]),
+    );
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    app = await buildApp("sales");
+    const res = await app.inject({
+      method: "PUT",
+      url: "/orders/1",
+      payload: { notes: "edited" },
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+});
