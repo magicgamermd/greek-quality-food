@@ -89,6 +89,14 @@ const createInvoiceSchema = z.object({
 
 const regenerateInvoiceSchema = z.object({
   payment_method: invoicePaymentMethodSchema.optional(),
+  // Batch D — partner cannot be changed on regenerate. Forbid the field
+  // outright so accidental clients (e.g. copy-paste from create flow) get a
+  // 400 instead of a silent no-op.
+  partner_override: z
+    .never({
+      invalid_type_error: "Partner cannot be changed on regenerate.",
+    })
+    .optional(),
 });
 
 const createCreditNoteSchema = z.object({
