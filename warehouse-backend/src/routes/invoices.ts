@@ -445,8 +445,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           `INSERT INTO invoices
            (invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross, include_vat,
-            client_display_name, payment_method)
-         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8)
+            client_display_name, payment_method,
+            vat_exemption_reason, invoice_note)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
           [
             invoiceNumber,
@@ -457,6 +458,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             body.include_vat,
             clientDisplayName,
             body.payment_method,
+            body.vat_exemption_reason ?? null,
+            body.invoice_note ?? null,
           ],
         );
 
