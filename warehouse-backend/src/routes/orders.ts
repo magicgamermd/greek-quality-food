@@ -694,10 +694,12 @@ export default async function orderRoutes(app: FastifyInstance) {
             ? priceGroupColumnMap[partner.price_group] || "selling_price"
             : "selling_price";
 
-          // Load product data including the partner's price group column
+          // Load product data including the partner's price group column.
+          // name_en / sku come along so we can snapshot them onto the new
+          // order_items rows (Batch B — historical document accuracy).
           const productIds = [...new Set(body.items.map((i) => i.product_id))];
           const { rows: productData } = await client.query(
-            `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg, purchase_price FROM products WHERE id = ANY($1)`,
+            `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg, name_en, sku, purchase_price FROM products WHERE id = ANY($1)`,
             [productIds],
           );
           const productMap = new Map(productData.map((p: any) => [p.id, p]));
@@ -835,7 +837,7 @@ export default async function orderRoutes(app: FastifyInstance) {
 
           for (const item of body.items) {
             // Price resolution chain: explicit > partner price list > product selling_price > 0
-            const prod = productMap.get(item.product_id);
+            const prod = productMap.get(item.product_id) as any;
             const unitPrice =
               item.unit_price ??
               priceMap.get(item.product_id) ??
@@ -850,11 +852,20 @@ export default async function orderRoutes(app: FastifyInstance) {
             );
             totalAmount += totalPrice;
 
+            if (!prod) {
+              throw Object.assign(
+                new Error(`Product ${item.product_id} not found`),
+                { statusCode: 400 },
+              );
+            }
+
             const {
               rows: [orderItem],
             } = await client.query(
-              `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+              `INSERT INTO order_items
+                 (order_id, product_id, quantity, unit_price, discount_percent, total_price,
+                  name_bg_snapshot, name_en_snapshot, sku_snapshot)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
               [
                 order.id,
                 item.product_id,
@@ -862,6 +873,9 @@ export default async function orderRoutes(app: FastifyInstance) {
                 unitPrice,
                 discountPct,
                 totalPrice,
+                prod.name_bg,
+                prod.name_en,
+                prod.sku,
               ],
             );
             items.push(orderItem);
