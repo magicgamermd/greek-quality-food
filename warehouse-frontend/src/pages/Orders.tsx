@@ -732,13 +732,34 @@ function OrderDetailModal({
   });
 
   const invoiceMutation = useMutation({
-    mutationFn: (id: number) =>
-      api.post("/invoices", {
+    mutationFn: (id: number) => {
+      const payload: Record<string, unknown> = {
         order_id: id,
         include_vat: includeVat,
         payment_method: paymentMethod,
-        client_display_name: clientDisplayName.trim() || undefined,
-      }),
+        // When an override is set, client_display_name is mutually exclusive
+        // (server-side too) — drop it so the request stays clean.
+        client_display_name: partnerOverride
+          ? undefined
+          : clientDisplayName.trim() || undefined,
+      };
+      if (partnerOverride) {
+        payload.partner_override =
+          "partner_id" in partnerOverride
+            ? { partner_id: partnerOverride.partner_id }
+            : {
+                name: partnerOverride.name.trim(),
+                eik: partnerOverride.eik.trim(),
+                vat_number: partnerOverride.vat_number?.trim() || undefined,
+                address: partnerOverride.address?.trim() || undefined,
+                city: partnerOverride.city?.trim() || undefined,
+                contact_person:
+                  partnerOverride.contact_person?.trim() || undefined,
+                phone: partnerOverride.phone?.trim() || undefined,
+              };
+      }
+      return api.post("/invoices", payload);
+    },
     onSuccess: (res) => {
       const newInvoiceId = res.data?.id ?? null;
       setGeneratedInvoiceId(newInvoiceId);
