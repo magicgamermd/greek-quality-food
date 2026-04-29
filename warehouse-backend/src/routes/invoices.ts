@@ -54,6 +54,50 @@ function resolveInvoicePdfPath(invoice: {
   return null;
 }
 
+/**
+ * Resolve a partner override into a numeric partner_id.
+ * - {partner_id} → returned as-is (existing partner picked from catalog).
+ * - new-partner data → SELECT by EIK; reuse existing or INSERT new with
+ *   partner_type='company' (the override flow is only used for individual →
+ *   company invoicing).
+ *
+ * Runs inside the same transaction client as the surrounding invoice INSERT
+ * so that a rollback unwinds the partner row too.
+ */
+async function resolveOverridePartner(
+  client: { query: (sql: string, params: any[]) => Promise<{ rows: any[] }> },
+  override: any,
+): Promise<number> {
+  if ("partner_id" in override) return override.partner_id;
+
+  const eik = override.eik.trim();
+  const {
+    rows: [existing],
+  } = await client.query(`SELECT id FROM partners WHERE eik = $1 LIMIT 1`, [
+    eik,
+  ]);
+  if (existing) return existing.id;
+
+  const {
+    rows: [created],
+  } = await client.query(
+    `INSERT INTO partners
+       (name, eik, vat_number, address, city, contact_person, phone, partner_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'company')
+     RETURNING id`,
+    [
+      override.name.trim(),
+      eik,
+      override.vat_number ?? null,
+      override.address ?? null,
+      override.city ?? null,
+      override.contact_person ?? null,
+      override.phone ?? null,
+    ],
+  );
+  return created.id;
+}
+
 const createInvoiceSchema = z.object({
   order_id: z.number().int(),
   vat_rate: z.number().default(20), // Bulgarian VAT 20%
@@ -68,10 +112,56 @@ const createInvoiceSchema = z.object({
     .max(255)
     .optional()
     .transform((v) => (v && v.length > 0 ? v : null)),
+  // Legal basis printed in the "Основание за сделката" line of the PDF
+  // when the invoice is issued without VAT. Free text; empty → null.
+  vat_exemption_reason: z
+    .string()
+    .trim()
+    .max(500)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
+  // Free-text note (e.g. "по проект Алфа") printed below the totals.
+  invoice_note: z
+    .string()
+    .trim()
+    .max(2000)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
+  // Batch D — Issue invoice in the name of a different (company) partner when
+  // the order's partner is an individual. Either pick an existing partner by
+  // id, or supply full new-partner data — server upserts by EIK.
+  partner_override: z
+    .union([
+      z.object({ partner_id: z.number().int().positive() }),
+      z.object({
+        name: z.string().trim().min(1).max(255),
+        eik: z.string().trim().min(1).max(50),
+        vat_number: z.string().trim().max(50).optional(),
+        address: z.string().trim().max(500).optional(),
+        city: z.string().trim().max(100).optional(),
+        contact_person: z.string().trim().max(255).optional(),
+        phone: z.string().trim().max(50).optional(),
+      }),
+    ])
+    .optional(),
 });
 
 const regenerateInvoiceSchema = z.object({
   payment_method: invoicePaymentMethodSchema.optional(),
+  // For regenerate, an absent field means "keep the previously stored
+  // value" — handled via COALESCE in the UPDATE. Empty string is
+  // treated the same as absent (no override). Length capped to match
+  // createInvoiceSchema.
+  vat_exemption_reason: z.string().trim().max(500).optional(),
+  invoice_note: z.string().trim().max(2000).optional(),
+  // Batch D — partner cannot be changed on regenerate. Forbid the field
+  // outright so accidental clients (e.g. copy-paste from create flow) get a
+  // 400 instead of a silent no-op.
+  partner_override: z
+    .never({
+      invalid_type_error: "Partner cannot be changed on regenerate.",
+    })
+    .optional(),
 });
 
 const createCreditNoteSchema = z.object({
@@ -396,10 +486,33 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         // Only accept a display-name override when the buyer is an individual.
         // Storing it on legal-entity invoices would make the DB state misleading
         // even though the PDF ignores it.
-        const clientDisplayName =
+        let invoicePartnerId: number = order.partner_id;
+        let clientDisplayName: string | null =
           partner?.partner_type === "individual"
             ? (body.client_display_name ?? null)
             : null;
+
+        // Batch D — partner override (only for individual orders).
+        // The order's partner_id is left alone; the invoice points to the
+        // resolved (existing or freshly upserted) company partner.
+        if (body.partner_override) {
+          if (partner?.partner_type !== "individual") {
+            throw Object.assign(
+              new Error(
+                "partner_override is allowed only for individual orders",
+              ),
+              { statusCode: 400 },
+            );
+          }
+          invoicePartnerId = await resolveOverridePartner(
+            client,
+            body.partner_override,
+          );
+          // Override and client_display_name are mutually exclusive — once we
+          // have a real company partner, the "free-text individual name" no
+          // longer makes sense.
+          clientDisplayName = null;
+        }
 
         // Calculate totals
         const totalNet = items.reduce(
@@ -424,18 +537,21 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           `INSERT INTO invoices
            (invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross, include_vat,
-            client_display_name, payment_method)
-         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8)
+            client_display_name, payment_method,
+            vat_exemption_reason, invoice_note)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
           [
             invoiceNumber,
-            order.partner_id,
+            invoicePartnerId,
             totalNet,
             totalVat,
             totalGross,
             body.include_vat,
             clientDisplayName,
             body.payment_method,
+            body.vat_exemption_reason ?? null,
+            body.invoice_note ?? null,
           ],
         );
 
@@ -453,10 +569,22 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         const invoicesDir = path.resolve("uploads", "invoices");
         fs.mkdirSync(invoicesDir, { recursive: true });
 
+        // Re-fetch the partner row for the PDF when an override was used —
+        // otherwise the original `partner` (the individual) would be printed
+        // on the invoice instead of the company.
+        let invoicePartner = partner;
+        if (body.partner_override) {
+          const { rows } = await client.query(
+            "SELECT * FROM partners WHERE id = $1",
+            [invoicePartnerId],
+          );
+          invoicePartner = rows[0] ?? partner;
+        }
+
         const pdfPath = path.join(invoicesDir, `${invoiceNumber}.pdf`);
         await generateInvoicePdf({
           invoice,
-          partner,
+          partner: invoicePartner,
           company,
           items,
           vatRate: effectiveVatRate,
@@ -569,7 +697,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           );
         }
 
-        // Update invoice record (payment_method updated only if provided)
+        // Update invoice record. payment_method / vat_exemption_reason /
+        // invoice_note are updated only when the regenerate request
+        // explicitly carries a value — absent means "preserve". Empty
+        // string is treated as absent (the FE sends undefined when the
+        // user clears the input but doesn't intend to override).
+        const overrideExemption =
+          body.vat_exemption_reason && body.vat_exemption_reason.length > 0
+            ? body.vat_exemption_reason
+            : null;
+        const overrideNote =
+          body.invoice_note && body.invoice_note.length > 0
+            ? body.invoice_note
+            : null;
         const {
           rows: [updated],
         } = await client.query(
@@ -577,9 +717,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
              SET total_net = $1,
                  total_vat = $2,
                  total_gross = $3,
-                 payment_method = COALESCE($4, payment_method)
-           WHERE id = $5 RETURNING *`,
-          [totalNet, totalVat, totalGross, body.payment_method ?? null, id],
+                 payment_method = COALESCE($4, payment_method),
+                 vat_exemption_reason = COALESCE($5, vat_exemption_reason),
+                 invoice_note = COALESCE($6, invoice_note)
+           WHERE id = $7 RETURNING *`,
+          [
+            totalNet,
+            totalVat,
+            totalGross,
+            body.payment_method ?? null,
+            overrideExemption,
+            overrideNote,
+            id,
+          ],
         );
 
         // Regenerate PDF

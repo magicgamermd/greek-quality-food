@@ -19,6 +19,7 @@ import {
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { generateWarrantyCardPdf } from "../services/warranty-pdf.js";
 import { generateOfferPdf } from "../services/offer-pdf.js";
+import { generateProtocolPdf } from "../services/protocol-pdf.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -2676,6 +2677,100 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const stream = fs.createReadStream(outputPath);
       const filename = `Гаранционна_карта_${serialNumber}.pdf`;
+      const encodedFilename = encodeURIComponent(filename);
+
+      return reply
+        .header("Content-Type", "application/pdf")
+        .header(
+          "Content-Disposition",
+          `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+        )
+        .send(stream);
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // GET /:id/protocol-pdf — Приемо-предавателен протокол
+  // ════════════════════════════════════════════════════════════════════
+  // Optional query overrides let the user adjust place/date/reps in a
+  // dialog before download (rare in B2B; most fields default from the
+  // partner + company settings).
+  app.get<{
+    Params: { id: string };
+    Querystring: {
+      place?: string;
+      date?: string;
+      seller_rep?: string;
+      buyer_rep?: string;
+    };
+  }>(
+    "/:id/protocol-pdf",
+    { preHandler: ordersManagePreHandler },
+    async (request, reply) => {
+      const id = Number(request.params.id);
+      const data = await loadOrderWithBatches(id);
+      if (!data) return reply.status(404).send({ error: "Order not found" });
+
+      const { order, items } = data;
+
+      const company = await getCompanySettings();
+      const {
+        rows: [partner],
+      } = await query(
+        "SELECT name, eik, contact_person FROM partners WHERE id = $1",
+        [order.partner_id],
+      );
+
+      const today = new Date().toISOString().split("T")[0];
+      const protocolNumber = `PR-${String(order.order_number || order.id).padStart(7, "0")}`;
+      const stockDispatchNumber = `SR-${String(order.order_number || order.id).padStart(7, "0")}`;
+      const invoiceNumber = order.invoice_id
+        ? (
+            await query("SELECT invoice_number FROM invoices WHERE id = $1", [
+              order.invoice_id,
+            ])
+          ).rows[0]?.invoice_number
+        : null;
+
+      const totalAmount = items.reduce(
+        (sum: number, it: any) => sum + parseFloat(it.total_price),
+        0,
+      );
+
+      const pdfDir = path.resolve(process.cwd(), "data", "documents");
+      if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+      const outputPath = path.join(pdfDir, `protocol-${id}.pdf`);
+
+      await generateProtocolPdf({
+        protocolNumber,
+        orderNumber: order.order_number ?? order.id,
+        invoiceNumber,
+        stockDispatchNumber,
+        date: request.query.date || today,
+        place: request.query.place || company.city || "София",
+        seller: {
+          name: company.company_name,
+          eik: company.eik,
+          rep: request.query.seller_rep || company.mol || "",
+        },
+        buyer: {
+          name: partner?.name || "",
+          eik: partner?.eik ?? null,
+          rep: request.query.buyer_rep || partner?.contact_person || "",
+        },
+        items: items.map((it: any) => ({
+          name_bg: it.name_bg,
+          quantity: it.quantity,
+          unit: it.unit || "бр.",
+          unit_price: it.unit_price,
+          total_price: it.total_price,
+        })),
+        totalAmount,
+        outputPath,
+      });
+
+      const stream = fs.createReadStream(outputPath);
+      const filename = `Протокол_${protocolNumber}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
 
       return reply
