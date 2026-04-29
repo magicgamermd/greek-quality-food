@@ -453,6 +453,10 @@ function OrderDetailModal({
 }) {
   const qc = useQueryClient();
   const { token: authToken } = useAuth();
+  const { hasPermission } = usePermissions();
+  const canEditAfterFulfill = hasPermission(
+    PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
+  );
 
   // Fetch full order with items
   const {
@@ -1054,12 +1058,15 @@ function OrderDetailModal({
               <Button variant="outline" onClick={onClose}>
                 Затвори
               </Button>
-              {detail.status !== "cancelled" && (
-                <Button variant="outline" onClick={() => setEditOpen(true)}>
-                  <Pencil className="h-4 w-4" />
-                  Редактирай артикули
-                </Button>
-              )}
+              {detail.status !== "cancelled" &&
+                ((detail.status !== "fulfilled" &&
+                  detail.status !== "invoiced") ||
+                  canEditAfterFulfill) && (
+                  <Button variant="outline" onClick={() => setEditOpen(true)}>
+                    <Pencil className="h-4 w-4" />
+                    Редактирай артикули
+                  </Button>
+                )}
 
               <div className="flex-1" />
 
