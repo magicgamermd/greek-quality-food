@@ -414,6 +414,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       object_query,
       q,
       below_cost_only,
+      article,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -493,6 +494,26 @@ export default async function orderRoutes(app: FastifyInstance) {
       paramIdx++;
     }
 
+    // Article search: matches orders containing a product whose snapshot
+    // name or SKU matches the query. Uses oi.*_snapshot from Batch B so a
+    // rename in the products catalog does not retroactively hide a match
+    // (the historical document's name is what's searchable).
+    const articleQuery = normalizeOptionalText(article);
+    if (articleQuery) {
+      where += ` AND EXISTS (
+        SELECT 1
+        FROM order_items oi
+        WHERE oi.order_id = o.id
+          AND (
+            oi.name_bg_snapshot ILIKE $${paramIdx}
+            OR oi.name_en_snapshot ILIKE $${paramIdx}
+            OR oi.sku_snapshot = $${paramIdx + 1}
+          )
+      )`;
+      params.push(`%${articleQuery}%`, articleQuery);
+      paramIdx += 2;
+    }
+
     const freeText = normalizeOptionalText(q);
     if (freeText) {
       // Transliteration-aware partner/object name match; raw ILIKE for numbers.
@@ -555,6 +576,42 @@ export default async function orderRoutes(app: FastifyInstance) {
 
     const { rows } = await query(sql, params);
 
+    // When ?article= is set, enrich each row with matched_items so the
+    // FE can display which order line(s) matched. One batched query
+    // covers every order on the current page.
+    let enrichedRows: any[] = rows;
+    if (articleQuery && rows.length > 0) {
+      const orderIds = rows.map((r: any) => r.id);
+      const { rows: matched } = await query(
+        `SELECT oi.order_id,
+                oi.name_bg_snapshot AS name_bg,
+                oi.sku_snapshot     AS sku
+           FROM order_items oi
+          WHERE oi.order_id = ANY($1::int[])
+            AND (
+              oi.name_bg_snapshot ILIKE $2
+              OR oi.name_en_snapshot ILIKE $2
+              OR oi.sku_snapshot = $3
+            )
+          ORDER BY oi.order_id, oi.id
+          LIMIT 1000`,
+        [orderIds, `%${articleQuery}%`, articleQuery],
+      );
+      const matchedByOrder = new Map<
+        number,
+        Array<{ name_bg: string; sku: string | null }>
+      >();
+      for (const m of matched) {
+        const list = matchedByOrder.get(m.order_id) ?? [];
+        list.push({ name_bg: m.name_bg, sku: m.sku });
+        matchedByOrder.set(m.order_id, list);
+      }
+      enrichedRows = rows.map((r: any) => ({
+        ...r,
+        matched_items: matchedByOrder.get(r.id) ?? [],
+      }));
+    }
+
     // Total count (same WHERE clause; joins kept minimal since filters reference p/inv/po)
     const countSql = `
       SELECT COUNT(DISTINCT o.id) AS total
@@ -568,7 +625,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     const total = parseInt(countRows[0]?.total || "0");
 
     return {
-      data: rows,
+      data: enrichedRows,
       pagination: { page: pageNum, limit: pageSize, total },
     };
   });
