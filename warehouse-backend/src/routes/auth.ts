@@ -2,7 +2,11 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { query } from "../db.js";
-import { hasPermission, PERMISSIONS } from "../lib/permissions.js";
+import {
+  hasPermission,
+  PERMISSIONS,
+  getUserPermissions,
+} from "../lib/permissions.js";
 
 // Pre-computed bcrypt hash used for timing-attack protection when an
 // unknown email is supplied. Cost factor matches the one used for real
@@ -143,6 +147,12 @@ export default async function authRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "User not found" });
     }
 
-    return rows[0];
+    const user = rows[0];
+    const perms = await getUserPermissions(user.id);
+
+    return {
+      user,
+      permissions: [...perms],
+    };
   });
 }
