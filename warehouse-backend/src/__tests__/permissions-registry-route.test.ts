@@ -30,12 +30,26 @@ describe("GET /permissions/registry", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(Array.isArray(body)).toBe(true);
-      expect(body.length).toBe(16);
+      expect(body.length).toBe(18);
       const orders = body.find((p: any) => p.permission === "orders.manage");
       expect(orders).toMatchObject({
         permission: "orders.manage",
         group: "Продажби",
         label: "Поръчки — управление",
+      });
+      const belowCost = body.find(
+        (p: any) => p.permission === "orders.below_cost_override",
+      );
+      expect(belowCost).toMatchObject({
+        permission: "orders.below_cost_override",
+        group: "Продажби",
+      });
+      const editAfterFulfill = body.find(
+        (p: any) => p.permission === "orders.edit_after_fulfill",
+      );
+      expect(editAfterFulfill).toMatchObject({
+        permission: "orders.edit_after_fulfill",
+        group: "Продажби",
       });
     } finally {
       await app.close();
