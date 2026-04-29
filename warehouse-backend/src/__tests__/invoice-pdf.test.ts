@@ -61,6 +61,7 @@ function getTestData(overrides: Record<string, any> = {}) {
     documentType: overrides.documentType ?? "invoice",
     relatedInvoiceNumber: overrides.relatedInvoiceNumber,
     outputPath: overrides.outputPath ?? path.join(TEST_OUTPUT_DIR, "test.pdf"),
+    copies: overrides.copies, // pass-through; undefined if absent
   };
 }
 
@@ -78,7 +79,7 @@ describe("generateInvoicePdf", () => {
     await generateInvoicePdf(getTestData({ outputPath: standardPath }));
     expect(fs.existsSync(standardPath)).toBe(true);
     expect(fs.statSync(standardPath).size).toBeGreaterThan(1000);
-    expect(getPdfPageCount(standardPath)).toBe(2);
+    expect(getPdfPageCount(standardPath)).toBe(1);
 
     const noVatPath = path.join(TEST_OUTPUT_DIR, "no-vat.pdf");
     await generateInvoicePdf(
@@ -89,7 +90,7 @@ describe("generateInvoicePdf", () => {
         invoice: { total_vat: 0, total_gross: 100 },
       }),
     );
-    expect(getPdfPageCount(noVatPath)).toBe(2);
+    expect(getPdfPageCount(noVatPath)).toBe(1);
 
     const creditPath = path.join(TEST_OUTPUT_DIR, "credit-note.pdf");
     await generateInvoicePdf(
@@ -116,7 +117,7 @@ describe("generateInvoicePdf", () => {
         ],
       }),
     );
-    expect(getPdfPageCount(creditPath)).toBe(2);
+    expect(getPdfPageCount(creditPath)).toBe(1);
   });
 
   it("handles string number values and multiple items", async () => {
@@ -163,12 +164,12 @@ describe("generateInvoicePdf", () => {
     );
 
     expect(fs.existsSync(outputPath)).toBe(true);
-    expect(getPdfPageCount(outputPath)).toBe(2);
+    expect(getPdfPageCount(outputPath)).toBe(1);
   });
 
-  it("renders original and plain invoice copies in a single two-page PDF", async () => {
+  it('renders a single page labeled "Оригинал" by default (copies=1)', async () => {
     fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
-    const outputPath = path.join(TEST_OUTPUT_DIR, "copy-labels.pdf");
+    const outputPath = path.join(TEST_OUTPUT_DIR, "single-copy.pdf");
     const textSpy = vi.spyOn(PDFDocument.prototype, "text");
     let renderedStrings: string[] = [];
 
@@ -181,14 +182,27 @@ describe("generateInvoicePdf", () => {
       textSpy.mockRestore();
     }
 
-    const invoiceTitles = renderedStrings.filter(
-      (text) => text === "Фактура" || text === "Фактура\nОригинал",
-    );
-
-    expect(invoiceTitles).toEqual(["Фактура", "Фактура"]);
+    expect(getPdfPageCount(outputPath)).toBe(1);
     expect(renderedStrings).toContain("Оригинал");
-    expect(renderedStrings).not.toContain("Екземпляр: Оригинал");
-    expect(renderedStrings).not.toContain("Екземпляр: Клиент");
+  });
+
+  it('renders two "Оригинал" pages when copies=2', async () => {
+    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+    const outputPath = path.join(TEST_OUTPUT_DIR, "two-copies.pdf");
+    const textSpy = vi.spyOn(PDFDocument.prototype, "text");
+    let renderedStrings: string[] = [];
+
+    try {
+      await generateInvoicePdf(getTestData({ outputPath, copies: 2 }) as any);
+      renderedStrings = textSpy.mock.calls
+        .map(([text]) => (typeof text === "string" ? text : String(text ?? "")))
+        .filter(Boolean);
+    } finally {
+      textSpy.mockRestore();
+    }
+
+    const originalLabels = renderedStrings.filter((s) => s === "Оригинал");
+    expect(originalLabels.length).toBe(2);
     expect(getPdfPageCount(outputPath)).toBe(2);
   });
 
@@ -252,7 +266,7 @@ describe("generateInvoicePdf", () => {
       }),
     );
 
-    expect(getPdfPageCount(outputPath)).toBe(2);
+    expect(getPdfPageCount(outputPath)).toBe(1);
     expect(fs.statSync(outputPath).size).toBeGreaterThan(1500);
   });
 
@@ -289,7 +303,7 @@ describe("generateInvoicePdf", () => {
     );
 
     const pageCount = getPdfPageCount(outputPath);
-    expect(pageCount).toBeGreaterThan(2);
-    expect(pageCount).toBeLessThanOrEqual(8);
+    expect(pageCount).toBeGreaterThanOrEqual(2);
+    expect(pageCount).toBeLessThanOrEqual(4);
   });
 });
