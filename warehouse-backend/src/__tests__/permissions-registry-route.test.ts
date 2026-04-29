@@ -12,6 +12,13 @@ async function buildApp() {
   return app;
 }
 
+async function buildAppNoAuth() {
+  const app = Fastify();
+  // No jwtVerify stub — request.jwtVerify() will throw, hitting the 401 branch
+  await app.register(permissionsRoutes, { prefix: "/permissions" });
+  return app;
+}
+
 describe("GET /permissions/registry", () => {
   it("returns the permission catalog with groups + bg labels", async () => {
     const app = await buildApp();
@@ -30,6 +37,20 @@ describe("GET /permissions/registry", () => {
         group: "Продажби",
         label: "Поръчки — управление",
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns 401 when request has no valid JWT", async () => {
+    const app = await buildAppNoAuth();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/permissions/registry",
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error).toBe("Unauthorized");
     } finally {
       await app.close();
     }
