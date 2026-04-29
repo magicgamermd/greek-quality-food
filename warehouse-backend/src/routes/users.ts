@@ -424,4 +424,35 @@ export default async function usersRoutes(app: FastifyInstance) {
       };
     },
   );
+
+  app.get(
+    "/:id/audit",
+    {
+      preHandler: [
+        async (req: FastifyRequest) => {
+          await req.jwtVerify();
+        },
+        requirePermission(PERMISSIONS.USERS_MANAGE),
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const limit = Math.min(
+        parseInt((request.query as any).limit ?? "10", 10) || 10,
+        100,
+      );
+      const { rows } = await query(
+        `SELECT ae.id, ae.action, ae.diff, ae.created_at,
+                ae.actor_email
+         FROM audit_events ae
+         WHERE ae.entity_type = 'user'
+           AND ae.diff ->> 'user_id' = $1
+           AND ae.action IN ('permission_override', 'role_change')
+         ORDER BY ae.created_at DESC
+         LIMIT $2`,
+        [id, limit],
+      );
+      return rows;
+    },
+  );
 }
