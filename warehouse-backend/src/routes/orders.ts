@@ -413,6 +413,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       request_number,
       object_query,
       q,
+      below_cost_only,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -438,6 +439,14 @@ export default async function orderRoutes(app: FastifyInstance) {
       where += ` AND o.invoice_id IS NOT NULL`;
     } else if (invoicedFilter === false) {
       where += ` AND o.invoice_id IS NULL`;
+    }
+
+    // Reports filter: only orders that required admin below-cost approval.
+    // Admin-only on FE; backend does not gate the SQL filter itself — a
+    // sales user querying with the param still gets the filter, but they
+    // cannot see purchase_price elsewhere in the app.
+    if (below_cost_only === "true") {
+      where += ` AND o.below_cost_approved_at IS NOT NULL`;
     }
 
     const fromDate = normalizeOptionalText(date_from);

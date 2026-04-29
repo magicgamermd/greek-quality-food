@@ -362,6 +362,40 @@ describe("PUT /orders/:id edit-after-fulfill guard", () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it("GET /orders?below_cost_only=true filters to approved-below-cost orders", async () => {
+    // Data SELECT
+    mockQuery.mockResolvedValueOnce(rows([{ id: 1, partner_name: "X" }]));
+    // Count SELECT
+    mockQuery.mockResolvedValueOnce(rows([{ total: "1" }]));
+
+    app = await buildApp("admin");
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders?below_cost_only=true",
+    });
+
+    expect(res.statusCode).toBe(200);
+    // Both SQL strings must contain the WHERE filter.
+    const dataCall = mockQuery.mock.calls[0]!;
+    expect(String(dataCall[0])).toMatch(/below_cost_approved_at IS NOT NULL/);
+    const countCall = mockQuery.mock.calls[1]!;
+    expect(String(countCall[0])).toMatch(/below_cost_approved_at IS NOT NULL/);
+  });
+
+  it("GET /orders without below_cost_only returns all orders (no filter)", async () => {
+    mockQuery.mockResolvedValueOnce(rows([{ id: 1 }, { id: 2 }]));
+    mockQuery.mockResolvedValueOnce(rows([{ total: "2" }]));
+
+    app = await buildApp("admin");
+    const res = await app.inject({ method: "GET", url: "/orders" });
+
+    expect(res.statusCode).toBe(200);
+    const dataCall = mockQuery.mock.calls[0]!;
+    expect(String(dataCall[0])).not.toMatch(
+      /below_cost_approved_at IS NOT NULL/,
+    );
+  });
+
   it("non-admin can still PUT a pending order", async () => {
     mockQuery.mockResolvedValueOnce(rows([{ role: "sales", overrides: [] }]));
     mockQuery.mockResolvedValueOnce(
