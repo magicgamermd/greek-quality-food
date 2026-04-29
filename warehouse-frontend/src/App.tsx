@@ -33,6 +33,7 @@ import { OwnerTop } from "@/pages/owner/OwnerTop";
 import { OwnerDeliveries } from "@/pages/owner/OwnerDeliveries";
 import { NotFound } from "@/pages/NotFound";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
+import { PermissionProvider } from "@/contexts/PermissionContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -258,17 +259,19 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delayDuration={200}>
           <AuthProvider>
-            <BrowserRouter>
-              <AppRoutes />
-              <PWAInstallPrompt />
-              <Toaster
-                richColors
-                position="top-right"
-                closeButton
-                expand
-                duration={4000}
-              />
-            </BrowserRouter>
+            <PermissionProvider>
+              <BrowserRouter>
+                <AppRoutes />
+                <PWAInstallPrompt />
+                <Toaster
+                  richColors
+                  position="top-right"
+                  closeButton
+                  expand
+                  duration={4000}
+                />
+              </BrowserRouter>
+            </PermissionProvider>
           </AuthProvider>
         </TooltipProvider>
       </QueryClientProvider>
