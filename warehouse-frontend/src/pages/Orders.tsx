@@ -79,6 +79,12 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PartnerHistoryDrawer } from "@/components/PartnerHistoryDrawer";
 import type { PartnerHistoryItem } from "@/components/PartnerHistoryDrawer";
 import {
@@ -1188,14 +1194,47 @@ function OrderDetailModal({
                   </div>
                 ) : (
                   <>
-                    <Button
-                      variant="outline"
-                      onClick={() => void openInvoicePdf(effectiveInvoiceId!)}
-                      className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5"
-                    >
-                      <FileText className="h-4 w-4" />
-                      Отвори
-                    </Button>
+                    <div className="inline-flex">
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          void openInvoicePdf(effectiveInvoiceId!, 1)
+                        }
+                        className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5 rounded-r-none border-r-0"
+                        title="Принтирай 1 копие (Оригинал)"
+                      >
+                        <FileText className="h-4 w-4" />
+                        Отвори
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5 rounded-l-none px-2"
+                            title="Избери брой копия"
+                            aria-label="Избери брой копия"
+                          >
+                            <ChevronDown className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() =>
+                              void openInvoicePdf(effectiveInvoiceId!, 1)
+                            }
+                          >
+                            📄 1 копие (Оригинал)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() =>
+                              void openInvoicePdf(effectiveInvoiceId!, 2)
+                            }
+                          >
+                            📄📄 2 копия (и двете Оригинал)
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                     <Button
                       variant="outline"
                       onClick={() =>
