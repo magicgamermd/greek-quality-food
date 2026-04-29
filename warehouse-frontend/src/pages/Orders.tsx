@@ -3715,11 +3715,23 @@ export function Orders() {
                         {formatCurrency(order.total_amount)}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant={statusVariants[order.status] ?? "secondary"}
-                        >
-                          {statusLabels[order.status] ?? order.status}
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <Badge
+                            variant={
+                              statusVariants[order.status] ?? "secondary"
+                            }
+                          >
+                            {statusLabels[order.status] ?? order.status}
+                          </Badge>
+                          {order.below_cost_approved_at && (
+                            <span
+                              className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-300"
+                              title={`Под cost — одобрена ${formatDate(order.below_cost_approved_at)}`}
+                            >
+                              <AlertTriangle className="h-3 w-3" />
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         {order.invoice_id ? (
