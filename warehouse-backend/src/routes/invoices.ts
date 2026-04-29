@@ -68,6 +68,23 @@ const createInvoiceSchema = z.object({
     .max(255)
     .optional()
     .transform((v) => (v && v.length > 0 ? v : null)),
+  // Batch D — Issue invoice in the name of a different (company) partner when
+  // the order's partner is an individual. Either pick an existing partner by
+  // id, or supply full new-partner data — server upserts by EIK.
+  partner_override: z
+    .union([
+      z.object({ partner_id: z.number().int().positive() }),
+      z.object({
+        name: z.string().trim().min(1).max(255),
+        eik: z.string().trim().min(1).max(50),
+        vat_number: z.string().trim().max(50).optional(),
+        address: z.string().trim().max(500).optional(),
+        city: z.string().trim().max(100).optional(),
+        contact_person: z.string().trim().max(255).optional(),
+        phone: z.string().trim().max(50).optional(),
+      }),
+    ])
+    .optional(),
 });
 
 const regenerateInvoiceSchema = z.object({
