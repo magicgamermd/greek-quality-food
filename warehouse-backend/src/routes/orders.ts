@@ -1269,7 +1269,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               ...new Set(body.items.map((i) => i.product_id)),
             ];
             const { rows: productData } = await client.query(
-              "SELECT id, name_bg, selling_price, purchase_price FROM products WHERE id = ANY($1)",
+              "SELECT id, name_bg, name_en, sku, selling_price, purchase_price FROM products WHERE id = ANY($1)",
               [productIds],
             );
             const productMap = new Map(productData.map((p: any) => [p.id, p]));
@@ -1381,11 +1381,25 @@ export default async function orderRoutes(app: FastifyInstance) {
                 );
               }
 
+              // Snapshot the product identity AT THE MOMENT this line is
+              // (re-)created. Existing rows that the user did not change are
+              // not touched here — the loop DELETEs all order_items first and
+              // re-creates them with snapshot from the current products row.
+              const snap = productMap.get(item.product_id) as any;
+              if (!snap) {
+                throw Object.assign(
+                  new Error(`Product ${item.product_id} not found`),
+                  { statusCode: 400 },
+                );
+              }
+
               const {
                 rows: [orderItem],
               } = await client.query(
-                `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+                `INSERT INTO order_items
+                   (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
                 [
                   id,
                   item.product_id,
@@ -1394,6 +1408,9 @@ export default async function orderRoutes(app: FastifyInstance) {
                   discountPct,
                   totalPrice,
                   costUnitPrice,
+                  snap.name_bg,
+                  snap.name_en,
+                  snap.sku,
                 ],
               );
               items.push(orderItem);
