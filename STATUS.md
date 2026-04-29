@@ -5,10 +5,10 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-28 (Phase 2 complete — 9 of 27 tasks)
+**Last updated:** 2026-04-29 (Phase 6 complete — 21 of 27 tasks)
 **Active branch:** `feature/MERTM-tester-attachments-buttons`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active feature:** Employee role + per-user permission overrides — see `docs/superpowers/specs/2026-04-28-employee-role-permissions-design.md` and plan `docs/superpowers/plans/2026-04-28-employee-role-permissions.md`. **9 of 27 tasks committed** (Phase 1 + 2 done — backend foundation + all 41 route role-checks refactored to permissions). **Resume at Task 10** (strip purchase_price from API responses).
+**Active feature:** Employee role + per-user permission overrides — see `docs/superpowers/specs/2026-04-28-employee-role-permissions-design.md` and plan `docs/superpowers/plans/2026-04-28-employee-role-permissions.md`. **21 of 27 tasks committed** (Phases 1–6 complete — backend foundation + 41 route role-checks + permission management API + FE infra + FE page gating). **Resume at Task 22** (UsersListPage scaffold, the first of 4 admin UI tasks).
 
 ---
 
@@ -101,7 +101,35 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - `3060efa` STATUS checkpoint
 - `e951736` Task 9 — products + payments + partners + export + import + fiscal + auth (14 sites — Phase 2 complete; auth.ts:82 register endpoint preserves first-user bootstrap)
 
-**Tasks 10-27 remain** (Phase 3+: purchase_price stripping, /me + permissions API endpoints, frontend infra, admin UI, E2E). Resume in next session via subagent-driven-development OR executing-plans skill using the plan file. Test baseline: **248 passed, 2 pre-existing payments-razpiska failures** (unrelated to permissions work).
+**Phase 3 — purchase_price stripping (2026-04-29):**
+
+- `e512aed` Task 10 — strip purchase_price server-side for sales role on inventory/products/incoming list responses
+
+**Phase 4 — /me + permissions management API (2026-04-29):**
+
+- `2100472` Task 11 — /me returns effective permissions (`{user, permissions[]}` envelope)
+- `f42934e` fix(permissions) — stripFieldsForUser bails on empty rows
+- `ee13305` fix(auth) — mobile-owner-app /me caller adapts to new envelope; add /me 404 test
+- `43b6074` Task 12 — GET /permissions/registry endpoint
+- `1f2fc9b` test(permissions) — add 401 case for /permissions/registry
+- `039d85f` Task 13 — GET /users/:id/permissions returns role+overrides+effective
+- `4c6714c` Task 14 — PATCH /users/:id/permissions/:permission with audit + cache invalidation
+- `5862806` fix(permissions) — wrap PATCH override in transaction; self-check before admin-lockout
+- `ea56bca` Task 15 — DELETE /users/:id/permissions/:permission resets to role default
+
+**Phase 5 — FE permission infra (2026-04-29):**
+
+- `72659cc` Task 16 — Permission TypeScript constants + types
+- `2396642` Task 17 — PermissionContext provider + usePermissions hook
+- `6f7e393` Task 18 — Can + RequirePermission components
+
+**Phase 6 — FE page gating (2026-04-29):**
+
+- `5660a06` Task 19 — permissions-driven sidebar + 403 interceptor
+- `eb337e3` Task 20 — hide purchase_price columns + margin widgets for unauthorised users
+- `f7e61ab` Task 21 — hide invoice cancel button for users without INVOICES_CANCEL
+
+**Tasks 22-27 remain** (Phase 7: admin UI Tasks 22–25; Phase 8: E2E + final Tasks 26–27). Resume via executing-plans skill using the plan file. Test baseline: **262 passed, 2 pre-existing payments-razpiska failures** (unrelated to permissions work).
 
 **Behavioral changes from Phase 2 alignments with spec ROLE_DEFAULTS** (intentional — flagged in commit messages):
 
@@ -110,6 +138,23 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - sales can now print order PDFs (stock-dispatch, commercial-doc, warranty)
 - GET /incoming now requires INCOMING_MANAGE (sales blocked)
 - owner_mobile session loses cancel-incoming access (re-eval if mobile-owner-app needs accommodation)
+
+**Behavioral changes from Phases 3–6 (Tasks 10–21):**
+
+- Task 10: purchase_price stripped server-side for sales role on inventory/products/incoming list responses
+- Task 11: `/auth/me` response shape changed from `{...userFields}` to `{user, permissions[]}` — mobile-owner-app updated to match
+- Task 19: sidebar now permission-driven, role-based filter removed; sales user sees ~7 items vs admin's 12
+- Task 20: Доставна цена + Марж columns hidden in Products table for users without INVENTORY_VIEW_PURCHASE_PRICE; total_stock_value KPI hidden in Dashboard; Edit button gated by PRODUCTS_MANAGE
+- Task 21: invoice cancel button hidden for users without INVOICES_CANCEL
+
+**Follow-ups tracked (non-blocking, schedule for a future session):**
+
+- Audit other purchase_price leaks: `orders.ts:366`, `analytics.ts:283`, `agent.ts:69`
+- Backend minor polish: perms→permissions naming in /me, optional .sort() of permission array, fail-closed comment, error-string casing consistency, Zod blank-reason rejection, remove `as any` casts on `request.user`
+- Discuss response envelope for /permissions/registry (bare array vs `{data: [...]}` for codebase consistency)
+- 404 test for GET /users/:id/permissions + `return reply` cleanup in `requirePermission`
+- 4 missing test cases for DELETE override (404, self, admin, unknown_permission)
+- PermissionContext polish: enabled gate for /me; treat /me 401 as logout
 
 **Earlier (pre-permissions feature):**
 
