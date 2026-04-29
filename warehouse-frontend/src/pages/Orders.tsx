@@ -63,6 +63,8 @@ import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
 import { usePermissions } from "@/contexts/PermissionContext";
 import { PERMISSIONS } from "@/lib/permissions";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { HighlightMatch } from "@/lib/highlight";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -3212,7 +3214,12 @@ export function Orders() {
     invoice: "",
     stock_dispatch: "",
     commercial_doc: "",
+    article: "",
   });
+  // Article filter is sent to the backend (other text filters are
+  // client-side fuzzy match only). Debounce so each keystroke does not
+  // hit the API.
+  const debouncedArticle = useDebouncedValue(filters.article.trim(), 300);
   // Date range filter — same pattern as Приемане на стоки
   const todayIso = new Date().toISOString().split("T")[0];
   const thirtyDaysAgoIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
@@ -3232,12 +3239,14 @@ export function Orders() {
     isLoading,
     error,
   } = useQuery<Order[]>({
-    queryKey: ["orders", statusFilter, belowCostOnly],
+    queryKey: ["orders", statusFilter, belowCostOnly, debouncedArticle],
     queryFn: () => {
       const parts: string[] = [];
       if (statusFilter === "invoiced") parts.push("invoiced=true");
       else if (statusFilter) parts.push(`status=${statusFilter}`);
       if (belowCostOnly) parts.push("below_cost_only=true");
+      if (debouncedArticle)
+        parts.push(`article=${encodeURIComponent(debouncedArticle)}`);
       const params = parts.length > 0 ? `?${parts.join("&")}` : "";
       return api.get(`/orders${params}`).then((r) => {
         const d = r.data;
