@@ -54,6 +54,50 @@ function resolveInvoicePdfPath(invoice: {
   return null;
 }
 
+/**
+ * Resolve a partner override into a numeric partner_id.
+ * - {partner_id} → returned as-is (existing partner picked from catalog).
+ * - new-partner data → SELECT by EIK; reuse existing or INSERT new with
+ *   partner_type='company' (the override flow is only used for individual →
+ *   company invoicing).
+ *
+ * Runs inside the same transaction client as the surrounding invoice INSERT
+ * so that a rollback unwinds the partner row too.
+ */
+async function resolveOverridePartner(
+  client: { query: (sql: string, params: any[]) => Promise<{ rows: any[] }> },
+  override: any,
+): Promise<number> {
+  if ("partner_id" in override) return override.partner_id;
+
+  const eik = override.eik.trim();
+  const {
+    rows: [existing],
+  } = await client.query(`SELECT id FROM partners WHERE eik = $1 LIMIT 1`, [
+    eik,
+  ]);
+  if (existing) return existing.id;
+
+  const {
+    rows: [created],
+  } = await client.query(
+    `INSERT INTO partners
+       (name, eik, vat_number, address, city, contact_person, phone, partner_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'company')
+     RETURNING id`,
+    [
+      override.name.trim(),
+      eik,
+      override.vat_number ?? null,
+      override.address ?? null,
+      override.city ?? null,
+      override.contact_person ?? null,
+      override.phone ?? null,
+    ],
+  );
+  return created.id;
+}
+
 const createInvoiceSchema = z.object({
   order_id: z.number().int(),
   vat_rate: z.number().default(20), // Bulgarian VAT 20%
