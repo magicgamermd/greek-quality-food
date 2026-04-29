@@ -176,7 +176,8 @@ export interface Order {
     | "processing"
     | "fulfilled"
     | "cancelled"
-    | "invoiced";
+    | "invoiced"
+    | "quoted";
   order_date: string;
   delivery_date?: string;
   total_amount: number;
