@@ -29,6 +29,8 @@ import {
 } from "@/components/ui/table";
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Can } from "@/components/Can";
+import { PERMISSIONS } from "@/lib/permissions";
 
 const paymentVariants: Record<string, "success" | "destructive" | "warning"> = {
   paid: "success",
@@ -846,21 +848,23 @@ export function Invoices() {
                                   </Button>
                                 </Tooltip>
                               )}
-                            {inv.document_type !== "credit_note" &&
-                              !isCancelled &&
-                              Number(inv.paid_amount ?? 0) <= 0.001 &&
-                              !hasCreditNote(inv.id) && (
-                                <Tooltip content="Анулирай фактура">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => openCancelModal(inv)}
-                                    className="text-red-700 hover:text-red-800"
-                                  >
-                                    <XCircle className="h-4 w-4" />
-                                  </Button>
-                                </Tooltip>
-                              )}
+                            <Can permission={PERMISSIONS.INVOICES_CANCEL}>
+                              {inv.document_type !== "credit_note" &&
+                                !isCancelled &&
+                                Number(inv.paid_amount ?? 0) <= 0.001 &&
+                                !hasCreditNote(inv.id) && (
+                                  <Tooltip content="Анулирай фактура">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => openCancelModal(inv)}
+                                      className="text-red-700 hover:text-red-800"
+                                    >
+                                      <XCircle className="h-4 w-4" />
+                                    </Button>
+                                  </Tooltip>
+                                )}
+                            </Can>
                           </div>
                         </TableCell>
                       </TableRow>
