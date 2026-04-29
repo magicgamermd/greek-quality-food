@@ -3159,7 +3159,10 @@ function CreateOrderModal({
 export function Orders() {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const { hasPermission } = usePermissions();
+  const canSeeBelowCostFilter = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
   const [statusFilter, setStatusFilter] = useState("");
+  const [belowCostOnly, setBelowCostOnly] = useState(false);
   // Per-column text filters
   const [filters, setFilters] = useState({
     order_number: "",
@@ -3187,14 +3190,13 @@ export function Orders() {
     isLoading,
     error,
   } = useQuery<Order[]>({
-    queryKey: ["orders", statusFilter],
+    queryKey: ["orders", statusFilter, belowCostOnly],
     queryFn: () => {
-      const params =
-        statusFilter === "invoiced"
-          ? "?invoiced=true"
-          : statusFilter
-            ? `?status=${statusFilter}`
-            : "";
+      const parts: string[] = [];
+      if (statusFilter === "invoiced") parts.push("invoiced=true");
+      else if (statusFilter) parts.push(`status=${statusFilter}`);
+      if (belowCostOnly) parts.push("below_cost_only=true");
+      const params = parts.length > 0 ? `?${parts.join("&")}` : "";
       return api.get(`/orders${params}`).then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
@@ -3526,6 +3528,20 @@ export function Orders() {
             {s === "" ? "Всички" : statusLabels[s]}
           </button>
         ))}
+        {canSeeBelowCostFilter && (
+          <button
+            onClick={() => setBelowCostOnly((v) => !v)}
+            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              belowCostOnly
+                ? "bg-amber-500 text-white"
+                : "bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+            }`}
+            title="Покажи само поръчки с одобрение под доставна цена"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Под cost
+          </button>
+        )}
       </div>
 
       {/* Date filter — same pattern as Приемане на стоки */}
