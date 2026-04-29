@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 E2E_DIR="${ROOT_DIR}/e2e-tests"
 
-echo "🧪 Greek Foods E2E QA Suite"
+echo "🧪 МЕРТ-М E2E QA Suite"
 echo "==========================="
 
 if [ ! -d "$E2E_DIR" ]; then

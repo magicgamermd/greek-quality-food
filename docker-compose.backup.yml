@@ -1,9 +1,22 @@
-# Optional: backup sidecar for self-hosted deployments.
+# Optional: backup sidecar for self-hosted MERT-M deployments.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+# The main MERT-M compose stack lives in warehouse-backend/docker-compose.yml
+# (with explicit project name "mertm" to coexist with the Greek Foods
+# clone). Layer this sidecar on top of it from the repo root:
 #
-# For Railway, use the cron snippet in docs/BACKUP-RESTORE.md instead of
-# this sidecar — Railway has its own cron/scheduled-job primitive.
+#   docker compose \
+#     --project-name mertm \
+#     -f warehouse-backend/docker-compose.yml \
+#     -f docker-compose.backup.yml \
+#     up -d
+#
+# This compose file's volume bind `./scripts/backup` is resolved
+# relative to THIS file's directory (the repo root), so running the
+# command from the repo root is required.
+#
+# For Mac Mini self-hosted deployment (the actual MERT-M target), the
+# launchd job under deploy/ runs the same nightly-pg-dump.sh directly
+# without a sidecar container.
 
 services:
   pg-backup:

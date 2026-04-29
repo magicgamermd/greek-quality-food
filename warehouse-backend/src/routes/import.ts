@@ -5,18 +5,25 @@ import {
   parseMicroinvestYesNo,
   parseProductActiveStatus,
 } from "../utils/microinvest.js";
+import { requirePermission, PERMISSIONS } from "../lib/permissions.js";
 
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   await request.jwtVerify();
 }
 
-function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
-  if (request.user.role !== "admin") {
-    throw Object.assign(new Error("Admin access required"), {
-      statusCode: 403,
-    });
-  }
-}
+const jwtVerify = async (request: FastifyRequest) => {
+  await request.jwtVerify();
+};
+
+const partnersImportPreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.PARTNERS_MANAGE),
+];
+
+const productsImportPreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.PRODUCTS_MANAGE),
+];
 
 interface PartnerRow {
   Код: string | number;
@@ -87,12 +94,8 @@ export default async function importRoutes(app: FastifyInstance) {
   // POST /import/partners — Upload DOSTAVCHICI.xlsx or PRODAJBI.xlsx
   app.post(
     "/partners",
+    { preHandler: partnersImportPreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (reply.sent) return;
-      requireAdmin(request, reply);
-      if (reply.sent) return;
-
       const file = await request.file();
       if (!file) {
         return reply.status(400).send({ error: "No file uploaded" });
@@ -315,12 +318,8 @@ export default async function importRoutes(app: FastifyInstance) {
   // POST /import/products — Upload STOKI.xlsx
   app.post(
     "/products",
+    { preHandler: productsImportPreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (reply.sent) return;
-      requireAdmin(request, reply);
-      if (reply.sent) return;
-
       const file = await request.file();
       if (!file) {
         return reply.status(400).send({ error: "No file uploaded" });

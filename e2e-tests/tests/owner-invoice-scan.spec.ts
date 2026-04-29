@@ -1,8 +1,14 @@
 import path from "path";
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 import { loginAsAdmin } from "./helpers/auth";
 
-const BACKEND_BASE_URL = process.env.E2E_BACKEND_BASE_URL ?? "http://127.0.0.1:3003";
+const BACKEND_BASE_URL =
+  process.env.E2E_BACKEND_BASE_URL ?? "http://127.0.0.1:3004";
 const INVOICE_FILE = path.resolve(__dirname, "../../test-invoices/No5.pdf");
 const PRODUCT_SEARCH_TERM = "ФЕТА";
 
@@ -124,15 +130,16 @@ type Product = {
 
 function isAutoMatched(match: MatchResult | undefined): boolean {
   if (!match?.matched_product_id) return false;
-  if (match.match_source === "alias" || match.match_source === "sku") return true;
+  if (match.match_source === "alias" || match.match_source === "sku")
+    return true;
   return (match.confidence ?? 0) >= 0.75;
 }
 
 async function loginViaApi(request: APIRequestContext): Promise<AuthHeaders> {
   const response = await request.post(`${BACKEND_BASE_URL}/auth/login`, {
     data: {
-      email: "admin@greekfoods.bg",
-      password: "GreekFoods2026!",
+      email: "admin@mertm.bg",
+      password: "36PWyyfdpxIt08VXlGjle1zf",
     },
   });
   expect(response.ok()).toBeTruthy();
@@ -170,29 +177,32 @@ async function matchPreview(
   headers: AuthHeaders,
   scanned: ScanResponse,
 ): Promise<MatchResult[]> {
-  const response = await request.post(`${BACKEND_BASE_URL}/incoming/match-preview`, {
-    headers: {
-      ...headers,
-      "Content-Type": "application/json",
+  const response = await request.post(
+    `${BACKEND_BASE_URL}/incoming/match-preview`,
+    {
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+      },
+      data: {
+        supplier_name: scanned.supplier_name ?? null,
+        supplier_eik: scanned.supplier_eik ?? null,
+        items: scanned.items.map((item) => ({
+          name: item.name ?? null,
+          name_en: item.name_en ?? null,
+          name_bg: item.name_bg ?? null,
+          product_name: item.product_name ?? null,
+          product_name_raw: item.product_name_raw ?? null,
+          product_code: item.product_code ?? null,
+          product_code_raw: item.product_code_raw ?? null,
+          quantity: item.quantity ?? null,
+          unit_price: item.unit_price ?? item.price ?? null,
+          price: item.price ?? null,
+        })),
+      },
+      timeout: 180_000,
     },
-    data: {
-      supplier_name: scanned.supplier_name ?? null,
-      supplier_eik: scanned.supplier_eik ?? null,
-      items: scanned.items.map((item) => ({
-        name: item.name ?? null,
-        name_en: item.name_en ?? null,
-        name_bg: item.name_bg ?? null,
-        product_name: item.product_name ?? null,
-        product_name_raw: item.product_name_raw ?? null,
-        product_code: item.product_code ?? null,
-        product_code_raw: item.product_code_raw ?? null,
-        quantity: item.quantity ?? null,
-        unit_price: item.unit_price ?? item.price ?? null,
-        price: item.price ?? null,
-      })),
-    },
-    timeout: 180_000,
-  });
+  );
   expect(response.ok()).toBeTruthy();
   const payload = await response.json();
   return Array.isArray(payload.matches) ? payload.matches : [];
@@ -217,9 +227,12 @@ async function deleteAlias(
   headers: AuthHeaders,
   aliasId: number,
 ): Promise<void> {
-  const response = await request.delete(`${BACKEND_BASE_URL}/product-aliases/${aliasId}`, {
-    headers,
-  });
+  const response = await request.delete(
+    `${BACKEND_BASE_URL}/product-aliases/${aliasId}`,
+    {
+      headers,
+    },
+  );
   expect(response.ok()).toBeTruthy();
 }
 
@@ -248,7 +261,7 @@ async function findProductBySearch(
   );
   expect(response.ok()).toBeTruthy();
   const payload = await response.json();
-  const products = Array.isArray(payload) ? payload : payload?.data ?? [];
+  const products = Array.isArray(payload) ? payload : (payload?.data ?? []);
   expect(products.length).toBeGreaterThan(0);
   return products[0] as Product;
 }
@@ -264,9 +277,12 @@ async function getProduct(
   headers: AuthHeaders,
   productId: number,
 ): Promise<Product> {
-  const response = await request.get(`${BACKEND_BASE_URL}/products/${productId}`, {
-    headers,
-  });
+  const response = await request.get(
+    `${BACKEND_BASE_URL}/products/${productId}`,
+    {
+      headers,
+    },
+  );
   expect(response.ok()).toBeTruthy();
   return (await response.json()) as Product;
 }
@@ -277,23 +293,26 @@ async function updateProduct(
   productId: number,
   product: Product,
 ): Promise<void> {
-  const response = await request.put(`${BACKEND_BASE_URL}/products/${productId}`, {
-    headers: {
-      ...headers,
-      "Content-Type": "application/json",
+  const response = await request.put(
+    `${BACKEND_BASE_URL}/products/${productId}`,
+    {
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+      },
+      data: {
+        name_bg: product.name_bg ?? undefined,
+        name_en: product.name_en ?? undefined,
+        sku: product.sku ?? undefined,
+        category_id: product.category_id ?? null,
+        unit: product.unit ?? undefined,
+        low_stock_threshold: toNullableNumber(product.low_stock_threshold),
+        brand: product.brand ?? null,
+        purchase_price: toNullableNumber(product.purchase_price),
+        selling_price: toNullableNumber(product.selling_price),
+      },
     },
-    data: {
-      name_bg: product.name_bg ?? undefined,
-      name_en: product.name_en ?? undefined,
-      sku: product.sku ?? undefined,
-      category_id: product.category_id ?? null,
-      unit: product.unit ?? undefined,
-      low_stock_threshold: toNullableNumber(product.low_stock_threshold),
-      brand: product.brand ?? null,
-      purchase_price: toNullableNumber(product.purchase_price),
-      selling_price: toNullableNumber(product.selling_price),
-    },
-  });
+  );
   expect(response.ok()).toBeTruthy();
 }
 
@@ -308,7 +327,7 @@ async function findIncomingByInvoiceNumber(
   );
   expect(response.ok()).toBeTruthy();
   const payload = await response.json();
-  const rows = Array.isArray(payload) ? payload : payload?.data ?? [];
+  const rows = Array.isArray(payload) ? payload : (payload?.data ?? []);
   const match = rows.find((row: any) => row?.invoice_number === invoiceNumber);
   expect(match).toBeTruthy();
   return match as { id: number; status: string; invoice_number: string };
@@ -319,9 +338,12 @@ async function getIncomingDetails(
   headers: AuthHeaders,
   incomingId: number,
 ) {
-  const response = await request.get(`${BACKEND_BASE_URL}/incoming/${incomingId}`, {
-    headers,
-  });
+  const response = await request.get(
+    `${BACKEND_BASE_URL}/incoming/${incomingId}`,
+    {
+      headers,
+    },
+  );
   expect(response.ok()).toBeTruthy();
   return (await response.json()) as { items?: Array<any>; status?: string };
 }
@@ -366,16 +388,34 @@ test.describe("Owner invoice scan manual matching", () => {
     const matchesBefore = OWNER_MATCH_FIXTURE;
 
     const targetIndex = scanned.items.findIndex((item, index) => {
-      const ocr = item.product_name_raw ?? item.name_bg ?? item.name_en ?? item.name ?? "";
-      return ocr.includes(PRODUCT_SEARCH_TERM) && !isAutoMatched(matchesBefore[index]);
+      const ocr =
+        item.product_name_raw ??
+        item.name_bg ??
+        item.name_en ??
+        item.name ??
+        "";
+      return (
+        ocr.includes(PRODUCT_SEARCH_TERM) &&
+        !isAutoMatched(matchesBefore[index])
+      );
     });
     expect(targetIndex).toBeGreaterThanOrEqual(0);
 
-    const product = await findProductBySearch(request, apiHeaders, PRODUCT_SEARCH_TERM);
+    const product = await findProductBySearch(
+      request,
+      apiHeaders,
+      PRODUCT_SEARCH_TERM,
+    );
     const originalProduct = await getProduct(request, apiHeaders, product.id);
-    const aliasesBefore = await fetchAliases(request, apiHeaders, PRODUCT_SEARCH_TERM);
+    const aliasesBefore = await fetchAliases(
+      request,
+      apiHeaders,
+      PRODUCT_SEARCH_TERM,
+    );
     for (const alias of aliasesBefore.filter(
-      (entry) => entry.product_id === product.id && entry.alias_name.includes(PRODUCT_SEARCH_TERM),
+      (entry) =>
+        entry.product_id === product.id &&
+        entry.alias_name.includes(PRODUCT_SEARCH_TERM),
     )) {
       await deleteAlias(request, apiHeaders, alias.id);
     }
@@ -389,7 +429,9 @@ test.describe("Owner invoice scan manual matching", () => {
       await expect(page).toHaveURL(/\/owner\/incoming\/scan(?:[?#].*)?$/);
 
       await page.locator('input[type="file"]').setInputFiles(INVOICE_FILE);
-      await expect(page.getByText(/Редове от фактурата/i)).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByText(/Редове от фактурата/i)).toBeVisible({
+        timeout: 60_000,
+      });
 
       const targetRow = page
         .locator("div.rounded-lg")
@@ -399,26 +441,46 @@ test.describe("Owner invoice scan manual matching", () => {
 
       await expect(targetRow).toBeVisible({ timeout: 30_000 });
 
-      const rowTitle = (await targetRow.locator("p").first().textContent()) ?? "";
+      const rowTitle =
+        (await targetRow.locator("p").first().textContent()) ?? "";
       const targetAlias = rowTitle.replace(/^Ред\s+\d+:\s*/i, "").trim();
       expect(targetAlias.length).toBeGreaterThan(0);
 
-      const searchInput = targetRow.getByPlaceholder(/Търси продукт по име\/SKU/i);
+      const searchInput = targetRow.getByPlaceholder(
+        /Търси продукт по име\/SKU/i,
+      );
       await searchInput.fill(PRODUCT_SEARCH_TERM);
       await targetRow.getByRole("button", { name: /^Търси$/ }).click();
 
       const productOption = targetRow.getByRole("button", {
-        name: new RegExp(product.name_bg ?? product.name_en ?? PRODUCT_SEARCH_TERM, "i"),
+        name: new RegExp(
+          product.name_bg ?? product.name_en ?? PRODUCT_SEARCH_TERM,
+          "i",
+        ),
       });
       await expect(productOption).toBeVisible({ timeout: 15_000 });
       await productOption.click();
 
-      await targetRow.getByRole("button", { name: /Свържи избрания продукт/i }).click();
+      await targetRow
+        .getByRole("button", { name: /Свържи избрания продукт/i })
+        .click();
 
-      const linkedTargetRow = page.locator("div.rounded-lg").filter({ hasText: targetAlias }).first();
-      await expect(linkedTargetRow.getByText(new RegExp(product.name_bg ?? product.name_en ?? PRODUCT_SEARCH_TERM, "i"))).toBeVisible({ timeout: 15_000 });
+      const linkedTargetRow = page
+        .locator("div.rounded-lg")
+        .filter({ hasText: targetAlias })
+        .first();
+      await expect(
+        linkedTargetRow.getByText(
+          new RegExp(
+            product.name_bg ?? product.name_en ?? PRODUCT_SEARCH_TERM,
+            "i",
+          ),
+        ),
+      ).toBeVisible({ timeout: 15_000 });
 
-      await linkedTargetRow.getByPlaceholder(/0\.00/i).fill(updatedSellingPrice.toFixed(2));
+      await linkedTargetRow
+        .getByPlaceholder(/0\.00/i)
+        .fill(updatedSellingPrice.toFixed(2));
 
       for (let i = 0; i < 5; i += 1) {
         const unresolvedCreateButtons = page
@@ -435,11 +497,17 @@ test.describe("Owner invoice scan manual matching", () => {
       await page.locator('input:not([type="file"])').nth(1).fill(invoiceNumber);
       await page.getByRole("checkbox").check();
 
-      await page.getByRole("button", { name: /Запази като чакаща доставка/i }).click();
-      await expect(page.getByText(/Фактурата е записана успешно/i)).toBeVisible({ timeout: 20_000 });
+      await page
+        .getByRole("button", { name: /Запази като чакаща доставка/i })
+        .click();
+      await expect(page.getByText(/Фактурата е записана успешно/i)).toBeVisible(
+        { timeout: 20_000 },
+      );
 
       const aliasesAfter = await fetchAliases(request, apiHeaders, targetAlias);
-      const savedAlias = aliasesAfter.find((entry) => entry.alias_name === targetAlias);
+      const savedAlias = aliasesAfter.find(
+        (entry) => entry.alias_name === targetAlias,
+      );
       expect(savedAlias).toBeTruthy();
       expect(savedAlias?.product_id).toBe(product.id);
 
@@ -463,7 +531,9 @@ test.describe("Owner invoice scan manual matching", () => {
         (entry: any) => Number(entry?.product_id) === product.id,
       );
       expect(savedLine).toBeTruthy();
-      expect(toNullableNumber(savedLine?.selling_price)).toBe(updatedSellingPrice);
+      expect(toNullableNumber(savedLine?.selling_price)).toBe(
+        updatedSellingPrice,
+      );
 
       const updatedProduct = await getProduct(request, apiHeaders, product.id);
       expect(toNullableNumber(updatedProduct.selling_price)).toBe(

@@ -9,13 +9,17 @@ import type {
   User,
 } from "../types";
 
-const unwrap = <T>(r: any): T => (r.data?.data !== undefined ? r.data.data : r.data);
+const unwrap = <T>(r: any): T =>
+  r.data?.data !== undefined ? r.data.data : r.data;
 
 export const authApi = {
   login: (data: LoginRequest) =>
     apiClient.post<AuthResponse>("/auth/login", data).then((r) => r.data),
 
-  me: () => apiClient.get<User>("/auth/me").then((r) => r.data),
+  me: () =>
+    apiClient
+      .get<{ user: User; permissions: string[] }>("/auth/me")
+      .then((r) => r.data.user),
 
   logout: () => apiClient.post("/auth/logout").then((r) => r.data),
 };

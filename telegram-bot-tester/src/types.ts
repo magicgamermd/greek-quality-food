@@ -27,6 +27,19 @@ export const CategorySchema = z.enum([
 ]);
 export type Category = z.infer<typeof CategorySchema>;
 
+export const DocumentInfoSchema = z.object({
+  fileName: z.string(),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+});
+export type DocumentInfo = z.infer<typeof DocumentInfoSchema>;
+
+export const ButtonInfoSchema = z.object({
+  text: z.string(),
+  callbackData: z.string(),
+});
+export type ButtonInfo = z.infer<typeof ButtonInfoSchema>;
+
 export const ScenarioSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -63,6 +76,15 @@ export const TranscriptTurnSchema = z.discriminatedUnion("kind", [
     at: z.string().datetime(),
     text: z.string(),
     messageId: z.number(),
+    document: DocumentInfoSchema.optional(),
+    buttons: z.array(ButtonInfoSchema).optional(),
+  }),
+  z.object({
+    kind: z.literal("clicked_button"),
+    at: z.string().datetime(),
+    messageId: z.number(),
+    buttonText: z.string(),
+    callbackData: z.string(),
   }),
   z.object({
     kind: z.literal("timeout"),

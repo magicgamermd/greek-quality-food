@@ -4,8 +4,8 @@ test.describe('Navigation', () => {
   test.beforeEach(async ({ page }) => {
     // Login before each test
     await page.goto('/login');
-    await page.fill('input[type="email"]', 'admin@greekfoods.bg');
-    await page.fill('input[type="password"]', 'GreekFoods2026!');
+    await page.fill('input[type="email"]', 'admin@mertm.bg');
+    await page.fill('input[type="password"]', '36PWyyfdpxIt08VXlGjle1zf');
     await page.click('button[type="submit"]');
     await page.waitForNavigation();
     await page.waitForSelector('nav', { timeout: 10000 });

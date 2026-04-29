@@ -8,7 +8,7 @@ import {
   generateStockDispatchPdf,
 } from "../services/document-pdf.js";
 
-const TEST_OUTPUT_DIR = path.resolve("/tmp/greek-foods-document-test-pdfs");
+const TEST_OUTPUT_DIR = path.resolve("/tmp/mertm-document-test-pdfs");
 
 function getPdfPageCount(filePath: string): number {
   const content = fs.readFileSync(filePath, "latin1");

@@ -1,6 +1,14 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, Plus, Edit2, Download, FileSpreadsheet } from "lucide-react";
+import {
+  Trash2,
+  Plus,
+  Edit2,
+  Download,
+  FileSpreadsheet,
+  Shield,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
@@ -463,12 +471,20 @@ export function Settings() {
                               <option value="admin">Admin</option>
                               <option value="warehouse">Warehouse</option>
                               <option value="accountant">Accountant</option>
+                              <option value="sales">Sales</option>
                             </Select>
                           </TableCell>
                           <TableCell className="text-sm text-gray-500">
                             {formatDate(u.created_at)}
                           </TableCell>
                           <TableCell className="text-right">
+                            <Link
+                              to={`/settings/users/${u.id}`}
+                              title="Управление на разрешения"
+                              className="inline-flex items-center justify-center h-9 w-9 rounded-md text-blue-600 hover:bg-blue-50 mr-1"
+                            >
+                              <Shield className="h-4 w-4" />
+                            </Link>
                             <Button
                               size="sm"
                               variant="ghost"
@@ -557,6 +573,7 @@ export function Settings() {
                     <option value="admin">Admin</option>
                     <option value="warehouse">Warehouse</option>
                     <option value="accountant">Accountant</option>
+                    <option value="sales">Sales</option>
                   </Select>
                 </div>
               </div>

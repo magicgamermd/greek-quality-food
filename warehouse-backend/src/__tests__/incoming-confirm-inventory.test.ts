@@ -82,7 +82,7 @@ describe("incoming confirm inventory propagation", () => {
       callback({ query: clientQuery }),
     );
 
-    const app = await buildAppWithRole("warehouse");
+    const app = await buildAppWithRole("admin");
     try {
       const res = await app.inject({
         method: "PUT",
@@ -173,7 +173,7 @@ describe("incoming confirm inventory propagation", () => {
       callback({ query: clientQuery }),
     );
 
-    const app = await buildAppWithRole("warehouse");
+    const app = await buildAppWithRole("admin");
     try {
       const res = await app.inject({
         method: "PUT",
@@ -217,7 +217,7 @@ describe("incoming confirm inventory propagation", () => {
         ]),
       );
 
-    const app = await buildAppWithRole("warehouse");
+    const app = await buildAppWithRole("admin");
     try {
       const res = await app.inject({
         method: "GET",

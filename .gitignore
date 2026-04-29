@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.db
 *.sqlite
+.worktrees/
 ssl/
 nginx/
 warehouse-backend/node_modules/

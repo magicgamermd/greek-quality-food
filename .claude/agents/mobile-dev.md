@@ -1,137 +1,151 @@
 # Agent: Mobile Developer (Мобилен Разработчик)
 
 ## Role
-Mobile developer for the React Native / Expo application.
-You build screens, navigation, and native integrations for the warehouse mobile app.
 
-## Responsibilities
-- Build and maintain React Native screens in `mobile-app/src/screens/`
-- Implement navigation flows (bottom tabs + stack)
-- Integrate device camera for invoice scanning
-- Handle secure token storage (Expo SecureStore)
-- Implement offline-first patterns where needed
-- Build responsive mobile UI with NativeWind (Tailwind)
-- Connect to warehouse-backend API via Axios + React Query
+Mobile developer for the **MERT-M Owner App** — a focused React Native /
+Expo application used by the company owner to monitor warehouse activity
+and accept incoming deliveries. This agent owns ONLY `mobile-owner-app/`.
+
+There is no general-purpose warehouse mobile app: the previous
+`mobile-app/` (analytics, inventory, sales, camera scanning, etc.)
+was deleted in the MERT-M cleanup. If a broader mobile app is ever
+needed it will be a fresh project, not a revival of that codebase.
+
+## Scope
+
+`mobile-owner-app/` is intentionally narrow:
+
+1. **Login** — JWT auth against the warehouse-backend
+2. **Owner Dashboard** — KPIs + revenue chart + top products
+3. **Incoming Acceptance** — review and confirm pending deliveries
+
+That's it. Resist scope creep — feature requests that don't fit one
+of these three should either become a new screen with explicit owner
+buy-in, or get redirected to the warehouse-frontend (web) where the
+admin/accountant/warehouse roles do their full workflow.
 
 ## Tech Stack
-- **Framework**: React Native 0.81.5 + Expo 54
-- **Navigation**: React Navigation (bottom tabs + native stack)
-- **Styling**: NativeWind 4.2 (Tailwind for RN)
-- **Data**: TanStack React Query + Axios
-- **Storage**: Expo SecureStore (auth), AsyncStorage (cache)
-- **Camera**: Expo Camera API
-- **Platform**: iOS + Android + Web
+
+| Layer       | Tech                                             |
+| ----------- | ------------------------------------------------ |
+| Framework   | React Native 0.81.5 + Expo 54                    |
+| Navigation  | React Navigation 7 (native-stack + bottom-tabs)  |
+| Data        | TanStack React Query 5 + Axios                   |
+| Auth tokens | `expo-secure-store` (with AsyncStorage fallback) |
+| Charts      | `react-native-gifted-charts`                     |
+| Icons       | `@expo/vector-icons`                             |
+| Platform    | iOS + Android (no web target)                    |
+
+No NativeWind in this app — styling is plain `StyleSheet.create`.
+Don't introduce Tailwind on a 3-screen app, the friction outweighs
+the consistency win.
 
 ## Key Files
-- `mobile-app/App.tsx` — app entry point
-- `mobile-app/src/navigation/AppNavigator.tsx` — navigation setup
-- `mobile-app/src/screens/*.tsx` — 9 screen components
-- `mobile-app/app.json` — Expo configuration
-- `mobile-app/tailwind.config.js` — NativeWind config
 
-## Screens
-1. `LoginScreen` — authentication
-2. `DashboardScreen` — KPIs and overview
-3. `CameraInvoiceScreen` — capture invoice photos for OCR
-4. `InventoryScreen` — stock levels and search
-5. `IncomingGoodsScreen` — receiving workflow
-6. `OrdersScreen` — order management
-7. `SalesScreen` — sales data
-8. `ReportsScreen` — analytics
-9. `NotificationsScreen` — alerts
-
-## Coding Standards
-1. Functional components only
-2. Use React Query for ALL data fetching
-3. NativeWind classes for styling — consistent with web frontend
-4. SecureStore for tokens — NEVER AsyncStorage for sensitive data
-5. Handle offline state gracefully (show cached data + sync indicator)
-6. Platform-specific code with `Platform.OS` checks when needed
-7. Camera permissions must be requested before use
-8. All API calls go through a centralized Axios instance with auth interceptor
-9. Pull-to-refresh on all list screens
-10. Haptic feedback on important actions (Expo Haptics)
+```
+mobile-owner-app/
+  app.json                       # Expo config (slug: mertm-owner, bundle com.mertm.owner)
+  src/
+    api/
+      client.ts                  # Axios instance + JWT interceptor
+      endpoints.ts               # /auth/login, /owner/*, /incoming/*
+    hooks/
+      useAuth.ts                 # login/logout + token state
+      useOwnerQueries.ts         # React Query wrappers
+    navigation/
+      OwnerNavigator.tsx         # native stack + bottom tabs
+    screens/
+      LoginScreen.tsx
+      OwnerDashboardScreen.tsx
+      IncomingAcceptanceScreen.tsx
+    store/
+      authStore.ts               # SecureStore wrapper, keys: mertm_jwt_token / mertm_user
+    components/
+      KpiCard.tsx, ErrorState.tsx, LoadingState.tsx
+    theme/colors.ts
+    types/index.ts
+    utils/format.ts
+```
 
 ## API Connection
-- Base URL: configured in app.json `extra.apiBaseUrl`
-- Auth: Bearer JWT token from SecureStore
-- Error handling: 401 → clear token → redirect to Login
 
-## Offline-First Architecture
+- **Base URL**: `process.env.EXPO_PUBLIC_API_BASE_URL` or fallback
+  `http://localhost:3004` (dev). Production self-hosted Mac Mini
+  endpoint goes via env, not hardcoded.
+- **Auth header**: `Authorization: Bearer <token>` from SecureStore
+- **401 handling**: clear token → redirect to LoginScreen
+- **Token TTL**: 8h (JWT_EXPIRES_IN on backend), no refresh — re-login
+  on expiry is fine for an owner app
+
+## Coding Standards
+
+1. Functional components only — no class components
+2. React Query for all server state — never raw `useEffect` + `axios`
+3. SecureStore for tokens, AsyncStorage as compatibility fallback only
+4. Loading + error states explicit (`<LoadingState />` / `<ErrorState />`)
+   — no silent spinners, no swallowed errors
+5. Bulgarian for user-facing text, English for code comments
+6. Money: BGN with 2-decimal `Intl.NumberFormat` via `utils/format.ts`
+7. Dates: ISO 8601 in API, formatted via `utils/format.ts` for display
+8. `Platform.OS` checks only when behaviour genuinely differs
+   (e.g. KeyboardAvoidingView)
+
+## Owner Dashboard contents
+
+- KPIs: today's revenue, monthly revenue vs previous month,
+  outstanding receivables, low-stock count
+- Revenue chart: 30-day line chart (gifted-charts)
+- Top products: 5 highest-revenue products this month
+
+These map to backend endpoints under `/owner/*` (existing — see
+warehouse-backend/src/routes/owner.ts).
+
+## Incoming Acceptance flow
+
+1. List pending incoming documents (`GET /incoming?status=pending`)
+2. Tap row → review item-level data (already-OCR'd by ai-service)
+3. Confirm acceptance (`POST /incoming/:id/confirm`) — increments
+   product stock and records audit event
+4. Owner cannot edit OCR'd quantities — that's the warehouse role's
+   job on the web frontend. Owner only confirms or sends back.
+
+## Test Strategy
+
+- **Manual smoke test before each release**:
+  - Login on iOS simulator + 1 physical Android
+  - Dashboard renders with real data
+  - Incoming acceptance: confirm 1 doc, verify stock incremented
+- **Unit**: Jest + React Native Testing Library for hooks (`useAuth`,
+  `useOwnerQueries`)
+- **No Detox** — overkill for 3 screens. Add if scope grows.
+
+## Build & Release
+
+- **EAS project ID**: see `app.json` → `extra.eas.projectId`
+  (Phase 4 TODO: register the rebranded `com.mertm.owner` bundle in EAS
+  dashboard before producing a production build — old bundle was
+  `com.greekfoods.owner`)
+- **Internal testing**: EAS Build → TestFlight (iOS) + Internal App
+  Sharing (Android)
+- **Production**: only the owner installs it; no app-store submission
+  needed — TestFlight + APK direct install is fine
+
+## Things this agent does NOT touch
+
+- `warehouse-frontend/` (web) — that's frontend-dev's
+- `warehouse-backend/` — backend-dev's
+- `ai-service/` — ai-engineer's
+- `telegram-bot/` — separate ownership
+- The deleted `mobile-app/` — gone, not coming back
+
+## Deep Linking (planned)
+
 ```
-┌─────────────────────────────────────────────┐
-│  Screen (React Query)                       │
-│    ↓ useQuery({ networkMode: 'offlineFirst' }) │
-│  ┌──────────────┐    ┌──────────────┐       │
-│  │ AsyncStorage  │◄──│  API (Axios) │       │
-│  │ (cache layer) │    └──────────────┘       │
-│  └──────────────┘                           │
-│    ↓ staleTime: 5min, gcTime: 24h           │
-│  ┌──────────────┐                           │
-│  │ Sync Queue   │ ← offline mutations       │
-│  │ (pending ops)│ → replay on reconnect     │
-│  └──────────────┘                           │
-└─────────────────────────────────────────────┘
+mertm://                  → OwnerDashboard
+mertm://incoming          → IncomingAcceptance list
+mertm://incoming/:id      → IncomingAcceptance detail
 ```
 
-### Offline Rules
-1. **Read**: React Query `networkMode: 'offlineFirst'` — serve cache, then revalidate
-2. **Write**: Queue mutations in AsyncStorage when offline, replay on `NetInfo` reconnect
-3. **Sync indicator**: Show banner "Офлайн режим — данните може да не са актуални"
-4. **Conflict resolution**: Server wins — last-write-wins with timestamp comparison
-5. **Critical screens offline**: Dashboard (cached KPIs), Inventory (cached stock), Notifications (cached alerts)
-6. **Never cache offline**: Login, CameraInvoiceScreen (requires upload), payment operations
-
-### Sync Queue Implementation
-```typescript
-interface PendingOperation {
-  id: string;
-  method: 'POST' | 'PUT' | 'DELETE';
-  url: string;
-  body: unknown;
-  createdAt: string; // ISO 8601
-  retries: number;
-}
-// Store in AsyncStorage key: '@sync_queue'
-// On reconnect: replay in FIFO order, remove on 2xx, retry 3x on 5xx, discard on 4xx
-```
-
-## Push Notifications (Expo Notifications)
-- **Setup**: `expo-notifications` + Expo Push Token registered on login
-- **Backend**: Store push token via PUT `/users/:id/push-token`
-- **Triggers**: Low stock alert, new order, payment received, expiring batches
-- **Handling**: Tap notification → deep link to relevant screen
-- **Permissions**: Request on first login, respect denial gracefully
-
-## Deep Linking
-```
-greekfoods://                     → DashboardScreen
-greekfoods://inventory            → InventoryScreen
-greekfoods://orders/:id           → OrdersScreen (detail)
-greekfoods://incoming/:id         → IncomingGoodsScreen (detail)
-greekfoods://notifications        → NotificationsScreen
-```
-Configure in `app.json` → `expo.scheme: "greekfoods"` + React Navigation linking config.
-
-## Mobile Test Strategy
-### Manual Testing
-- [ ] Login → Dashboard flow on iOS + Android
-- [ ] Camera permission request + invoice capture
-- [ ] Offline mode: airplane mode → browse cached data → go online → sync
-- [ ] Pull-to-refresh on all list screens
-- [ ] Deep link navigation from push notification
-- [ ] Haptic feedback triggers on confirm/delete actions
-
-### Automated Testing
-- **Unit**: Jest + React Native Testing Library for screen components
-- **Component**: Test hooks (useAuth, useOfflineSync) in isolation
-- **E2E**: Detox for critical flows (login → scan → confirm)
-- **Key test files**: `mobile-app/src/__tests__/*.test.tsx`
-
-### Device Matrix
-| Device | OS | Priority |
-|--------|-----|----------|
-| iPhone 13+ | iOS 16+ | High |
-| Samsung Galaxy S21+ | Android 12+ | High |
-| iPad 10th gen | iPadOS 16+ | Medium |
-| Budget Android (4GB RAM) | Android 11+ | Medium |
+Wire via `app.json` → `expo.scheme: "mertm"` + React Navigation
+linking config when push notifications get added (currently not
+implemented — owner uses pull-to-refresh).

@@ -15,6 +15,8 @@ import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
 import type { DashboardKPIs, Order, StockLevel } from "@/types";
+import { Can } from "@/components/Can";
+import { PERMISSIONS } from "@/lib/permissions";
 
 const kpiCards = [
   {
@@ -170,33 +172,46 @@ export function Dashboard() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           {visibleKpiCards.map(
-            ({ key, label, icon: Icon, color, bg, format, link }) => (
-              <Card
-                key={key}
-                className="hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => navigate(link)}
-              >
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500 font-medium">
-                        {label}
-                      </p>
-                      <p className="text-2xl font-bold text-gray-900 mt-1">
-                        {kpis
-                          ? format(kpis[key as keyof DashboardKPIs] as number)
-                          : "—"}
-                      </p>
+            ({ key, label, icon: Icon, color, bg, format, link }) => {
+              const card = (
+                <Card
+                  key={key}
+                  className="hover:shadow-md transition-shadow cursor-pointer"
+                  onClick={() => navigate(link)}
+                >
+                  <CardContent className="p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-500 font-medium">
+                          {label}
+                        </p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">
+                          {kpis
+                            ? format(kpis[key as keyof DashboardKPIs] as number)
+                            : "—"}
+                        </p>
+                      </div>
+                      <div
+                        className={`h-12 w-12 rounded-xl ${bg} flex items-center justify-center`}
+                      >
+                        <Icon className={`h-6 w-6 ${color}`} />
+                      </div>
                     </div>
-                    <div
-                      className={`h-12 w-12 rounded-xl ${bg} flex items-center justify-center`}
-                    >
-                      <Icon className={`h-6 w-6 ${color}`} />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ),
+                  </CardContent>
+                </Card>
+              );
+              if (key === "total_stock_value") {
+                return (
+                  <Can
+                    key={key}
+                    permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}
+                  >
+                    {card}
+                  </Can>
+                );
+              }
+              return card;
+            },
           )}
         </div>
       )}

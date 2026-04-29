@@ -3,8 +3,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import type { User } from "../types";
 
-const TOKEN_KEY = "gf_jwt_token";
-const USER_KEY = "gf_user";
+const TOKEN_KEY = "mertm_jwt_token";
+const USER_KEY = "mertm_user";
 
 export const authStore = {
   async getToken(): Promise<string | null> {

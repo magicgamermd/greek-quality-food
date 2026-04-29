@@ -25,10 +25,10 @@ export default defineConfig({
         "apple-touch-icon.svg",
       ],
       manifest: {
-        name: "Greek Foods Owner PWA",
-        short_name: "GF Owner",
+        name: "МЕРТ-М Owner PWA",
+        short_name: "МЕРТ-М",
         description:
-          "Owner analytics and incoming stock acceptance for Greek Foods",
+          "Анализи на собственика и приемане на входяща стока за МЕРТ-М",
         id: "/owner",
         start_url: "/owner/dashboard",
         scope: "/owner",
@@ -122,10 +122,14 @@ export default defineConfig({
     // Vite defaults to localhost only and `http://192.168.x.x:5173`
     // from a phone returns "connection refused".
     host: "0.0.0.0",
+    // Port 5174 (Greek Foods държи 5173) — да можем двата dev сървъра
+    // да работят паралелно без сблъсък. Backend proxy 3004 (Greek Foods
+    // държи 3003).
+    port: 5174,
     allowedHosts: true,
     proxy: {
       "/api": {
-        target: "http://localhost:3003",
+        target: "http://localhost:3004",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
         secure: true,

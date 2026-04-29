@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly PostgreSQL backup for greek-foods-platform.
+# Nightly PostgreSQL backup for the MERT-M warehouse platform.
 #
 # - Reads DATABASE_URL (preferred) or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE.
 # - Runs pg_dump -Fc (custom format), pipes through gzip.
@@ -11,7 +11,7 @@
 #
 # Usage:
 #   DATABASE_URL=postgres://... ./nightly-pg-dump.sh
-#   DATABASE_URL=... S3_BACKUP_BUCKET=greekfoods-backups ./nightly-pg-dump.sh
+#   DATABASE_URL=... S3_BACKUP_BUCKET=mertm-backups ./nightly-pg-dump.sh
 #   ./nightly-pg-dump.sh --dry-run
 
 set -euo pipefail
@@ -46,11 +46,11 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
   # extract db name for filename (strip query, keep last path segment)
   DB_NAME=$(echo "$DATABASE_URL" | sed -E 's#.*/([^/?]+).*#\1#')
 fi
-DB_NAME="${DB_NAME:-greekfoods}"
+DB_NAME="${DB_NAME:-mertm_warehouse}"
 
 # --- Paths / naming ------------------------------------------------------------
 LOCAL_DIR="${BACKUP_LOCAL_DIR:-/var/backups/postgres}"
-FILENAME="greekfoods-warehouse-${STAMP}.dump.gz"
+FILENAME="mertm-warehouse-${STAMP}.dump.gz"
 LOCAL_PATH="${LOCAL_DIR}/${FILENAME}"
 
 log INFO "msg=\"backup starting\" db=${DB_NAME} target=${LOCAL_PATH} dry_run=${DRY_RUN}"
@@ -146,7 +146,7 @@ prune() {
 }
 
 # daily: keep 7 of everything created in the last week
-find "$LOCAL_DIR" -maxdepth 1 -type f -name 'greekfoods-warehouse-*.dump.gz*' -mtime +7 -print0 2>/dev/null |
+find "$LOCAL_DIR" -maxdepth 1 -type f -name 'mertm-warehouse-*.dump.gz*' -mtime +7 -print0 2>/dev/null |
   while IFS= read -r -d '' old; do
     # never prune weekly-on-sunday or monthly-on-1st files younger than 4w / 3mo
     mtime_epoch=$(stat -f %m "$old" 2>/dev/null || stat -c %Y "$old")

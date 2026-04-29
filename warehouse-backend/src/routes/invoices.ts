@@ -1,6 +1,11 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { query, transaction } from "../db.js";
+import {
+  requirePermission,
+  hasPermission,
+  PERMISSIONS,
+} from "../lib/permissions.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
 import { formatEurAmount } from "../utils/currency.js";
@@ -82,9 +87,19 @@ async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   await request.jwtVerify();
 }
 
-function canAccessInvoices(role: string) {
-  return role === "admin" || role === "accountant";
-}
+const jwtVerify = async (request: FastifyRequest) => {
+  await request.jwtVerify();
+};
+
+const invoiceManagePreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.INVOICES_MANAGE),
+];
+
+const invoiceCancelPreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.INVOICES_CANCEL),
+];
 
 async function getCompanySettings(): Promise<{
   company_name: string;
@@ -116,92 +131,90 @@ async function getCompanySettings(): Promise<{
 
 export default async function invoiceRoutes(app: FastifyInstance) {
   // GET /invoices — admin and accountant only
-  app.get("/", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (!canAccessInvoices(request.user.role)) {
-      return reply.status(403).send({ error: "Нямате достъп до фактури" });
-    }
+  app.get(
+    "/",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const {
+        partner_id,
+        document_type,
+        status,
+        payment_status,
+        date_from,
+        date_to,
+        q,
+        invoice_number,
+        page,
+        limit,
+      } = request.query as any;
+      const pageNum = Math.max(1, parseInt(page) || 1);
+      const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
+      const offset = (pageNum - 1) * pageSize;
 
-    const {
-      partner_id,
-      document_type,
-      status,
-      payment_status,
-      date_from,
-      date_to,
-      q,
-      invoice_number,
-      page,
-      limit,
-    } = request.query as any;
-    const pageNum = Math.max(1, parseInt(page) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
-    const offset = (pageNum - 1) * pageSize;
-
-    const conditions: string[] = [];
-    const havingConditions: string[] = [];
-    const params: any[] = [];
-    let paramIdx = 1;
-    const paymentStatusSql = `CASE WHEN i.status = 'cancelled' THEN 'cancelled'
+      const conditions: string[] = [];
+      const havingConditions: string[] = [];
+      const params: any[] = [];
+      let paramIdx = 1;
+      const paymentStatusSql = `CASE WHEN i.status = 'cancelled' THEN 'cancelled'
                  WHEN COALESCE(SUM(pay.amount), 0) >= i.total_gross THEN 'paid'
                  WHEN COALESCE(SUM(pay.amount), 0) > 0 THEN 'partial'
                  ELSE 'unpaid' END`;
 
-    if (partner_id) {
-      conditions.push(`i.partner_id = $${paramIdx++}`);
-      params.push(parseInt(partner_id));
-    }
-    if (document_type) {
-      conditions.push(`i.document_type = $${paramIdx++}`);
-      params.push(document_type);
-    }
-    if (status) {
-      conditions.push(`i.status = $${paramIdx++}`);
-      params.push(status);
-    }
-    if (date_from) {
-      conditions.push(`DATE(i.invoice_date) >= $${paramIdx++}`);
-      params.push(date_from);
-    }
-    if (date_to) {
-      conditions.push(`DATE(i.invoice_date) <= $${paramIdx++}`);
-      params.push(date_to);
-    }
-    if (invoice_number) {
-      conditions.push(`i.invoice_number ILIKE $${paramIdx++}`);
-      params.push(`%${String(invoice_number).trim()}%`);
-    }
-    if (q) {
-      // Transliteration-aware partner name match (Cyrillic ↔ Latin)
-      conditions.push(
-        `(i.invoice_number ILIKE $${paramIdx} OR normalize_search(p.name) ILIKE '%' || normalize_search($${paramIdx + 1}) || '%')`,
-      );
-      params.push(`%${String(q).trim()}%`, String(q).trim());
-      paramIdx += 2;
-    }
-    if (payment_status) {
-      havingConditions.push(`${paymentStatusSql} = $${paramIdx++}`);
-      params.push(payment_status);
-    }
-    const where =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const having =
-      havingConditions.length > 0
-        ? `HAVING ${havingConditions.join(" AND ")}`
-        : "";
+      if (partner_id) {
+        conditions.push(`i.partner_id = $${paramIdx++}`);
+        params.push(parseInt(partner_id));
+      }
+      if (document_type) {
+        conditions.push(`i.document_type = $${paramIdx++}`);
+        params.push(document_type);
+      }
+      if (status) {
+        conditions.push(`i.status = $${paramIdx++}`);
+        params.push(status);
+      }
+      if (date_from) {
+        conditions.push(`DATE(i.invoice_date) >= $${paramIdx++}`);
+        params.push(date_from);
+      }
+      if (date_to) {
+        conditions.push(`DATE(i.invoice_date) <= $${paramIdx++}`);
+        params.push(date_to);
+      }
+      if (invoice_number) {
+        conditions.push(`i.invoice_number ILIKE $${paramIdx++}`);
+        params.push(`%${String(invoice_number).trim()}%`);
+      }
+      if (q) {
+        // Transliteration-aware partner name match (Cyrillic ↔ Latin)
+        conditions.push(
+          `(i.invoice_number ILIKE $${paramIdx} OR normalize_search(p.name) ILIKE '%' || normalize_search($${paramIdx + 1}) || '%')`,
+        );
+        params.push(`%${String(q).trim()}%`, String(q).trim());
+        paramIdx += 2;
+      }
+      if (payment_status) {
+        havingConditions.push(`${paymentStatusSql} = $${paramIdx++}`);
+        params.push(payment_status);
+      }
+      const where =
+        conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+      const having =
+        havingConditions.length > 0
+          ? `HAVING ${havingConditions.join(" AND ")}`
+          : "";
 
-    // Snapshot WHERE-clause params before adding ORDER/LIMIT args for count query.
-    const filterParams = [...params];
+      // Snapshot WHERE-clause params before adding ORDER/LIMIT args for count query.
+      const filterParams = [...params];
 
-    // When searching free-text `q`, rank by partner-name similarity DESC.
-    let orderClause = "ORDER BY i.created_at DESC";
-    if (q) {
-      orderClause = `ORDER BY similarity(normalize_search(p.name), normalize_search($${paramIdx})) DESC, i.created_at DESC`;
-      params.push(String(q).trim());
-      paramIdx++;
-    }
+      // When searching free-text `q`, rank by partner-name similarity DESC.
+      let orderClause = "ORDER BY i.created_at DESC";
+      if (q) {
+        orderClause = `ORDER BY similarity(normalize_search(p.name), normalize_search($${paramIdx})) DESC, i.created_at DESC`;
+        params.push(String(q).trim());
+        paramIdx++;
+      }
 
-    const sql = `
+      const sql = `
       SELECT i.*, p.name AS partner_name,
              COALESCE(SUM(pay.amount), 0)::numeric AS paid_amount,
              ${paymentStatusSql} AS payment_status,
@@ -220,13 +233,13 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       ${orderClause}
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
     `;
-    params.push(pageSize, offset);
+      params.push(pageSize, offset);
 
-    const { rows } = await query(sql, params);
+      const { rows } = await query(sql, params);
 
-    // Count total for pagination (HAVING requires COUNT over the grouped set)
-    const countSql = having
-      ? `SELECT COUNT(*) AS total FROM (
+      // Count total for pagination (HAVING requires COUNT over the grouped set)
+      const countSql = having
+        ? `SELECT COUNT(*) AS total FROM (
           SELECT i.id
           FROM invoices i
           JOIN partners p ON p.id = i.partner_id
@@ -235,32 +248,31 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           GROUP BY i.id
           ${having}
         ) sub`
-      : `SELECT COUNT(DISTINCT i.id) AS total
+        : `SELECT COUNT(DISTINCT i.id) AS total
          FROM invoices i
          JOIN partners p ON p.id = i.partner_id
          ${where}`;
-    const { rows: countRows } = await query(countSql, filterParams);
-    const total = parseInt(countRows[0]?.total || "0");
+      const { rows: countRows } = await query(countSql, filterParams);
+      const total = parseInt(countRows[0]?.total || "0");
 
-    return {
-      data: rows,
-      pagination: { page: pageNum, limit: pageSize, total },
-    };
-  });
+      return {
+        data: rows,
+        pagination: { page: pageNum, limit: pageSize, total },
+      };
+    },
+  );
 
   // GET /invoices/:id — single invoice
-  app.get("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (!canAccessInvoices(request.user.role)) {
-      return reply.status(403).send({ error: "Нямате достъп до фактури" });
-    }
+  app.get(
+    "/:id",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
 
-    const { id } = request.params as { id: string };
-
-    const {
-      rows: [invoice],
-    } = await query(
-      `SELECT i.*, p.name AS partner_name,
+      const {
+        rows: [invoice],
+      } = await query(
+        `SELECT i.*, p.name AS partner_name,
               COALESCE(SUM(pay.amount), 0)::numeric AS paid_amount,
               CASE WHEN i.status = 'cancelled' THEN 'cancelled'
                    WHEN COALESCE(SUM(pay.amount), 0) >= i.total_gross THEN 'paid'
@@ -271,23 +283,22 @@ export default async function invoiceRoutes(app: FastifyInstance) {
        LEFT JOIN payments pay ON pay.invoice_id = i.id
        WHERE i.id = $1
        GROUP BY i.id, p.name`,
-      [id],
-    );
+        [id],
+      );
 
-    if (!invoice) {
-      return reply.status(404).send({ error: "Invoice not found" });
-    }
-    return invoice;
-  });
+      if (!invoice) {
+        return reply.status(404).send({ error: "Invoice not found" });
+      }
+      return invoice;
+    },
+  );
 
   // GET /invoices/unpaid
-  app.get("/unpaid", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (!canAccessInvoices(request.user.role)) {
-      return reply.status(403).send({ error: "Нямате достъп до фактури" });
-    }
-
-    const { rows } = await query(`
+  app.get(
+    "/unpaid",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { rows } = await query(`
       SELECT i.*, p.name AS partner_name,
              COALESCE(SUM(pay.amount), 0)::numeric AS paid_amount,
              i.total_gross - COALESCE(SUM(pay.amount), 0) AS remaining
@@ -300,153 +311,153 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       ORDER BY i.invoice_date ASC
     `);
 
-    return { data: rows, count: rows.length };
-  });
+      return { data: rows, count: rows.length };
+    },
+  );
 
   // POST /invoices — generate invoice for an order
-  app.post("/", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (request.user.role === "accountant") {
-      return reply.status(403).send({ error: "Insufficient permissions" });
-    }
+  app.post(
+    "/",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = createInvoiceSchema.parse(request.body);
 
-    const body = createInvoiceSchema.parse(request.body);
+      const result = await transaction(async (client) => {
+        // Get order with items
+        const {
+          rows: [order],
+        } = await client.query("SELECT * FROM orders WHERE id = $1", [
+          body.order_id,
+        ]);
 
-    const result = await transaction(async (client) => {
-      // Get order with items
-      const {
-        rows: [order],
-      } = await client.query("SELECT * FROM orders WHERE id = $1", [
-        body.order_id,
-      ]);
+        if (!order) {
+          throw Object.assign(new Error("Order not found"), {
+            statusCode: 404,
+          });
+        }
+        if (order.invoice_id) {
+          throw Object.assign(
+            new Error("Invoice already exists for this order"),
+            { statusCode: 409 },
+          );
+        }
+        if (
+          order.status !== "confirmed" &&
+          order.status !== "processing" &&
+          order.status !== "fulfilled"
+        ) {
+          throw Object.assign(
+            new Error(
+              "Поръчката трябва да е потвърдена, в обработка или изпълнена преди генериране на фактура",
+            ),
+            { statusCode: 400 },
+          );
+        }
 
-      if (!order) {
-        throw Object.assign(new Error("Order not found"), { statusCode: 404 });
-      }
-      if (order.invoice_id) {
-        throw Object.assign(
-          new Error("Invoice already exists for this order"),
-          { statusCode: 409 },
-        );
-      }
-      if (
-        order.status !== "confirmed" &&
-        order.status !== "processing" &&
-        order.status !== "fulfilled"
-      ) {
-        throw Object.assign(
-          new Error(
-            "Поръчката трябва да е потвърдена, в обработка или изпълнена преди генериране на фактура",
-          ),
-          { statusCode: 400 },
-        );
-      }
-
-      const { rows: items } = await client.query(
-        `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+        const { rows: items } = await client.query(
+          `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
          FROM order_items oi
          JOIN products p ON p.id = oi.product_id
          WHERE oi.order_id = $1
          ORDER BY oi.id`,
-        [body.order_id],
-      );
+          [body.order_id],
+        );
 
-      const {
-        rows: [partner],
-      } = await client.query("SELECT * FROM partners WHERE id = $1", [
-        order.partner_id,
-      ]);
+        const {
+          rows: [partner],
+        } = await client.query("SELECT * FROM partners WHERE id = $1", [
+          order.partner_id,
+        ]);
 
-      // Only accept a display-name override when the buyer is an individual.
-      // Storing it on legal-entity invoices would make the DB state misleading
-      // even though the PDF ignores it.
-      const clientDisplayName =
-        partner?.partner_type === "individual"
-          ? (body.client_display_name ?? null)
-          : null;
+        // Only accept a display-name override when the buyer is an individual.
+        // Storing it on legal-entity invoices would make the DB state misleading
+        // even though the PDF ignores it.
+        const clientDisplayName =
+          partner?.partner_type === "individual"
+            ? (body.client_display_name ?? null)
+            : null;
 
-      // Calculate totals
-      const totalNet = items.reduce(
-        (sum: number, i: any) => sum + parseFloat(i.total_price),
-        0,
-      );
-      const effectiveVatRate = body.include_vat ? body.vat_rate : 0;
-      const totalVat = body.include_vat ? totalNet * (body.vat_rate / 100) : 0;
-      const totalGross = totalNet + totalVat;
+        // Calculate totals
+        const totalNet = items.reduce(
+          (sum: number, i: any) => sum + parseFloat(i.total_price),
+          0,
+        );
+        const effectiveVatRate = body.include_vat ? body.vat_rate : 0;
+        const totalVat = body.include_vat
+          ? totalNet * (body.vat_rate / 100)
+          : 0;
+        const totalGross = totalNet + totalVat;
 
-      // Generate invoice number
-      const {
-        rows: [{ generate_invoice_number: invoiceNumber }],
-      } = await client.query("SELECT generate_invoice_number()");
+        // Generate invoice number
+        const {
+          rows: [{ generate_invoice_number: invoiceNumber }],
+        } = await client.query("SELECT generate_invoice_number()");
 
-      // Create invoice record
-      const {
-        rows: [invoice],
-      } = await client.query(
-        `INSERT INTO invoices
+        // Create invoice record
+        const {
+          rows: [invoice],
+        } = await client.query(
+          `INSERT INTO invoices
            (invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross, include_vat,
             client_display_name)
          VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
-        [
-          invoiceNumber,
-          order.partner_id,
-          totalNet,
-          totalVat,
-          totalGross,
-          body.include_vat,
-          clientDisplayName,
-        ],
-      );
+          [
+            invoiceNumber,
+            order.partner_id,
+            totalNet,
+            totalVat,
+            totalGross,
+            body.include_vat,
+            clientDisplayName,
+          ],
+        );
 
-      // Link order to invoice. Do NOT auto-change status — invoicing is
-      // orthogonal to the warehouse flow (pending → confirmed → processing →
-      // fulfilled). "Фактурирана" is now a flag (invoice_id IS NOT NULL), not
-      // a linear status.
-      await client.query(
-        "UPDATE orders SET invoice_id = $1, updated_at = NOW() WHERE id = $2",
-        [invoice.id, body.order_id],
-      );
+        // Link order to invoice. Do NOT auto-change status — invoicing is
+        // orthogonal to the warehouse flow (pending → confirmed → processing →
+        // fulfilled). "Фактурирана" is now a flag (invoice_id IS NOT NULL), not
+        // a linear status.
+        await client.query(
+          "UPDATE orders SET invoice_id = $1, updated_at = NOW() WHERE id = $2",
+          [invoice.id, body.order_id],
+        );
 
-      // Generate PDF
-      const company = await getCompanySettings();
-      const invoicesDir = path.resolve("uploads", "invoices");
-      fs.mkdirSync(invoicesDir, { recursive: true });
+        // Generate PDF
+        const company = await getCompanySettings();
+        const invoicesDir = path.resolve("uploads", "invoices");
+        fs.mkdirSync(invoicesDir, { recursive: true });
 
-      const pdfPath = path.join(invoicesDir, `${invoiceNumber}.pdf`);
-      await generateInvoicePdf({
-        invoice,
-        partner,
-        company,
-        items,
-        vatRate: effectiveVatRate,
-        includeVat: body.include_vat,
-        sourceCurrency: (invoice as any).currency ?? null,
-        outputPath: pdfPath,
+        const pdfPath = path.join(invoicesDir, `${invoiceNumber}.pdf`);
+        await generateInvoicePdf({
+          invoice,
+          partner,
+          company,
+          items,
+          vatRate: effectiveVatRate,
+          includeVat: body.include_vat,
+          sourceCurrency: (invoice as any).currency ?? null,
+          outputPath: pdfPath,
+        });
+
+        // Store PDF path
+        await client.query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
+          pdfPath,
+          invoice.id,
+        ]);
+
+        return { ...invoice, pdf_path: pdfPath };
       });
 
-      // Store PDF path
-      await client.query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
-        pdfPath,
-        invoice.id,
-      ]);
-
-      return { ...invoice, pdf_path: pdfPath };
-    });
-
-    return reply.status(201).send(result);
-  });
+      return reply.status(201).send(result);
+    },
+  );
 
   // PUT /invoices/:id/regenerate — recalculate invoice from current order items
   app.put(
     "/:id/regenerate",
+    { preHandler: invoiceManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (request.user.role === "accountant") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
       const { id } = request.params as { id: string };
 
       const result = await transaction(async (client) => {
@@ -569,12 +580,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
   // POST /invoices/:id/cancel — annul issued invoice while preserving consumed number
   app.post(
     "/:id/cancel",
+    { preHandler: invoiceCancelPreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (!canAccessInvoices(request.user.role)) {
-        return reply.status(403).send({ error: "Нямате достъп до фактури" });
-      }
-
       const { id } = request.params as { id: string };
       const body = cancelInvoiceSchema.parse(request.body || {});
 
@@ -686,12 +693,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
   // PATCH /invoices/:id/mark-sent
   app.patch(
     "/:id/mark-sent",
+    { preHandler: invoiceManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (!canAccessInvoices(request.user.role)) {
-        return reply.status(403).send({ error: "Нямате достъп до фактури" });
-      }
-
       const { id } = request.params as { id: string };
       const {
         rows: [invoice],
@@ -711,151 +714,151 @@ export default async function invoiceRoutes(app: FastifyInstance) {
   );
 
   // GET /invoices/:id/pdf — download PDF (auto-regenerates if missing on disk)
-  app.get("/:id/pdf", async (request: FastifyRequest, reply: FastifyReply) => {
-    await requireAuth(request, reply);
-    if (!canAccessInvoices(request.user.role)) {
-      return reply.status(403).send({ error: "Нямате достъп до фактури" });
-    }
-    const { id } = request.params as { id: string };
+  app.get(
+    "/:id/pdf",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
 
-    const {
-      rows: [invoice],
-    } = await query("SELECT * FROM invoices WHERE id = $1", [id]);
+      const {
+        rows: [invoice],
+      } = await query("SELECT * FROM invoices WHERE id = $1", [id]);
 
-    if (!invoice) {
-      return reply.status(404).send({ error: "Invoice not found" });
-    }
+      if (!invoice) {
+        return reply.status(404).send({ error: "Invoice not found" });
+      }
 
-    let resolvedPdfPath = resolveInvoicePdfPath(invoice);
+      let resolvedPdfPath = resolveInvoicePdfPath(invoice);
 
-    // Auto-regenerate if the file is missing (e.g. after container rebuild
-    // wiped the uploads directory, or manual deletion).
-    if (!resolvedPdfPath) {
-      try {
-        const isCreditNote = invoice.document_type === "credit_note";
-        // Credit notes point at a parent invoice via related_invoice_id;
-        // their line items are negated copies of the parent's order items.
-        // Regular invoices are linked directly to an order.
-        const orderLookupInvoiceId = isCreditNote
-          ? invoice.related_invoice_id
-          : invoice.id;
+      // Auto-regenerate if the file is missing (e.g. after container rebuild
+      // wiped the uploads directory, or manual deletion).
+      if (!resolvedPdfPath) {
+        try {
+          const isCreditNote = invoice.document_type === "credit_note";
+          // Credit notes point at a parent invoice via related_invoice_id;
+          // their line items are negated copies of the parent's order items.
+          // Regular invoices are linked directly to an order.
+          const orderLookupInvoiceId = isCreditNote
+            ? invoice.related_invoice_id
+            : invoice.id;
 
-        if (isCreditNote && !invoice.related_invoice_id) {
-          return reply.status(404).send({
-            error: "PDF not yet generated (credit note has no parent)",
-          });
-        }
+          if (isCreditNote && !invoice.related_invoice_id) {
+            return reply.status(404).send({
+              error: "PDF not yet generated (credit note has no parent)",
+            });
+          }
 
-        const {
-          rows: [order],
-        } = await query("SELECT * FROM orders WHERE invoice_id = $1", [
-          orderLookupInvoiceId,
-        ]);
-        if (!order) {
-          return reply
-            .status(404)
-            .send({ error: "PDF not yet generated (no linked order)" });
-        }
-        const { rows: rawItems } = await query(
-          `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+          const {
+            rows: [order],
+          } = await query("SELECT * FROM orders WHERE invoice_id = $1", [
+            orderLookupInvoiceId,
+          ]);
+          if (!order) {
+            return reply
+              .status(404)
+              .send({ error: "PDF not yet generated (no linked order)" });
+          }
+          const { rows: rawItems } = await query(
+            `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
            FROM order_items oi
            JOIN products p ON p.id = oi.product_id
            WHERE oi.order_id = $1
            ORDER BY oi.id`,
-          [order.id],
-        );
-        // For credit notes, negate qty + total (unit price stays positive)
-        // to mirror the numbers rendered at issuance time.
-        const items = isCreditNote
-          ? rawItems.map((item: any) => ({
-              ...item,
-              quantity: -Math.abs(parseFloat(item.quantity)),
-              unit_price: parseFloat(item.unit_price),
-              total_price: -Math.abs(parseFloat(item.total_price)),
-            }))
-          : rawItems;
+            [order.id],
+          );
+          // For credit notes, negate qty + total (unit price stays positive)
+          // to mirror the numbers rendered at issuance time.
+          const items = isCreditNote
+            ? rawItems.map((item: any) => ({
+                ...item,
+                quantity: -Math.abs(parseFloat(item.quantity)),
+                unit_price: parseFloat(item.unit_price),
+                total_price: -Math.abs(parseFloat(item.total_price)),
+              }))
+            : rawItems;
 
-        const {
-          rows: [partner],
-        } = await query("SELECT * FROM partners WHERE id = $1", [
-          order.partner_id,
-        ]);
-        if (!partner) {
-          return reply
-            .status(404)
-            .send({ error: "PDF not yet generated (partner missing)" });
-        }
-
-        // For credit notes, look up the parent's invoice_number so the
-        // PDF header can show "Към фактура: 0000000003".
-        let relatedInvoiceNumber: string | null = null;
-        if (isCreditNote) {
           const {
-            rows: [parent],
-          } = await query("SELECT invoice_number FROM invoices WHERE id = $1", [
-            invoice.related_invoice_id,
+            rows: [partner],
+          } = await query("SELECT * FROM partners WHERE id = $1", [
+            order.partner_id,
           ]);
-          relatedInvoiceNumber = parent?.invoice_number ?? null;
+          if (!partner) {
+            return reply
+              .status(404)
+              .send({ error: "PDF not yet generated (partner missing)" });
+          }
+
+          // For credit notes, look up the parent's invoice_number so the
+          // PDF header can show "Към фактура: 0000000003".
+          let relatedInvoiceNumber: string | null = null;
+          if (isCreditNote) {
+            const {
+              rows: [parent],
+            } = await query(
+              "SELECT invoice_number FROM invoices WHERE id = $1",
+              [invoice.related_invoice_id],
+            );
+            relatedInvoiceNumber = parent?.invoice_number ?? null;
+          }
+
+          const company = await getCompanySettings();
+          const invoicesDir = path.resolve("uploads", "invoices");
+          fs.mkdirSync(invoicesDir, { recursive: true });
+          const pdfPath = path.join(
+            invoicesDir,
+            `${invoice.invoice_number}.pdf`,
+          );
+          const includeVat = invoice.include_vat !== false;
+          await generateInvoicePdf({
+            invoice,
+            partner,
+            company,
+            items,
+            vatRate: includeVat ? 20 : 0,
+            includeVat,
+            documentType: isCreditNote ? "credit_note" : "invoice",
+            relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
+            sourceCurrency: (invoice as any).currency ?? null,
+            outputPath: pdfPath,
+          });
+          await query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
+            pdfPath,
+            id,
+          ]);
+          resolvedPdfPath = pdfPath;
+        } catch (err: any) {
+          request.log.error({ err }, "Failed to auto-regenerate invoice PDF");
+          return reply
+            .status(500)
+            .send({ error: "Неуспешно авто-регенериране на PDF." });
         }
-
-        const company = await getCompanySettings();
-        const invoicesDir = path.resolve("uploads", "invoices");
-        fs.mkdirSync(invoicesDir, { recursive: true });
-        const pdfPath = path.join(invoicesDir, `${invoice.invoice_number}.pdf`);
-        const includeVat = invoice.include_vat !== false;
-        await generateInvoicePdf({
-          invoice,
-          partner,
-          company,
-          items,
-          vatRate: includeVat ? 20 : 0,
-          includeVat,
-          documentType: isCreditNote ? "credit_note" : "invoice",
-          relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
-          sourceCurrency: (invoice as any).currency ?? null,
-          outputPath: pdfPath,
-        });
-        await query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
-          pdfPath,
-          id,
-        ]);
-        resolvedPdfPath = pdfPath;
-      } catch (err: any) {
-        request.log.error({ err }, "Failed to auto-regenerate invoice PDF");
-        return reply
-          .status(500)
-          .send({ error: "Неуспешно авто-регенериране на PDF." });
       }
-    }
 
-    const stream = fs.createReadStream(resolvedPdfPath);
-    const filename = `${invoice.invoice_number}.pdf`;
-    const encodedFilename = encodeURIComponent(filename);
-    return (
-      reply
-        .header("Content-Type", "application/pdf")
-        .header(
-          "Content-Disposition",
-          `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
-        )
-        // Prevent browser from serving a cached copy after the PDF was
-        // regenerated — the URL /:id/pdf stays the same but the file
-        // on disk changes after "Регенерирай".
-        .header("Cache-Control", "no-store, must-revalidate")
-        .header("Pragma", "no-cache")
-        .send(stream)
-    );
-  });
+      const stream = fs.createReadStream(resolvedPdfPath);
+      const filename = `${invoice.invoice_number}.pdf`;
+      const encodedFilename = encodeURIComponent(filename);
+      return (
+        reply
+          .header("Content-Type", "application/pdf")
+          .header(
+            "Content-Disposition",
+            `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+          )
+          // Prevent browser from serving a cached copy after the PDF was
+          // regenerated — the URL /:id/pdf stays the same but the file
+          // on disk changes after "Регенерирай".
+          .header("Cache-Control", "no-store, must-revalidate")
+          .header("Pragma", "no-cache")
+          .send(stream)
+      );
+    },
+  );
 
   // POST /invoices/:id/send-email
   app.post(
     "/:id/send-email",
+    { preHandler: invoiceManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (request.user.role === "accountant") {
-        return reply.status(403).send({ error: "Insufficient permissions" });
-      }
-
       const { id } = request.params as { id: string };
       const body = sendEmailSchema.parse(request.body || {});
 
@@ -908,10 +911,10 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         });
 
         await transporter.sendMail({
-          from: process.env.SMTP_FROM || "invoices@greekfoods.bg",
+          from: process.env.SMTP_FROM || "invoices@mertm.bg",
           to: recipientEmail,
-          subject: `Invoice ${invoice.invoice_number} — Greek Foods`,
-          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} €.\n\nС уважение,\nBakalia Greek Deli Food`,
+          subject: `Фактура ${invoice.invoice_number} — МЕРТ-М`,
+          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} лв.\n\nС уважение,\nМЕРТ-М ЕООД`,
           attachments: [
             {
               filename: `${invoice.invoice_number}.pdf`,
@@ -935,12 +938,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
   // POST /invoices/credit-note — create credit note for an existing invoice
   app.post(
     "/credit-note",
+    { preHandler: invoiceCancelPreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      await requireAuth(request, reply);
-      if (request.user.role !== "admin" && request.user.role !== "accountant") {
-        return reply.status(403).send({ error: "Нямате достъп" });
-      }
-
       const body = createCreditNoteSchema.parse(request.body);
 
       const result = await transaction(async (client) => {

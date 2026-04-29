@@ -99,6 +99,66 @@ describe("TranscriptTurnSchema", () => {
     });
     expect(t.kind).toBe("sent_to_bot");
   });
+
+  it("accepts bot_reply with document and buttons", () => {
+    const t = TranscriptTurnSchema.parse({
+      kind: "bot_reply",
+      at: new Date().toISOString(),
+      text: "Фактура №42 е готова",
+      messageId: 123,
+      document: {
+        fileName: "faktura-42.pdf",
+        mimeType: "application/pdf",
+        size: 45678,
+      },
+      buttons: [
+        { text: "Товарителница", callbackData: "waybill_42" },
+        { text: "Изпрати имейл", callbackData: "email_ask_42" },
+      ],
+    });
+    expect(t.kind).toBe("bot_reply");
+    if (t.kind === "bot_reply") {
+      expect(t.document?.fileName).toBe("faktura-42.pdf");
+      expect(t.buttons).toHaveLength(2);
+    }
+  });
+
+  it("accepts bot_reply without optional fields", () => {
+    const t = TranscriptTurnSchema.parse({
+      kind: "bot_reply",
+      at: new Date().toISOString(),
+      text: "ок",
+      messageId: 5,
+    });
+    expect(t.kind).toBe("bot_reply");
+  });
+
+  it("accepts clicked_button turn", () => {
+    const t = TranscriptTurnSchema.parse({
+      kind: "clicked_button",
+      at: new Date().toISOString(),
+      messageId: 123,
+      buttonText: "Товарителница",
+      callbackData: "waybill_42",
+    });
+    expect(t.kind).toBe("clicked_button");
+  });
+
+  it("rejects bot_reply with bad document size", () => {
+    expect(() =>
+      TranscriptTurnSchema.parse({
+        kind: "bot_reply",
+        at: new Date().toISOString(),
+        text: "x",
+        messageId: 1,
+        document: {
+          fileName: "f.pdf",
+          mimeType: "application/pdf",
+          size: -1,
+        },
+      }),
+    ).toThrow();
+  });
 });
 
 describe("RunReportSchema", () => {

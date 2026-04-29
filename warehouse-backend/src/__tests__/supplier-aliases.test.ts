@@ -44,7 +44,7 @@ async function buildApp() {
     (request as any).user = {
       id: "u-owner",
       email: "owner@test.local",
-      role: "owner_mobile",
+      role: "admin",
     };
     (request as any).jwtVerify = async () => (request as any).user;
   });

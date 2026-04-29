@@ -1,3 +1,10 @@
+// ⚠️ DEPRECATED for MERT-M (2026-04-28):
+// Batch-related repair script inherited from greek-foods-platform clone.
+// MERT-M does not track batches (durable goods, not perishables), so
+// this script has nothing to sync and is a no-op against the MERT-M
+// schema. Kept as dead code per Phase 3 Q5(B) — minimise diff against
+// upstream. Safe to delete entirely once a future cleanup is scheduled.
+
 import { spawnSync } from "node:child_process";
 import {
   argFlag,
@@ -163,16 +170,20 @@ async function main() {
   const samples = sampleLimit();
   const connectionMode = await getConnectionMode();
   const candidates = await queryRows<RepairCandidate>(CANDIDATE_SQL);
-  const unclassified = await queryRows<Record<string, unknown>>(UNCLASSIFIED_SQL);
+  const unclassified =
+    await queryRows<Record<string, unknown>>(UNCLASSIFIED_SQL);
 
   const summary = {
     connection_mode: connectionMode,
     apply,
     candidates_found: candidates.length,
-    candidates_by_reason: candidates.reduce<Record<string, number>>((acc, row) => {
-      acc[row.repair_reason] = (acc[row.repair_reason] || 0) + 1;
-      return acc;
-    }, {}),
+    candidates_by_reason: candidates.reduce<Record<string, number>>(
+      (acc, row) => {
+        acc[row.repair_reason] = (acc[row.repair_reason] || 0) + 1;
+        return acc;
+      },
+      {},
+    ),
     unclassified_drift_rows: unclassified.length,
     sample_candidates: candidates.slice(0, samples),
     sample_unclassified: unclassified.slice(0, samples),
@@ -225,10 +236,13 @@ SELECT COALESCE(json_agg(row_to_json(updated) ORDER BY batch_id), '[]'::json)::t
       {
         ...summary,
         repaired_rows: repaired.length,
-        repaired_by_reason: repaired.reduce<Record<string, number>>((acc, row) => {
-          acc[row.repair_reason] = (acc[row.repair_reason] || 0) + 1;
-          return acc;
-        }, {}),
+        repaired_by_reason: repaired.reduce<Record<string, number>>(
+          (acc, row) => {
+            acc[row.repair_reason] = (acc[row.repair_reason] || 0) + 1;
+            return acc;
+          },
+          {},
+        ),
         sample_repaired: repaired.slice(0, samples),
       },
       null,
@@ -254,9 +268,9 @@ function runDockerJsonResult<T>(sql: string): T[] {
       DEFAULT_DOCKER_CONTAINER,
       "psql",
       "-U",
-      process.env.RECON_POSTGRES_USER || "greekfoods",
+      process.env.RECON_POSTGRES_USER || "mertm",
       "-d",
-      process.env.RECON_POSTGRES_DB || "greekfoods_warehouse",
+      process.env.RECON_POSTGRES_DB || "mertm_warehouse",
       "-Atqc",
       sql,
     ],

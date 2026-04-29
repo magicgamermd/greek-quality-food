@@ -4,6 +4,9 @@ export const SendMessageArgsSchema = z.object({
   text: z.string().min(1).max(4096),
 });
 export const ReadLatestArgsSchema = z.object({});
+export const ClickInlineButtonArgsSchema = z.object({
+  button_text: z.string().min(1).max(512),
+});
 export const GoalAchievedArgsSchema = z.object({
   summary: z.string().min(1),
 });
@@ -14,6 +17,7 @@ export const GiveUpArgsSchema = z.object({
 export type ActorToolName =
   | "send_message"
   | "read_latest_reply"
+  | "click_inline_button"
   | "goal_achieved"
   | "give_up";
 
@@ -41,6 +45,22 @@ export const ACTOR_TOOLS = [
     input_schema: {
       type: "object" as const,
       properties: {},
+    },
+  },
+  {
+    name: "click_inline_button" as const,
+    description:
+      "Натисни inline бутон под последното съобщение на бота. Подай точния текст на бутона както бот-ът го показа. Ботът ще реагира с нов отговор.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        button_text: {
+          type: "string",
+          description:
+            "Точният текст на бутона (копирай от отговора на бот-а, вкл. emoji).",
+        },
+      },
+      required: ["button_text"],
     },
   },
   {
@@ -81,6 +101,8 @@ export function parseToolArgs(name: string, args: unknown): unknown {
       return SendMessageArgsSchema.parse(args);
     case "read_latest_reply":
       return ReadLatestArgsSchema.parse(args);
+    case "click_inline_button":
+      return ClickInlineButtonArgsSchema.parse(args);
     case "goal_achieved":
       return GoalAchievedArgsSchema.parse(args);
     case "give_up":

@@ -1,8 +1,8 @@
 import type { FullConfig } from "@playwright/test";
 
 const DEFAULT_HEALTH_URLS = [
-  "http://127.0.0.1:3003/health",
-  "http://localhost:3003/health",
+  "http://127.0.0.1:3004/health",
+  "http://localhost:3004/health",
 ];
 
 function sleep(ms: number) {

@@ -10,7 +10,7 @@
 module.exports = {
   apps: [
     {
-      name: "greekfoods-backend",
+      name: "mertm-backend",
       script: "./dist/index.js",
       // Cluster mode: one instance per CPU core
       instances: "max",

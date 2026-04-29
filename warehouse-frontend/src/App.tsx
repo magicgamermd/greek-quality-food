@@ -33,6 +33,11 @@ import { OwnerTop } from "@/pages/owner/OwnerTop";
 import { OwnerDeliveries } from "@/pages/owner/OwnerDeliveries";
 import { NotFound } from "@/pages/NotFound";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
+import { PermissionProvider } from "@/contexts/PermissionContext";
+import { UsersListPage } from "@/pages/admin/UsersListPage";
+import { UserDetailPage } from "@/pages/admin/UserDetailPage";
+import { RequirePermission } from "@/components/RequirePermission";
+import { PERMISSIONS } from "@/lib/permissions";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -236,6 +241,22 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="settings/users"
+          element={
+            <RequirePermission permission={PERMISSIONS.USERS_MANAGE}>
+              <UsersListPage />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="settings/users/:id"
+          element={
+            <RequirePermission permission={PERMISSIONS.USERS_MANAGE}>
+              <UserDetailPage />
+            </RequirePermission>
+          }
+        />
         <Route path="*" element={<NotFound />} />
       </Route>
       <Route
@@ -258,17 +279,19 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delayDuration={200}>
           <AuthProvider>
-            <BrowserRouter>
-              <AppRoutes />
-              <PWAInstallPrompt />
-              <Toaster
-                richColors
-                position="top-right"
-                closeButton
-                expand
-                duration={4000}
-              />
-            </BrowserRouter>
+            <PermissionProvider>
+              <BrowserRouter>
+                <AppRoutes />
+                <PWAInstallPrompt />
+                <Toaster
+                  richColors
+                  position="top-right"
+                  closeButton
+                  expand
+                  duration={4000}
+                />
+              </BrowserRouter>
+            </PermissionProvider>
           </AuthProvider>
         </TooltipProvider>
       </QueryClientProvider>
