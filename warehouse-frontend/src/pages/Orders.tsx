@@ -3751,6 +3751,9 @@ export function Orders() {
                   <TableHead>Статус</TableHead>
                   <TableHead>Фактура</TableHead>
                   <TableHead>Документи</TableHead>
+                  {filters.article.trim() && (
+                    <TableHead className="w-[200px]">Намерен артикул</TableHead>
+                  )}
                   <TableHead>Източник</TableHead>
                   <TableHead className="text-right">Действия</TableHead>
                 </TableRow>
@@ -3969,6 +3972,33 @@ export function Orders() {
                           ) : null}
                         </div>
                       </TableCell>
+                      {filters.article.trim() && (
+                        <TableCell className="text-xs">
+                          {(order.matched_items ?? [])
+                            .slice(0, 3)
+                            .map((it, idx) => (
+                              <div
+                                key={`${it.sku ?? "no-sku"}-${idx}`}
+                                className="truncate"
+                              >
+                                <HighlightMatch
+                                  text={it.name_bg}
+                                  query={filters.article}
+                                />
+                                {it.sku && (
+                                  <span className="text-gray-400 ml-1">
+                                    ({it.sku})
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          {(order.matched_items?.length ?? 0) > 3 && (
+                            <div className="text-gray-400">
+                              +{(order.matched_items?.length ?? 0) - 3} още
+                            </div>
+                          )}
+                        </TableCell>
+                      )}
                       <TableCell>
                         <Badge variant="secondary">{order.source}</Badge>
                       </TableCell>
