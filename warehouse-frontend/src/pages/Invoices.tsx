@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Search,
   Banknote,
+  ChevronDown,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Invoice } from "@/types";
@@ -29,6 +30,12 @@ import {
 } from "@/components/ui/table";
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const paymentVariants: Record<string, "success" | "destructive" | "warning"> = {
   paid: "success",
@@ -327,12 +334,15 @@ export function Invoices() {
     }
   };
 
-  const handlePrint = async (invoice: Invoice) => {
+  const handlePrint = async (invoice: Invoice, copies: 1 | 2 = 1) => {
     setPrintingId(invoice.id);
     try {
-      const res = await api.get(`/invoices/${invoice.id}/pdf?t=${Date.now()}`, {
-        responseType: "blob",
-      });
+      const res = await api.get(
+        `/invoices/${invoice.id}/pdf?copies=${copies}&t=${Date.now()}`,
+        {
+          responseType: "blob",
+        },
+      );
       const blob = new Blob([res.data], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       // Use an iframe to avoid popup blockers (window.open after await is blocked)
@@ -775,20 +785,48 @@ export function Invoices() {
                                   </Button>
                                 </Tooltip>
                               )}
-                            <Tooltip content="Принтирай">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handlePrint(inv)}
-                                disabled={printingId === inv.id}
-                              >
-                                {printingId === inv.id ? (
-                                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
-                                ) : (
-                                  <Printer className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </Tooltip>
+                            <div className="inline-flex">
+                              <Tooltip content="Принтирай 1 копие">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handlePrint(inv, 1)}
+                                  disabled={printingId === inv.id}
+                                  className="rounded-r-none pr-1"
+                                >
+                                  {printingId === inv.id ? (
+                                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+                                  ) : (
+                                    <Printer className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </Tooltip>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={printingId === inv.id}
+                                    className="rounded-l-none px-1"
+                                    aria-label="Избери брой копия"
+                                  >
+                                    <ChevronDown className="h-3 w-3" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem
+                                    onClick={() => handlePrint(inv, 1)}
+                                  >
+                                    📄 1 копие (Оригинал)
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => handlePrint(inv, 2)}
+                                  >
+                                    📄📄 2 копия (и двете Оригинал)
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
                             <Tooltip content="Изтегли PDF">
                               <Button
                                 size="sm"
