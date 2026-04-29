@@ -68,10 +68,31 @@ const createInvoiceSchema = z.object({
     .max(255)
     .optional()
     .transform((v) => (v && v.length > 0 ? v : null)),
+  // Legal basis printed in the "Основание за сделката" line of the PDF
+  // when the invoice is issued without VAT. Free text; empty → null.
+  vat_exemption_reason: z
+    .string()
+    .trim()
+    .max(500)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
+  // Free-text note (e.g. "по проект Алфа") printed below the totals.
+  invoice_note: z
+    .string()
+    .trim()
+    .max(2000)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
 });
 
 const regenerateInvoiceSchema = z.object({
   payment_method: invoicePaymentMethodSchema.optional(),
+  // For regenerate, an absent field means "keep the previously stored
+  // value" — handled via COALESCE in the UPDATE. Empty string is
+  // treated the same as absent (no override). Length capped to match
+  // createInvoiceSchema.
+  vat_exemption_reason: z.string().trim().max(500).optional(),
+  invoice_note: z.string().trim().max(2000).optional(),
 });
 
 const createCreditNoteSchema = z.object({
