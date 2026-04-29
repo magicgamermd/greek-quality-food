@@ -11,6 +11,8 @@ import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
 import { formatEurAmount } from "../utils/currency.js";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
 
 function resolveInvoicePdfPath(invoice: {
   pdf_path?: string | null;
@@ -81,6 +83,18 @@ const sendEmailSchema = z.object({
 
 const cancelInvoiceSchema = z.object({
   reason: z.string().trim().max(500).optional(),
+});
+
+// Query schema for GET /invoices/:id/pdf
+// copies=1 (or absent) → serve cached on-disk PDF
+// copies=2            → generate to a temp file, stream, do not cache
+const pdfQuerySchema = z.object({
+  copies: z
+    .union([z.literal("1"), z.literal("2")])
+    .optional()
+    .transform((v) => (v ? (Number(v) as 1 | 2) : 1)),
+  // Cache-busting param used by the frontend (ignored for caching purposes)
+  t: z.string().optional(),
 });
 
 async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
@@ -728,6 +742,128 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "Invoice not found" });
       }
 
+      // Parse and validate the ?copies query parameter.
+      // Validation happens after the invoice lookup so that an unauthorized
+      // request (no permission) still gets 403 rather than 400.
+      const parsedQuery = pdfQuerySchema.safeParse(request.query);
+      if (!parsedQuery.success) {
+        return reply.status(400).send({
+          error: "Невалидна стойност за copies. Допустими стойности: 1 или 2.",
+        });
+      }
+      const copies = parsedQuery.data.copies; // 1 | 2
+
+      // ── copies=2 path: generate to temp file, stream buffer, keep cache ──
+      if (copies === 2) {
+        try {
+          const isCreditNote = invoice.document_type === "credit_note";
+          const orderLookupInvoiceId = isCreditNote
+            ? invoice.related_invoice_id
+            : invoice.id;
+
+          if (isCreditNote && !invoice.related_invoice_id) {
+            return reply.status(404).send({
+              error: "PDF not yet generated (credit note has no parent)",
+            });
+          }
+
+          const {
+            rows: [order],
+          } = await query("SELECT * FROM orders WHERE invoice_id = $1", [
+            orderLookupInvoiceId,
+          ]);
+          if (!order) {
+            return reply
+              .status(404)
+              .send({ error: "PDF not yet generated (no linked order)" });
+          }
+          const { rows: rawItems } = await query(
+            `SELECT oi.*, p.name_bg, p.name_en, p.sku, p.unit, p.brand
+             FROM order_items oi
+             JOIN products p ON p.id = oi.product_id
+             WHERE oi.order_id = $1
+             ORDER BY oi.id`,
+            [order.id],
+          );
+          const items = isCreditNote
+            ? rawItems.map((item: any) => ({
+                ...item,
+                quantity: -Math.abs(parseFloat(item.quantity)),
+                unit_price: parseFloat(item.unit_price),
+                total_price: -Math.abs(parseFloat(item.total_price)),
+              }))
+            : rawItems;
+
+          const {
+            rows: [partner],
+          } = await query("SELECT * FROM partners WHERE id = $1", [
+            order.partner_id,
+          ]);
+          if (!partner) {
+            return reply
+              .status(404)
+              .send({ error: "PDF not yet generated (partner missing)" });
+          }
+
+          let relatedInvoiceNumber: string | null = null;
+          if (isCreditNote) {
+            const {
+              rows: [parent],
+            } = await query(
+              "SELECT invoice_number FROM invoices WHERE id = $1",
+              [invoice.related_invoice_id],
+            );
+            relatedInvoiceNumber = parent?.invoice_number ?? null;
+          }
+
+          const company = await getCompanySettings();
+          const includeVat = invoice.include_vat !== false;
+
+          // Generate to a uniquely-named temp file — do NOT write to the
+          // on-disk invoice cache so the 1-page version stays intact.
+          const tmpPath = path.join(
+            os.tmpdir(),
+            `mertm-invoice-${invoice.id}-2copies-${randomUUID()}.pdf`,
+          );
+          try {
+            await generateInvoicePdf({
+              invoice,
+              partner,
+              company,
+              items,
+              vatRate: includeVat ? 20 : 0,
+              includeVat,
+              documentType: isCreditNote ? "credit_note" : "invoice",
+              relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
+              sourceCurrency: (invoice as any).currency ?? null,
+              outputPath: tmpPath,
+              copies: 2,
+            });
+            const buf = await fs.promises.readFile(tmpPath);
+            const filename2 = `${invoice.invoice_number}.pdf`;
+            const encodedFilename2 = encodeURIComponent(filename2);
+            return reply
+              .header("Content-Type", "application/pdf")
+              .header(
+                "Content-Disposition",
+                `inline; filename="${encodedFilename2}"; filename*=UTF-8''${encodedFilename2}`,
+              )
+              .header("Cache-Control", "no-store, must-revalidate")
+              .header("Pragma", "no-cache")
+              .send(buf);
+          } finally {
+            // Always clean up the temp file, even if generateInvoicePdf throws.
+            await fs.promises.unlink(tmpPath).catch(() => {});
+          }
+        } catch (err: any) {
+          request.log.error({ err }, "Failed to generate 2-copy invoice PDF");
+          return reply
+            .status(500)
+            .send({ error: "Неуспешно генериране на 2 копия PDF." });
+        }
+      }
+
+      // ── copies=1 path (default): serve cached file or regenerate to disk ──
       let resolvedPdfPath = resolveInvoicePdfPath(invoice);
 
       // Auto-regenerate if the file is missing (e.g. after container rebuild
