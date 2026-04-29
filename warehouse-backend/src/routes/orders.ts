@@ -613,11 +613,17 @@ export default async function orderRoutes(app: FastifyInstance) {
     // MERT-M: no batches — order items carry only product metadata.
     // total_stock is included so the partner-history drawer can disable the
     // "+" button for products that are currently out of stock.
+    // Identity (name_bg / name_en / sku) is read from the per-row
+    // snapshot so historical orders preserve the name that was on the
+    // document at issuance, even after the product is renamed in the
+    // catalog. Operational fields (unit / brand / weight / purchase_price)
+    // still LEFT-JOIN the live products row.
     const { rows: items } = await query(
       `SELECT oi.*,
-              COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
-              COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand, pr.weight_kg, pr.purchase_price,
+              oi.name_bg_snapshot AS name_bg,
+              oi.name_en_snapshot AS name_en,
+              oi.sku_snapshot     AS sku,
+              pr.unit, pr.brand, pr.weight_kg, pr.purchase_price,
               (
                 SELECT COALESCE(SUM(quantity), 0)
                 FROM inventory
