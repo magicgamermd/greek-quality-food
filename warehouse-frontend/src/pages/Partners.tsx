@@ -589,6 +589,12 @@ function PriceGroupSelect({
   );
 }
 
+// Stable reference — useUrlState memoises against `defaults` so passing
+// a new object literal each render would cause the memoised `current`
+// state to recompute on every render and the URL→state read race to
+// drop intermediate values (e.g. typing in the search input).
+const PARTNERS_URL_DEFAULTS = { search: "", category: "", page: "1" };
+
 export function Partners() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editPartner, setEditPartner] = useState<Partner | null>(null);
@@ -596,11 +602,7 @@ export function Partners() {
     null,
   );
   // URL-persisted filters so reload / share preserves state
-  const [urlFilters, setUrlFilters] = useUrlState({
-    search: "",
-    category: "",
-    page: "1",
-  });
+  const [urlFilters, setUrlFilters] = useUrlState(PARTNERS_URL_DEFAULTS);
   const search = urlFilters.search;
   const category = urlFilters.category;
   const page = Math.max(1, parseInt(urlFilters.page, 10) || 1);
@@ -704,8 +706,12 @@ export function Partners() {
             className="pl-9"
             value={search}
             onChange={(e) => {
+              // setSearch already resets page to 1 — calling setPage(1)
+              // here in addition would race against setSearch in
+              // react-router's setSearchParams (each call's functional
+              // updater sees the URL *before* the previous call lands),
+              // overwriting the search value with just page=1.
               setSearch(e.target.value);
-              setPage(1);
             }}
           />
         </div>
