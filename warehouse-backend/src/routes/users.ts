@@ -7,8 +7,10 @@ import {
   PERMISSIONS,
   ROLE_DEFAULTS,
   getUserPermissions,
+  invalidateUserPermissions,
+  PERMISSION_REGISTRY,
 } from "../lib/permissions.js";
-import type { UserRole } from "../lib/permissions.js";
+import type { UserRole, Permission } from "../lib/permissions.js";
 
 const createUserSchema = z.object({
   name: z.string().min(2),
@@ -216,6 +218,107 @@ export default async function usersRoutes(app: FastifyInstance) {
         role_defaults,
         overrides,
         effective,
+      };
+    },
+  );
+
+  // PATCH /users/:id/permissions/:permission — Set a per-user permission override (admin only)
+  const VALID_PERMISSION_VALUES = PERMISSION_REGISTRY.map((p) => p.permission);
+
+  const SetOverrideSchema = z.object({
+    granted: z.boolean(),
+    reason: z.string().max(255).optional(),
+  });
+
+  app.patch(
+    "/:id/permissions/:permission",
+    {
+      preHandler: [
+        async (req: FastifyRequest) => {
+          await req.jwtVerify();
+        },
+        requirePermission(PERMISSIONS.USERS_MANAGE),
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, permission } = request.params as {
+        id: string;
+        permission: string;
+      };
+
+      if (!VALID_PERMISSION_VALUES.includes(permission as Permission)) {
+        return reply.status(400).send({
+          error: "unknown_permission",
+          valid_permissions: VALID_PERMISSION_VALUES,
+        });
+      }
+
+      const parsed = SetOverrideSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply
+          .status(400)
+          .send({ error: "invalid_body", details: parsed.error.errors });
+      }
+      const { granted, reason } = parsed.data;
+
+      const targetResult = await query(
+        "SELECT id, role FROM users WHERE id = $1",
+        [id],
+      );
+      if (targetResult.rows.length === 0) {
+        return reply.status(404).send({ error: "User not found" });
+      }
+      const target = targetResult.rows[0];
+
+      if (target.role === "admin") {
+        return reply.status(400).send({ error: "admin_lockout_protection" });
+      }
+      if ((request.user as any).id === id) {
+        return reply.status(400).send({ error: "self_modification_forbidden" });
+      }
+
+      await query(
+        `INSERT INTO user_permission_overrides (user_id, permission, granted, reason, created_by)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, permission)
+         DO UPDATE SET granted = EXCLUDED.granted,
+                       reason = EXCLUDED.reason,
+                       created_by = EXCLUDED.created_by,
+                       created_at = now()
+         RETURNING id, granted, reason`,
+        [id, permission, granted, reason ?? null, (request.user as any).id],
+      );
+
+      // CORRECTED: real audit_events schema has columns
+      //   (actor_user_id, actor_email, action, entity_type, entity_id, diff)
+      // entity_id is BIGINT and cannot hold a UUID, so we store the target user_id inside diff.
+      const auditResult = await query(
+        `INSERT INTO audit_events
+           (actor_user_id, actor_email, action, entity_type, entity_id, diff)
+         VALUES ($1, $2, $3, 'user', NULL, $4::jsonb)
+         RETURNING id`,
+        [
+          (request.user as any).id,
+          (request.user as any).email ?? null,
+          "permission_override",
+          JSON.stringify({
+            user_id: id,
+            permission,
+            action: granted ? "grant" : "revoke",
+            new: granted,
+            reason: reason ?? null,
+          }),
+        ],
+      );
+
+      await invalidateUserPermissions(id);
+
+      return {
+        user_id: id,
+        permission,
+        granted,
+        reason: reason ?? null,
+        audit_event_id: auditResult.rows[0].id,
       };
     },
   );

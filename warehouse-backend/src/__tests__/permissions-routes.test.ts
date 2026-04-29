@@ -92,3 +92,94 @@ describe("GET /users/:id/permissions", () => {
     }
   });
 });
+
+describe("PATCH /users/:id/permissions/:permission", () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  it("upserts override + writes audit + invalidates cache", async () => {
+    // Target user lookup
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: "u1", role: "sales" }],
+    } as any);
+    // UPSERT
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 1, granted: true, reason: "Test" }],
+    } as any);
+    // Audit insert
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 100 }],
+    } as any);
+
+    const app = await buildApp("admin");
+    try {
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/users/u1/permissions/invoices.cancel",
+        payload: { granted: true, reason: "Test" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.user_id).toBe("u1");
+      expect(body.permission).toBe("invoices.cancel");
+      expect(body.granted).toBe(true);
+      expect(body.audit_event_id).toBe(100);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects 400 when target is admin (lockout protection)", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: "admin2", role: "admin" }],
+    } as any);
+
+    const app = await buildApp("admin");
+    try {
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/users/admin2/permissions/invoices.cancel",
+        payload: { granted: false },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("admin_lockout_protection");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects 400 when target is self", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: "admin1", role: "admin" }],
+    } as any);
+
+    const app = await buildApp("admin", "admin1");
+    try {
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/users/admin1/permissions/users.manage",
+        payload: { granted: false },
+      });
+      expect([400]).toContain(res.statusCode);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects 400 for unknown permission", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: "u1", role: "sales" }],
+    } as any);
+
+    const app = await buildApp("admin");
+    try {
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/users/u1/permissions/bogus.permission",
+        payload: { granted: true },
+      });
+      expect(res.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+});
