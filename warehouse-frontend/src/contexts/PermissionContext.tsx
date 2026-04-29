@@ -2,10 +2,11 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   type ReactNode,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Permission, UserRole } from "@/lib/permissions";
 
@@ -38,6 +39,15 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
     refetchOnReconnect: true,
     retry: false,
   });
+
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const handler = () => {
+      queryClient.invalidateQueries({ queryKey: ["me"] });
+    };
+    window.addEventListener("permissions:revoked", handler);
+    return () => window.removeEventListener("permissions:revoked", handler);
+  }, [queryClient]);
 
   const permissions = useMemo(
     () => new Set<Permission>(data?.permissions ?? []),

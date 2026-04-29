@@ -24,72 +24,84 @@ import {
   Boxes,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePermissions } from "@/contexts/PermissionContext";
+import { PERMISSIONS, type Permission } from "@/lib/permissions";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const allNavItems = [
-  {
-    to: "/",
-    icon: LayoutDashboard,
-    label: "Табло",
-    roles: ["admin", "warehouse", "accountant"],
-  },
+const allNavItems: Array<{
+  to: string;
+  icon: React.ElementType;
+  label: string;
+  permission?: Permission;
+}> = [
+  { to: "/", icon: LayoutDashboard, label: "Табло" },
   {
     to: "/products",
     icon: Package,
     label: "Продукти",
-    roles: ["admin", "warehouse"],
+    permission: PERMISSIONS.PRODUCTS_VIEW,
   },
   {
     to: "/inventory",
     icon: Warehouse,
     label: "Склад",
-    roles: ["admin", "warehouse"],
+    permission: PERMISSIONS.INVENTORY_VIEW,
   },
   {
     to: "/incoming",
     icon: PackagePlus,
     label: "Приемане на стоки",
-    roles: ["admin", "warehouse"],
+    permission: PERMISSIONS.INCOMING_MANAGE,
   },
   {
     to: "/orders",
     icon: ShoppingCart,
     label: "Поръчки",
-    roles: ["admin", "warehouse"],
+    permission: PERMISSIONS.ORDERS_MANAGE,
   },
   {
     to: "/warehouse",
     icon: Boxes,
     label: "Склад пакетиране",
-    roles: ["admin", "warehouse"],
+    permission: PERMISSIONS.ORDERS_MANAGE,
   },
   {
     to: "/partners",
     icon: Users,
     label: "Партньори",
-    roles: ["admin", "warehouse"],
+    permission: PERMISSIONS.PARTNERS_MANAGE,
   },
   {
     to: "/suppliers",
     icon: Truck,
     label: "Доставчици",
-    roles: ["admin", "warehouse"],
+    permission: PERMISSIONS.PARTNERS_MANAGE,
   },
   {
     to: "/invoices",
     icon: FileText,
     label: "Фактури",
-    roles: ["admin", "accountant"],
+    permission: PERMISSIONS.INVOICES_MANAGE,
   },
   {
     to: "/payments",
     icon: CreditCard,
     label: "Плащания",
-    roles: ["admin", "accountant"],
+    permission: PERMISSIONS.PAYMENTS_MANAGE,
   },
-  { to: "/analytics", icon: BarChart3, label: "Анализи", roles: ["admin"] },
-  { to: "/settings", icon: Settings, label: "Настройки", roles: ["admin"] },
+  {
+    to: "/analytics",
+    icon: BarChart3,
+    label: "Анализи",
+    permission: PERMISSIONS.REPORTS_VIEW,
+  },
+  {
+    to: "/settings",
+    icon: Settings,
+    label: "Настройки",
+    permission: PERMISSIONS.SETTINGS_MANAGE,
+  },
 ];
 
 const notifTypeIcons: Record<string, React.ElementType> = {
@@ -133,6 +145,10 @@ const routeNames: Record<string, string> = {
 
 export function Layout() {
   const { user, logout } = useAuth();
+  const { hasPermission } = usePermissions();
+  const visibleNavItems = allNavItems.filter(
+    (item) => !item.permission || hasPermission(item.permission),
+  );
   const navigate = useNavigate();
   const location = useLocation();
   const currentRouteName = routeNames[location.pathname] ?? routeNames["/"];
@@ -236,36 +252,34 @@ export function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 py-4 overflow-y-auto">
-          {allNavItems
-            .filter((item) => item.roles.includes(user?.role || "warehouse"))
-            .map(({ to, icon: Icon, label }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === "/"}
-                onClick={() => {
-                  if (isMobile) setSidebarOpen(false);
-                }}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors group relative",
-                    isActive
-                      ? "bg-[#f97316] text-white"
-                      : "text-white/70 hover:bg-white/10 hover:text-white",
-                  )
-                }
-              >
-                <Icon className="h-5 w-5 shrink-0" />
-                {(sidebarOpen || isMobile) && (
-                  <span className="truncate">{label}</span>
-                )}
-                {!sidebarOpen && !isMobile && (
-                  <div className="absolute left-full ml-2 z-50 hidden group-hover:block bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
-                    {label}
-                  </div>
-                )}
-              </NavLink>
-            ))}
+          {visibleNavItems.map(({ to, icon: Icon, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === "/"}
+              onClick={() => {
+                if (isMobile) setSidebarOpen(false);
+              }}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors group relative",
+                  isActive
+                    ? "bg-[#f97316] text-white"
+                    : "text-white/70 hover:bg-white/10 hover:text-white",
+                )
+              }
+            >
+              <Icon className="h-5 w-5 shrink-0" />
+              {(sidebarOpen || isMobile) && (
+                <span className="truncate">{label}</span>
+              )}
+              {!sidebarOpen && !isMobile && (
+                <div className="absolute left-full ml-2 z-50 hidden group-hover:block bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                  {label}
+                </div>
+              )}
+            </NavLink>
+          ))}
         </nav>
 
         {/* User & Logout */}

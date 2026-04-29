@@ -1,4 +1,5 @@
 import axios from "axios";
+import { toast } from "sonner";
 
 // Use VITE_API_URL env var if set, otherwise use relative /api (proxied by Vite in dev, nginx in prod)
 const BASE_URL = import.meta.env.VITE_API_URL || "/api";
@@ -19,6 +20,17 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (
+      error.response?.status === 403 &&
+      error.response.data?.required_permission
+    ) {
+      window.dispatchEvent(new CustomEvent("permissions:revoked"));
+      try {
+        toast.warning("Разрешенията ти са променени. Опитай пак.");
+      } catch {
+        // toast lib not loaded — ignore
+      }
+    }
     if (
       error.response?.status === 401 &&
       !error.config?.url?.includes("/auth/")
