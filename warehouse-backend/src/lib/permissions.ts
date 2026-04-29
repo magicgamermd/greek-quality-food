@@ -31,6 +31,9 @@ export const PERMISSIONS = {
   // System
   USERS_MANAGE: "users.manage",
   SETTINGS_MANAGE: "settings.manage",
+  // Sales overrides (admin-only by default)
+  BELOW_COST_OVERRIDE: "orders.below_cost_override",
+  ORDERS_EDIT_AFTER_FULFILL: "orders.edit_after_fulfill",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -121,6 +124,19 @@ export const PERMISSION_REGISTRY: Array<{
     group: "Продажби",
     label: "Товарителници Еконт",
     description: "Създаване и tracking на товарителници",
+  },
+  {
+    permission: PERMISSIONS.BELOW_COST_OVERRIDE,
+    group: "Продажби",
+    label: "Продажба под доставна цена",
+    description: "Одобрение на поръчки с артикули под cost (admin override)",
+  },
+  {
+    permission: PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
+    group: "Продажби",
+    label: "Редакция на приключени поръчки",
+    description:
+      "Редакция на артикули в поръчки със статус 'Изпълнена' или 'Фактурирана'",
   },
   // Складова видимост
   {

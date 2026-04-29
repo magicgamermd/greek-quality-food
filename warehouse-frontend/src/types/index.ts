@@ -205,6 +205,21 @@ export interface Order {
   partner?: Partner;
   partner_name?: string;
   items?: OrderItem[];
+  // Below-cost approval audit. Populated by POST/PUT /orders when an
+  // admin override is used; read by drawer banner + orders-list chip.
+  below_cost_approved_at?: string | null;
+  below_cost_approved_by?: string | null;
+  below_cost_approved_by_name?: string | null;
+  below_cost_details?: Array<{
+    product_id: number;
+    product_name: string;
+    quantity: number;
+    unit_price: number;
+    discount_percent: number;
+    effective_price: number;
+    purchase_price: number;
+    loss_per_unit: number;
+  }> | null;
   stock_warnings?: string[];
   receipt_printed?: boolean;
   receipt_printed_at?: string;

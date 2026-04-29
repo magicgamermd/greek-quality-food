@@ -61,6 +61,19 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Done — Recent Sessions
 
+**Batch A — Permission features** (2026-04-29, 16 commits on `feature/MERTM-batch-a-permissions`, branched off `feature/MERTM-tester-attachments-buttons`):
+
+- Migration 056 — `orders.below_cost_approved_by/at/details` audit columns + partial index
+- New permissions `BELOW_COST_OVERRIDE`, `ORDERS_EDIT_AFTER_FULFILL` (admin-only by default; per-user override-able)
+- Backend hard-block on POST/PUT /orders for below-cost lines without admin override (400/403 with `below_cost_items` payload)
+- Backend admin-only edit guard on `fulfilled`/`invoiced` orders (PUT /orders/:id returns 403 for non-admin)
+- `?below_cost_only=true` filter on GET /orders + approver JOIN on GET /orders/:id
+- Frontend confirm dialog (admin) + hard inline error (non-admin) in both new-order modal and edit-items modal
+- Audit banner in drawer + ⚠ chip in orders list + below-cost reports filter pill (admin-only visibility)
+- 16 new tests (6 helper unit + 4 POST integration + 4 PUT/edit-fulfill + 2 GET filter); permissions registry test updated 16→18
+- BE+FE type-check clean (only pre-existing `index.ts` agent.ts ref + `negative-inventory.test.ts` + payments-razpiska — all unrelated)
+- **Open item:** manual E2E walkthrough (Task 16 — 9-step script in plan) deferred to post-merge user verification
+
 **Phase 1–3 separation** (2026-04-28, 8 commits on this branch):
 
 - `64673bb` Phase 1 — defaults: reconciliation/lib.ts, start-frontend.sh,

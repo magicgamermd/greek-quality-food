@@ -9,6 +9,10 @@ import {
 } from "../lib/permissions.js";
 import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
 import {
+  computeBelowCostItems,
+  type ProductCost,
+} from "../utils/below-cost.js";
+import {
   generateStockDispatchPdf,
   generateCommercialDocPdf,
 } from "../services/document-pdf.js";
@@ -123,6 +127,10 @@ const createOrderSchema = z.object({
   econt_shipping_cost: z.coerce.number().nonnegative().optional(),
   econt_payer: z.enum(["sender", "receiver"]).optional(),
   items: z.array(orderItemSchema).min(1),
+  // Admin-only override: explicit acknowledgement that one or more lines
+  // are priced below products.purchase_price. Backend re-validates and
+  // hard-rejects when this flag is omitted but lines are below cost.
+  allow_below_cost: z.boolean().optional().default(false),
 });
 
 const updateStatusSchema = z.object({
@@ -157,6 +165,7 @@ const updateOrderSchema = z.object({
   econt_payer: z.enum(["sender", "receiver"]).nullish(),
 
   items: z.array(orderItemSchema).min(1).optional(),
+  allow_below_cost: z.boolean().optional().default(false),
 });
 
 const STOCK_DISPATCH_NUMBER_SQL = `('SR-' || LPAD(COALESCE(o.order_number, o.id)::text, 7, '0'))`;
@@ -404,6 +413,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       request_number,
       object_query,
       q,
+      below_cost_only,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -429,6 +439,14 @@ export default async function orderRoutes(app: FastifyInstance) {
       where += ` AND o.invoice_id IS NOT NULL`;
     } else if (invoicedFilter === false) {
       where += ` AND o.invoice_id IS NULL`;
+    }
+
+    // Reports filter: only orders that required admin below-cost approval.
+    // Admin-only on FE; backend does not gate the SQL filter itself — a
+    // sales user querying with the param still gets the filter, but they
+    // cannot see purchase_price elsewhere in the app.
+    if (below_cost_only === "true") {
+      where += ` AND o.below_cost_approved_at IS NOT NULL`;
     }
 
     const fromDate = normalizeOptionalText(date_from);
@@ -575,13 +593,15 @@ export default async function orderRoutes(app: FastifyInstance) {
               ${WARRANTY_NUMBER_SQL} AS warranty_number,
               ${ORDER_OBJECT_NAME_SQL} AS object_name,
               ${ORDER_OBJECT_CODE_SQL} AS object_code,
-              (o.invoice_id IS NOT NULL) AS invoiced
+              (o.invoice_id IS NOT NULL) AS invoiced,
+              approver.name AS below_cost_approved_by_name
        FROM orders o
        JOIN partners p ON p.id = o.partner_id
        LEFT JOIN invoices inv ON inv.id = o.invoice_id
        LEFT JOIN invoices cn ON cn.related_invoice_id = inv.id
            AND cn.document_type = 'credit_note'
        LEFT JOIN partner_order_objects po ON po.id = o.partner_object_id
+       LEFT JOIN users approver ON approver.id = o.below_cost_approved_by
        WHERE o.id = $1`,
       [id],
     );
@@ -597,7 +617,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       `SELECT oi.*,
               COALESCE(pr.name_bg, 'Продукт #' || oi.product_id) AS name_bg,
               COALESCE(pr.name_en, 'Product #' || oi.product_id) AS name_en,
-              pr.sku, pr.unit, pr.brand, pr.weight_kg,
+              pr.sku, pr.unit, pr.brand, pr.weight_kg, pr.purchase_price,
               (
                 SELECT COALESCE(SUM(quantity), 0)
                 FROM inventory
@@ -622,177 +642,257 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       let oversell_items: OversellInfo[] = [];
 
-      const result = await transaction(async (client) => {
-        // Get partner's price list for default pricing
-        const {
-          rows: [partner],
-        } = await client.query("SELECT * FROM partners WHERE id = $1", [
-          body.partner_id,
-        ]);
+      let result;
+      try {
+        result = await transaction(async (client) => {
+          // Get partner's price list for default pricing
+          const {
+            rows: [partner],
+          } = await client.query("SELECT * FROM partners WHERE id = $1", [
+            body.partner_id,
+          ]);
 
-        if (!partner) {
-          throw Object.assign(new Error("Partner not found"), {
-            statusCode: 404,
-          });
-        }
-
-        const requestNumber = normalizeOptionalText(body.request_number);
-        const objectSelection = await resolveOrderObjectSelection(client, {
-          partnerId: body.partner_id,
-          partnerObjectId: body.partner_object_id ?? null,
-          objectName: body.object_name,
-          objectCode: body.object_code,
-        });
-
-        let priceMap = new Map<number, number>();
-        if (partner.price_list_id) {
-          const { rows: prices } = await client.query(
-            "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
-            [partner.price_list_id],
-          );
-          for (const p of prices) {
-            priceMap.set(p.product_id, parseFloat(p.price));
+          if (!partner) {
+            throw Object.assign(new Error("Partner not found"), {
+              statusCode: 404,
+            });
           }
-        }
 
-        // Map partner's price group to the product column name
-        const priceGroupColumnMap: Record<string, string> = {
-          "Цена на едро": "selling_price",
-          "Цена на дребно": "retail_price",
-          "Ценова група 1": "price_group_1",
-          "Ценова група 2": "price_group_2",
-          "Ценова група 3": "price_group_3",
-          "Ценова група 4": "price_group_4",
-          "Ценова група 5": "price_group_5",
-          "Ценова група 6": "price_group_6",
-          "Ценова група 7": "price_group_7",
-          "Ценова група 8": "price_group_8",
-        };
-        const partnerPriceColumn = partner.price_group
-          ? priceGroupColumnMap[partner.price_group] || "selling_price"
-          : "selling_price";
+          const requestNumber = normalizeOptionalText(body.request_number);
+          const objectSelection = await resolveOrderObjectSelection(client, {
+            partnerId: body.partner_id,
+            partnerObjectId: body.partner_object_id ?? null,
+            objectName: body.object_name,
+            objectCode: body.object_code,
+          });
 
-        // Load product data including the partner's price group column
-        const productIds = [...new Set(body.items.map((i) => i.product_id))];
-        const { rows: productData } = await client.query(
-          `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg FROM products WHERE id = ANY($1)`,
-          [productIds],
-        );
-        const productMap = new Map(productData.map((p: any) => [p.id, p]));
+          let priceMap = new Map<number, number>();
+          if (partner.price_list_id) {
+            const { rows: prices } = await client.query(
+              "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
+              [partner.price_list_id],
+            );
+            for (const p of prices) {
+              priceMap.set(p.product_id, parseFloat(p.price));
+            }
+          }
 
-        if (productMap.size !== productIds.length) {
-          const missingIds = productIds.filter((pid) => !productMap.has(pid));
-          throw Object.assign(
-            new Error(`Invalid product ids: ${missingIds.join(", ")}`),
-            { statusCode: 400 },
+          // Map partner's price group to the product column name
+          const priceGroupColumnMap: Record<string, string> = {
+            "Цена на едро": "selling_price",
+            "Цена на дребно": "retail_price",
+            "Ценова група 1": "price_group_1",
+            "Ценова група 2": "price_group_2",
+            "Ценова група 3": "price_group_3",
+            "Ценова група 4": "price_group_4",
+            "Ценова група 5": "price_group_5",
+            "Ценова група 6": "price_group_6",
+            "Ценова група 7": "price_group_7",
+            "Ценова група 8": "price_group_8",
+          };
+          const partnerPriceColumn = partner.price_group
+            ? priceGroupColumnMap[partner.price_group] || "selling_price"
+            : "selling_price";
+
+          // Load product data including the partner's price group column
+          const productIds = [...new Set(body.items.map((i) => i.product_id))];
+          const { rows: productData } = await client.query(
+            `SELECT id, selling_price, ${partnerPriceColumn} AS group_price, name_bg, purchase_price FROM products WHERE id = ANY($1)`,
+            [productIds],
           );
-        }
+          const productMap = new Map(productData.map((p: any) => [p.id, p]));
 
-        const validationResult = await validateRequestedStock(
-          client,
-          body.items,
-          productMap,
-        );
-        oversell_items = validationResult.oversell_items;
+          if (productMap.size !== productIds.length) {
+            const missingIds = productIds.filter((pid) => !productMap.has(pid));
+            throw Object.assign(
+              new Error(`Invalid product ids: ${missingIds.join(", ")}`),
+              { statusCode: 400 },
+            );
+          }
 
-        // Create order with sequential order_number
-        const {
-          rows: [order],
-        } = await client.query(
-          `INSERT INTO orders (
+          const validationResult = await validateRequestedStock(
+            client,
+            body.items,
+            productMap,
+          );
+          oversell_items = validationResult.oversell_items;
+
+          // Below-cost detection: build per-line input that mirrors what we
+          // will actually persist (resolved unit_price after the same fallback
+          // chain used below) so the helper sees the real prices.
+          const costMap: Record<number, ProductCost> = {};
+          for (const p of productData) {
+            costMap[p.id] = {
+              product_id: p.id,
+              name: p.name_bg,
+              purchase_price:
+                p.purchase_price != null ? parseFloat(p.purchase_price) : null,
+            };
+          }
+          const belowCostInput = body.items.map((it) => {
+            const prod = productMap.get(it.product_id) as any;
+            const resolved =
+              it.unit_price ??
+              priceMap.get(it.product_id) ??
+              (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+              0;
+            return {
+              product_id: it.product_id,
+              quantity: it.quantity,
+              unit_price: resolved,
+              discount_percent: it.discount_percent ?? 0,
+            };
+          });
+          const belowCost = computeBelowCostItems(belowCostInput, costMap);
+
+          let belowCostApprovedBy: string | null = null;
+          let belowCostApprovedAt: Date | null = null;
+          let belowCostDetails: any = null;
+
+          if (belowCost.length > 0) {
+            if (!body.allow_below_cost) {
+              throw Object.assign(new Error("Below cost not approved"), {
+                statusCode: 400,
+                payload: {
+                  error: "Below cost not approved",
+                  message:
+                    "Има артикули под доставна цена. Изисква одобрение от admin.",
+                  below_cost_items: belowCost,
+                },
+              });
+            }
+            const allowed = await hasPermission(
+              request.user as { id: string; role: string },
+              PERMISSIONS.BELOW_COST_OVERRIDE,
+            );
+            if (!allowed) {
+              throw Object.assign(new Error("Forbidden"), {
+                statusCode: 403,
+                payload: {
+                  error: "Forbidden",
+                  message:
+                    "Само admin може да одобрява продажба под доставна цена.",
+                  required_permission: PERMISSIONS.BELOW_COST_OVERRIDE,
+                },
+              });
+            }
+            belowCostApprovedBy = (request.user as { id: string; role: string })
+              .id;
+            belowCostApprovedAt = new Date();
+            belowCostDetails = belowCost;
+          }
+
+          // Create order with sequential order_number
+          const {
+            rows: [order],
+          } = await client.query(
+            `INSERT INTO orders (
            partner_id, delivery_date, notes, source, request_number,
            partner_object_id, object_name, object_code,
            econt_receiver_name, econt_receiver_phone, econt_delivery_type,
            econt_city, econt_office_code, econt_office_name,
            econt_street, econt_street_num, econt_cod_amount,
            econt_weight, econt_shipping_cost, econt_payer,
+           below_cost_approved_by, below_cost_approved_at, below_cost_details,
            status, order_number
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                 $21, $22, $23,
                  'pending', nextval('order_number_seq'))
          RETURNING *`,
-          [
-            body.partner_id,
-            body.delivery_date || null,
-            body.notes || null,
-            body.source,
-            requestNumber,
-            objectSelection.partnerObjectId,
-            objectSelection.objectName,
-            objectSelection.objectCode,
-            body.econt_receiver_name ?? null,
-            body.econt_receiver_phone ?? null,
-            body.econt_delivery_type ?? null,
-            body.econt_city ?? null,
-            body.econt_office_code ?? null,
-            body.econt_office_name ?? null,
-            body.econt_street ?? null,
-            body.econt_street_num ?? null,
-            body.econt_cod_amount ?? null,
-            body.econt_weight ?? null,
-            body.econt_shipping_cost ?? null,
-            body.econt_payer ?? null,
-          ],
-        );
-
-        let totalAmount = 0;
-        const items = [];
-
-        for (const item of body.items) {
-          // Price resolution chain: explicit > partner price list > product selling_price > 0
-          const prod = productMap.get(item.product_id);
-          const unitPrice =
-            item.unit_price ??
-            priceMap.get(item.product_id) ??
-            (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
-            0;
-          // total_price е post-discount (qty × цена × (1 − отст/100)), закръглено
-          // до 2 знака защото колоната е numeric(12,2) — така СУМ-ите в фактурата
-          // не се разминават с визуалните стойности по редовете.
-          const discountPct = item.discount_percent ?? 0;
-          const totalPrice = Number(
-            (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
-          );
-          totalAmount += totalPrice;
-
-          const {
-            rows: [orderItem],
-          } = await client.query(
-            `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
             [
-              order.id,
-              item.product_id,
-              item.quantity,
-              unitPrice,
-              discountPct,
-              totalPrice,
+              body.partner_id,
+              body.delivery_date || null,
+              body.notes || null,
+              body.source,
+              requestNumber,
+              objectSelection.partnerObjectId,
+              objectSelection.objectName,
+              objectSelection.objectCode,
+              body.econt_receiver_name ?? null,
+              body.econt_receiver_phone ?? null,
+              body.econt_delivery_type ?? null,
+              body.econt_city ?? null,
+              body.econt_office_code ?? null,
+              body.econt_office_name ?? null,
+              body.econt_street ?? null,
+              body.econt_street_num ?? null,
+              body.econt_cod_amount ?? null,
+              body.econt_weight ?? null,
+              body.econt_shipping_cost ?? null,
+              body.econt_payer ?? null,
+              belowCostApprovedBy,
+              belowCostApprovedAt,
+              belowCostDetails != null
+                ? JSON.stringify(belowCostDetails)
+                : null,
             ],
           );
-          items.push(orderItem);
+
+          let totalAmount = 0;
+          const items = [];
+
+          for (const item of body.items) {
+            // Price resolution chain: explicit > partner price list > product selling_price > 0
+            const prod = productMap.get(item.product_id);
+            const unitPrice =
+              item.unit_price ??
+              priceMap.get(item.product_id) ??
+              (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+              0;
+            // total_price е post-discount (qty × цена × (1 − отст/100)), закръглено
+            // до 2 знака защото колоната е numeric(12,2) — така СУМ-ите в фактурата
+            // не се разминават с визуалните стойности по редовете.
+            const discountPct = item.discount_percent ?? 0;
+            const totalPrice = Number(
+              (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
+            );
+            totalAmount += totalPrice;
+
+            const {
+              rows: [orderItem],
+            } = await client.query(
+              `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+              [
+                order.id,
+                item.product_id,
+                item.quantity,
+                unitPrice,
+                discountPct,
+                totalPrice,
+              ],
+            );
+            items.push(orderItem);
+          }
+
+          // Update total
+          await client.query(
+            "UPDATE orders SET total_amount = $1 WHERE id = $2",
+            [totalAmount, order.id],
+          );
+
+          // Notification
+          await client.query(
+            `INSERT INTO notifications (type, message) VALUES ('order_created', $1)`,
+            [
+              `Нова поръчка #${order.id} от ${partner.name} на стойност ${totalAmount.toFixed(2)} €`,
+            ],
+          );
+
+          return {
+            ...order,
+            total_amount: totalAmount,
+            items,
+          };
+        });
+      } catch (err: any) {
+        if (err && err.payload && typeof err.statusCode === "number") {
+          return reply.status(err.statusCode).send(err.payload);
         }
-
-        // Update total
-        await client.query(
-          "UPDATE orders SET total_amount = $1 WHERE id = $2",
-          [totalAmount, order.id],
-        );
-
-        // Notification
-        await client.query(
-          `INSERT INTO notifications (type, message) VALUES ('order_created', $1)`,
-          [
-            `Нова поръчка #${order.id} от ${partner.name} на стойност ${totalAmount.toFixed(2)} €`,
-          ],
-        );
-
-        return {
-          ...order,
-          total_amount: totalAmount,
-          items,
-        };
-      });
+        throw err;
+      }
 
       const response: any = { ...result };
       if (oversell_items.length > 0) {
@@ -1009,219 +1109,323 @@ export default async function orderRoutes(app: FastifyInstance) {
           .send({ error: "Cannot edit a cancelled order" });
       }
 
+      // Admin-only guard for edits to already-completed orders. Sales/
+      // warehouse users with orders.manage can still edit pending /
+      // confirmed / processing orders, but once stock is committed
+      // (fulfilled) or the order is invoiced, only admin (or a user with
+      // an explicit ORDERS_EDIT_AFTER_FULFILL override) can change it.
+      if (order.status === "fulfilled" || order.status === "invoiced") {
+        const allowed = await hasPermission(
+          request.user as { id: string; role: string },
+          PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
+        );
+        if (!allowed) {
+          return reply.status(403).send({
+            error: "Forbidden",
+            message: "Само admin може да редактира приключени поръчки.",
+            required_permission: PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
+          });
+        }
+      }
+
       const orderId = Number(id);
 
-      const result = await transaction(async (client) => {
-        // Update order fields
-        const sets: string[] = ["updated_at = NOW()"];
-        const params: any[] = [];
-        let paramIdx = 1;
+      let result;
+      try {
+        result = await transaction(async (client) => {
+          // Update order fields
+          const sets: string[] = ["updated_at = NOW()"];
+          const params: any[] = [];
+          let paramIdx = 1;
 
-        if (body.delivery_date !== undefined) {
-          sets.push(`delivery_date = $${paramIdx++}`);
-          params.push(body.delivery_date || null);
-        }
-        if (body.notes !== undefined) {
-          sets.push(`notes = $${paramIdx++}`);
-          params.push(body.notes || null);
-        }
-        if (body.request_number !== undefined) {
-          sets.push(`request_number = $${paramIdx++}`);
-          params.push(normalizeOptionalText(body.request_number));
-        }
-
-        const shouldUpdateObjectSelection =
-          body.partner_object_id !== undefined ||
-          body.object_name !== undefined ||
-          body.object_code !== undefined;
-        if (shouldUpdateObjectSelection) {
-          const objectSelection = await resolveOrderObjectSelection(client, {
-            partnerId: order.partner_id,
-            partnerObjectId: body.partner_object_id ?? null,
-            objectName: body.object_name,
-            objectCode: body.object_code,
-          });
-          sets.push(`partner_object_id = $${paramIdx++}`);
-          params.push(objectSelection.partnerObjectId);
-          sets.push(`object_name = $${paramIdx++}`);
-          params.push(objectSelection.objectName);
-          sets.push(`object_code = $${paramIdx++}`);
-          params.push(objectSelection.objectCode);
-        }
-
-        const econtFields: Array<keyof typeof body> = [
-          "econt_receiver_name",
-          "econt_receiver_phone",
-          "econt_delivery_type",
-          "econt_city",
-          "econt_office_code",
-          "econt_office_name",
-          "econt_street",
-          "econt_street_num",
-          "econt_cod_amount",
-          "econt_weight",
-          "econt_payer",
-        ];
-        for (const field of econtFields) {
-          if (body[field] !== undefined) {
-            sets.push(`${field} = $${paramIdx++}`);
-            params.push(body[field] ?? null);
+          if (body.delivery_date !== undefined) {
+            sets.push(`delivery_date = $${paramIdx++}`);
+            params.push(body.delivery_date || null);
           }
-        }
-        params.push(id);
-        const {
-          rows: [updated],
-        } = await client.query(
-          `UPDATE orders SET ${sets.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
-          params,
-        );
+          if (body.notes !== undefined) {
+            sets.push(`notes = $${paramIdx++}`);
+            params.push(body.notes || null);
+          }
+          if (body.request_number !== undefined) {
+            sets.push(`request_number = $${paramIdx++}`);
+            params.push(normalizeOptionalText(body.request_number));
+          }
 
-        // Replace items if provided
-        if (body.items) {
-          const mustReconcileStock = STOCK_COMMITTED_STATUSES.has(
-            updated.status,
-          );
-
-          // Get partner for pricing
-          const {
-            rows: [partner],
-          } = await client.query("SELECT * FROM partners WHERE id = $1", [
-            updated.partner_id,
-          ]);
-
-          if (!partner) {
-            throw Object.assign(new Error("Partner not found"), {
-              statusCode: 404,
+          const shouldUpdateObjectSelection =
+            body.partner_object_id !== undefined ||
+            body.object_name !== undefined ||
+            body.object_code !== undefined;
+          if (shouldUpdateObjectSelection) {
+            const objectSelection = await resolveOrderObjectSelection(client, {
+              partnerId: order.partner_id,
+              partnerObjectId: body.partner_object_id ?? null,
+              objectName: body.object_name,
+              objectCode: body.object_code,
             });
+            sets.push(`partner_object_id = $${paramIdx++}`);
+            params.push(objectSelection.partnerObjectId);
+            sets.push(`object_name = $${paramIdx++}`);
+            params.push(objectSelection.objectName);
+            sets.push(`object_code = $${paramIdx++}`);
+            params.push(objectSelection.objectCode);
           }
 
-          let priceMap = new Map<number, number>();
-          if (partner.price_list_id) {
-            const { rows: prices } = await client.query(
-              "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
-              [partner.price_list_id],
-            );
-            for (const p of prices) {
-              priceMap.set(p.product_id, parseFloat(p.price));
+          const econtFields: Array<keyof typeof body> = [
+            "econt_receiver_name",
+            "econt_receiver_phone",
+            "econt_delivery_type",
+            "econt_city",
+            "econt_office_code",
+            "econt_office_name",
+            "econt_street",
+            "econt_street_num",
+            "econt_cod_amount",
+            "econt_weight",
+            "econt_payer",
+          ];
+          for (const field of econtFields) {
+            if (body[field] !== undefined) {
+              sets.push(`${field} = $${paramIdx++}`);
+              params.push(body[field] ?? null);
             }
           }
-
-          const productIds = [...new Set(body.items.map((i) => i.product_id))];
-          const { rows: productData } = await client.query(
-            "SELECT id, name_bg, selling_price FROM products WHERE id = ANY($1)",
-            [productIds],
-          );
-          const productMap = new Map(productData.map((p: any) => [p.id, p]));
-          if (productMap.size !== productIds.length) {
-            const missingIds = productIds.filter((pid) => !productMap.has(pid));
-            throw Object.assign(
-              new Error(`Invalid product ids: ${missingIds.join(", ")}`),
-              { statusCode: 400 },
-            );
-          }
-
-          if (mustReconcileStock) {
-            await restoreOrderItemsToInventory(client, orderId);
-          }
-
-          await client.query("DELETE FROM order_items WHERE order_id = $1", [
-            id,
-          ]);
-          const { oversell_items } = await validateRequestedStock(
-            client,
-            body.items,
-            productMap,
+          params.push(id);
+          const {
+            rows: [updated],
+          } = await client.query(
+            `UPDATE orders SET ${sets.join(", ")} WHERE id = $${paramIdx} RETURNING *`,
+            params,
           );
 
-          let totalAmount = 0;
-          const items = [];
-
-          for (const item of body.items) {
-            const prod = productMap.get(item.product_id);
-            const unitPrice =
-              item.unit_price ??
-              priceMap.get(item.product_id) ??
-              (prod?.selling_price ? parseFloat(prod.selling_price) : 0);
-            const discountPct = item.discount_percent ?? 0;
-            const totalPrice = Number(
-              (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
+          // Replace items if provided
+          if (body.items) {
+            const mustReconcileStock = STOCK_COMMITTED_STATUSES.has(
+              updated.status,
             );
-            totalAmount += totalPrice;
 
-            // MERT-M: COGS is captured from products.purchase_price at the
-            // moment the order is (re)committed to stock. Batch-sourced COGS
-            // (cost_source_batch_id) is obsolete — left NULL in the DB.
-            let costUnitPrice: number | null = null;
-            if (mustReconcileStock) {
-              costUnitPrice = await deductProductStock(
-                client,
-                item.product_id,
-                item.quantity,
+            // Get partner for pricing
+            const {
+              rows: [partner],
+            } = await client.query("SELECT * FROM partners WHERE id = $1", [
+              updated.partner_id,
+            ]);
+
+            if (!partner) {
+              throw Object.assign(new Error("Partner not found"), {
+                statusCode: 404,
+              });
+            }
+
+            let priceMap = new Map<number, number>();
+            if (partner.price_list_id) {
+              const { rows: prices } = await client.query(
+                "SELECT product_id, price FROM price_list_items WHERE price_list_id = $1",
+                [partner.price_list_id],
+              );
+              for (const p of prices) {
+                priceMap.set(p.product_id, parseFloat(p.price));
+              }
+            }
+
+            const productIds = [
+              ...new Set(body.items.map((i) => i.product_id)),
+            ];
+            const { rows: productData } = await client.query(
+              "SELECT id, name_bg, selling_price, purchase_price FROM products WHERE id = ANY($1)",
+              [productIds],
+            );
+            const productMap = new Map(productData.map((p: any) => [p.id, p]));
+            if (productMap.size !== productIds.length) {
+              const missingIds = productIds.filter(
+                (pid) => !productMap.has(pid),
+              );
+              throw Object.assign(
+                new Error(`Invalid product ids: ${missingIds.join(", ")}`),
+                { statusCode: 400 },
               );
             }
 
-            const {
-              rows: [orderItem],
-            } = await client.query(
-              `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price)
+            // Below-cost detection — same gating as POST /orders.
+            const costMap: Record<number, ProductCost> = {};
+            for (const p of productData) {
+              costMap[p.id] = {
+                product_id: p.id,
+                name: p.name_bg,
+                purchase_price:
+                  p.purchase_price != null
+                    ? parseFloat(p.purchase_price)
+                    : null,
+              };
+            }
+            const belowCostInput = body.items.map((it) => {
+              const prod = productMap.get(it.product_id) as any;
+              const resolved =
+                it.unit_price ??
+                priceMap.get(it.product_id) ??
+                (prod?.selling_price ? parseFloat(prod.selling_price) : 0);
+              return {
+                product_id: it.product_id,
+                quantity: it.quantity,
+                unit_price: resolved,
+                discount_percent: it.discount_percent ?? 0,
+              };
+            });
+            const belowCost = computeBelowCostItems(belowCostInput, costMap);
+
+            if (belowCost.length > 0) {
+              if (!body.allow_below_cost) {
+                throw Object.assign(new Error("Below cost not approved"), {
+                  statusCode: 400,
+                  payload: {
+                    error: "Below cost not approved",
+                    message:
+                      "Има артикули под доставна цена. Изисква одобрение от admin.",
+                    below_cost_items: belowCost,
+                  },
+                });
+              }
+              const allowed = await hasPermission(
+                request.user as { id: string; role: string },
+                PERMISSIONS.BELOW_COST_OVERRIDE,
+              );
+              if (!allowed) {
+                throw Object.assign(new Error("Forbidden"), {
+                  statusCode: 403,
+                  payload: {
+                    error: "Forbidden",
+                    message:
+                      "Само admin може да одобрява продажба под доставна цена.",
+                    required_permission: PERMISSIONS.BELOW_COST_OVERRIDE,
+                  },
+                });
+              }
+            }
+
+            if (mustReconcileStock) {
+              await restoreOrderItemsToInventory(client, orderId);
+            }
+
+            await client.query("DELETE FROM order_items WHERE order_id = $1", [
+              id,
+            ]);
+            const { oversell_items } = await validateRequestedStock(
+              client,
+              body.items,
+              productMap,
+            );
+
+            let totalAmount = 0;
+            const items = [];
+
+            for (const item of body.items) {
+              const prod = productMap.get(item.product_id);
+              const unitPrice =
+                item.unit_price ??
+                priceMap.get(item.product_id) ??
+                (prod?.selling_price ? parseFloat(prod.selling_price) : 0);
+              const discountPct = item.discount_percent ?? 0;
+              const totalPrice = Number(
+                (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(
+                  2,
+                ),
+              );
+              totalAmount += totalPrice;
+
+              // MERT-M: COGS is captured from products.purchase_price at the
+              // moment the order is (re)committed to stock. Batch-sourced COGS
+              // (cost_source_batch_id) is obsolete — left NULL in the DB.
+              let costUnitPrice: number | null = null;
+              if (mustReconcileStock) {
+                costUnitPrice = await deductProductStock(
+                  client,
+                  item.product_id,
+                  item.quantity,
+                );
+              }
+
+              const {
+                rows: [orderItem],
+              } = await client.query(
+                `INSERT INTO order_items (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price)
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+                [
+                  id,
+                  item.product_id,
+                  item.quantity,
+                  unitPrice,
+                  discountPct,
+                  totalPrice,
+                  costUnitPrice,
+                ],
+              );
+              items.push(orderItem);
+            }
+
+            await client.query(
+              "UPDATE orders SET total_amount = $1 WHERE id = $2",
+              [totalAmount, id],
+            );
+
+            // Persist new below-cost approval audit when this edit introduced
+            // (or re-confirmed) below-cost lines. When belowCost is empty we
+            // intentionally leave the existing audit columns alone so previously
+            // approved orders keep their audit trail across no-op re-saves.
+            if (belowCost.length > 0) {
+              await client.query(
+                `UPDATE orders SET below_cost_approved_by = $1, below_cost_approved_at = NOW(), below_cost_details = $2 WHERE id = $3`,
+                [
+                  (request.user as { id: string; role: string }).id,
+                  JSON.stringify(belowCost),
+                  id,
+                ],
+              );
+            }
+
+            let regeneratedInvoiceId: number | null = null;
+            if (updated.invoice_id) {
+              regeneratedInvoiceId = await regenerateActiveInvoiceForOrder(
+                client,
+                orderId,
+                updated.partner_id,
+                updated.invoice_id,
+              );
+            }
+
+            if (mustReconcileStock) {
+              await regenerateDependentOrderDocuments(client, orderId);
+            }
+
+            const orderRef = updated.order_number || updated.id;
+            await client.query(
+              `INSERT INTO notifications (type, message) VALUES ('order_updated', $1)`,
               [
-                id,
-                item.product_id,
-                item.quantity,
-                unitPrice,
-                discountPct,
-                totalPrice,
-                costUnitPrice,
+                regeneratedInvoiceId
+                  ? `Поръчка #${orderRef} е редактирана след фактуриране. Фактурата и документите са регенерирани.`
+                  : `Поръчка #${orderRef} е редактирана.`,
               ],
             );
-            items.push(orderItem);
+
+            const putResponse: any = {
+              ...updated,
+              total_amount: totalAmount,
+              items,
+              regenerated_invoice_id: regeneratedInvoiceId,
+              regenerated_documents: mustReconcileStock,
+            };
+            if (oversell_items.length > 0) {
+              putResponse.warnings = { oversell: oversell_items };
+            }
+            return putResponse;
           }
 
-          await client.query(
-            "UPDATE orders SET total_amount = $1 WHERE id = $2",
-            [totalAmount, id],
-          );
-
-          let regeneratedInvoiceId: number | null = null;
-          if (updated.invoice_id) {
-            regeneratedInvoiceId = await regenerateActiveInvoiceForOrder(
-              client,
-              orderId,
-              updated.partner_id,
-              updated.invoice_id,
-            );
-          }
-
-          if (mustReconcileStock) {
-            await regenerateDependentOrderDocuments(client, orderId);
-          }
-
-          const orderRef = updated.order_number || updated.id;
-          await client.query(
-            `INSERT INTO notifications (type, message) VALUES ('order_updated', $1)`,
-            [
-              regeneratedInvoiceId
-                ? `Поръчка #${orderRef} е редактирана след фактуриране. Фактурата и документите са регенерирани.`
-                : `Поръчка #${orderRef} е редактирана.`,
-            ],
-          );
-
-          const putResponse: any = {
-            ...updated,
-            total_amount: totalAmount,
-            items,
-            regenerated_invoice_id: regeneratedInvoiceId,
-            regenerated_documents: mustReconcileStock,
-          };
-          if (oversell_items.length > 0) {
-            putResponse.warnings = { oversell: oversell_items };
-          }
-          return putResponse;
+          return updated;
+        });
+      } catch (err: any) {
+        if (err && err.payload && typeof err.statusCode === "number") {
+          return reply.status(err.statusCode).send(err.payload);
         }
-
-        return updated;
-      });
+        throw err;
+      }
 
       return result;
     },

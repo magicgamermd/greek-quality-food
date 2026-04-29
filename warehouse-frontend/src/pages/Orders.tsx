@@ -61,6 +61,8 @@ import { Combobox } from "@/components/ui/combobox";
 import { SmartDateInput } from "@/components/ui/smart-date-input";
 import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
+import { usePermissions } from "@/contexts/PermissionContext";
+import { PERMISSIONS } from "@/lib/permissions";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -451,6 +453,10 @@ function OrderDetailModal({
 }) {
   const qc = useQueryClient();
   const { token: authToken } = useAuth();
+  const { hasPermission } = usePermissions();
+  const canEditAfterFulfill = hasPermission(
+    PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
+  );
 
   // Fetch full order with items
   const {
@@ -975,6 +981,22 @@ function OrderDetailModal({
             </div>
           </div>
 
+          {/* ── Below-cost approval audit banner ── */}
+          {detail.below_cost_approved_at && (
+            <div className="shrink-0 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm text-amber-800 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div>
+                <div className="font-medium">
+                  Поръчка с одобрение под доставна цена
+                </div>
+                <div className="text-xs opacity-80">
+                  Одобрена от {detail.below_cost_approved_by_name ?? "admin"} на{" "}
+                  {formatDate(detail.below_cost_approved_at)}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ── Workflow step indicator ── */}
           {detail.status !== "cancelled" && (
             <div className="shrink-0 border-t pt-3">
@@ -1052,12 +1074,15 @@ function OrderDetailModal({
               <Button variant="outline" onClick={onClose}>
                 Затвори
               </Button>
-              {detail.status !== "cancelled" && (
-                <Button variant="outline" onClick={() => setEditOpen(true)}>
-                  <Pencil className="h-4 w-4" />
-                  Редактирай артикули
-                </Button>
-              )}
+              {detail.status !== "cancelled" &&
+                ((detail.status !== "fulfilled" &&
+                  detail.status !== "invoiced") ||
+                  canEditAfterFulfill) && (
+                  <Button variant="outline" onClick={() => setEditOpen(true)}>
+                    <Pencil className="h-4 w-4" />
+                    Редактирай артикули
+                  </Button>
+                )}
 
               <div className="flex-1" />
 
@@ -1543,6 +1568,8 @@ function EditOrderItemsModal({
   order: Order;
 }) {
   const qc = useQueryClient();
+  const { hasPermission } = usePermissions();
+  const canOverrideBelowCost = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
   const [deliveryDate, setDeliveryDate] = useState("");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
@@ -1561,6 +1588,8 @@ function EditOrderItemsModal({
           (item as any).weight_kg ?? (item as any).product?.weight_kg ?? null;
         const w = rawW != null ? parseFloat(String(rawW)) : NaN;
         const productWeight = Number.isFinite(w) && w > 0 ? w : null;
+        const rawCost = (item as any).purchase_price;
+        const costNum = rawCost != null ? parseFloat(String(rawCost)) : NaN;
         return makeOrderItemRow({
           product_id: String(item.product_id),
           product_name:
@@ -1577,6 +1606,7 @@ function EditOrderItemsModal({
           stock: -1, // unknown until product is re-selected from search
           weight_kg: productWeight != null ? String(productWeight) : "",
           original_weight_kg: productWeight,
+          cost_price: Number.isFinite(costNum) && costNum > 0 ? costNum : 0,
         });
       }) || [];
 
@@ -1594,6 +1624,11 @@ function EditOrderItemsModal({
       const wRaw =
         product.weight_kg != null ? parseFloat(String(product.weight_kg)) : NaN;
       const productWeight = Number.isFinite(wRaw) && wRaw > 0 ? wRaw : null;
+      const costRaw =
+        product.purchase_price != null
+          ? parseFloat(String(product.purchase_price))
+          : NaN;
+      const cost = Number.isFinite(costRaw) && costRaw > 0 ? costRaw : 0;
       setItems((prev) =>
         prev.map((item, i) =>
           i === idx
@@ -1608,6 +1643,7 @@ function EditOrderItemsModal({
                 stock,
                 weight_kg: productWeight != null ? String(productWeight) : "",
                 original_weight_kg: productWeight,
+                cost_price: cost,
               }
             : item,
         ),
@@ -1641,8 +1677,21 @@ function EditOrderItemsModal({
       getEffectiveStock(i) >= 0 && Number(i.quantity) > getEffectiveStock(i),
   );
 
+  const belowCostItems = validItems.filter((i) => {
+    const disc = Number(i.discount_percent) || 0;
+    const effectivePrice = Number(i.unit_price) * (1 - disc / 100);
+    return (
+      i.cost_price > 0 && effectivePrice > 0 && effectivePrice < i.cost_price
+    );
+  });
+  const hasBelowCost = belowCostItems.length > 0;
+  const totalBelowCostLoss = belowCostItems.reduce((sum, i) => {
+    const qty = Number(i.quantity) || 0;
+    return sum + (i.cost_price - Number(i.unit_price)) * qty;
+  }, 0);
+
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
       const res = await api.put(`/orders/${order.id}`, {
         delivery_date: deliveryDate || undefined,
         notes: notes || undefined,
@@ -1652,6 +1701,7 @@ function EditOrderItemsModal({
           unit_price: Number(i.unit_price),
           discount_percent: Number(i.discount_percent) || 0,
         })),
+        allow_below_cost: vars.allow_below_cost === true ? true : undefined,
       });
 
       // Persist edited weights back to the product catalog.
@@ -1704,6 +1754,27 @@ function EditOrderItemsModal({
 
   const canSubmit =
     validItems.length > 0 && !mutation.isPending && !hasStockIssues;
+
+  const submitEdit = async () => {
+    setErrorMsg("");
+    if (hasBelowCost) {
+      if (!canOverrideBelowCost) {
+        setErrorMsg(
+          "Има артикули под доставна цена. Свържи се с admin за одобрение.",
+        );
+        return;
+      }
+      const ok = await confirm({
+        title: "Продажба под доставна цена",
+        description: `${belowCostItems.length} артикул(а) са под доставна цена. Обща загуба: ${formatCurrency(totalBelowCostLoss)}. Сигурен ли си?`,
+        confirmText: "Разреши",
+        cancelText: "Отказ",
+        variant: "danger",
+      });
+      if (!ok) return;
+    }
+    mutation.mutate({ allow_below_cost: hasBelowCost });
+  };
 
   return (
     <Dialog open={open} onOpenChange={onClose} modal={false}>
@@ -1936,6 +2007,35 @@ function EditOrderItemsModal({
             Количеството надвишава наличността за някои артикули.
           </div>
         )}
+        {hasBelowCost && (
+          <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium mb-1">
+                Внимание: артикули под доставна цена
+              </div>
+              <ul className="list-disc list-inside space-y-0.5">
+                {belowCostItems.map((i, idx) => {
+                  const qty = Number(i.quantity) || 0;
+                  const loss = (i.cost_price - Number(i.unit_price)) * qty;
+                  return (
+                    <li key={idx}>
+                      {i.product_name}: продаваш на{" "}
+                      {formatCurrency(Number(i.unit_price))}, ДЦ{" "}
+                      {formatCurrency(i.cost_price)} (загуба{" "}
+                      {formatCurrency(loss)})
+                    </li>
+                  );
+                })}
+              </ul>
+              {!canOverrideBelowCost && (
+                <div className="mt-2 font-medium text-red-700">
+                  Свържи се с admin за одобрение.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {errorMsg && <ErrorMessage message={errorMsg} />}
         {successMsg && (
           <div className="text-sm bg-green-50 border border-green-200 rounded-md px-3 py-2 text-green-700">
@@ -1947,13 +2047,7 @@ function EditOrderItemsModal({
           <Button variant="outline" onClick={onClose}>
             Отказ
           </Button>
-          <Button
-            onClick={() => {
-              setErrorMsg("");
-              mutation.mutate();
-            }}
-            disabled={!canSubmit}
-          >
+          <Button onClick={() => void submitEdit()} disabled={!canSubmit}>
             {mutation.isPending ? (
               <>
                 <Spinner size="sm" />
@@ -1984,6 +2078,8 @@ function CreateOrderModal({
   partners: Partner[];
 }) {
   const qc = useQueryClient();
+  const { hasPermission } = usePermissions();
+  const canOverrideBelowCost = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
   const today = isoDateToday();
   const anonymousIndividual = partners.find(
     (p) =>
@@ -2275,13 +2371,10 @@ function CreateOrderModal({
     );
   });
   const hasBelowCost = belowCostItems.length > 0;
-  const [confirmBelowCost, setConfirmBelowCost] = useState(false);
-  // Reset the confirmation flag if the user fixes the prices (so they
-  // don't accidentally submit a still-below-cost order from a prior
-  // "yes, proceed" click).
-  useEffect(() => {
-    if (!hasBelowCost && confirmBelowCost) setConfirmBelowCost(false);
-  }, [hasBelowCost, confirmBelowCost]);
+  const totalBelowCostLoss = belowCostItems.reduce((sum, i) => {
+    const qty = Number(i.quantity) || 0;
+    return sum + (i.cost_price - Number(i.unit_price)) * qty;
+  }, 0);
 
   // Auto-fill Еконт teglo from sum(qty × weight_kg) whenever items change.
   // Еконт min е 0.1 кг; ако няма никакви тегла, държим минимум 0.1.
@@ -2302,7 +2395,7 @@ function CreateOrderModal({
   }, [totalItemsWeight]);
 
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
       const res = await api.post("/orders", {
         partner_id: Number(form.partner_id),
         delivery_date: form.delivery_date || undefined,
@@ -2329,6 +2422,7 @@ function CreateOrderModal({
           unit_price: Number(i.unit_price) || undefined,
           discount_percent: Number(i.discount_percent) || 0,
         })),
+        allow_below_cost: vars.allow_below_cost === true ? true : undefined,
       });
 
       // Persist any edited weights back to the product catalog so
@@ -2429,23 +2523,48 @@ function CreateOrderModal({
     return result;
   }
 
-  // Ctrl/Cmd+Enter anywhere in the dialog submits the order (when it's
-  // in a submittable state — warnings still need their explicit confirms
-  // via the warning buttons, which keeps destructive decisions deliberate).
+  // Single entry point for the create-order submit. Gates: below-cost
+  // (admin-only override), then oversell. Stock-issue confirmation is
+  // already a UI-level gate (button visibility) so we don't double-check
+  // it here. allow_below_cost is sent to the API only when the admin
+  // explicitly confirmed the dialog.
+  const submitCreateOrder = async () => {
+    setErrorMsg("");
+    if (hasBelowCost) {
+      if (!canOverrideBelowCost) {
+        setErrorMsg(
+          "Има артикули под доставна цена. Свържи се с admin за одобрение.",
+        );
+        return;
+      }
+      const ok = await confirm({
+        title: "Продажба под доставна цена",
+        description: `${belowCostItems.length} артикул(а) са под доставна цена. Обща загуба: ${formatCurrency(totalBelowCostLoss)}. Сигурен ли си?`,
+        confirmText: "Разреши",
+        cancelText: "Отказ",
+        variant: "danger",
+      });
+      if (!ok) return;
+    }
+    const oversell = computeOversellItems();
+    if (oversell.length > 0) {
+      setPendingOversell({
+        items: oversell,
+        proceed: () => mutation.mutate({ allow_below_cost: hasBelowCost }),
+      });
+      return;
+    }
+    mutation.mutate({ allow_below_cost: hasBelowCost });
+  };
+
+  // Ctrl/Cmd+Enter anywhere in the dialog submits the order.
   const handleDialogKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "Enter") return;
     if (!(e.ctrlKey || e.metaKey)) return;
     if (!canSubmit) return;
     if (hasStockIssues && !confirmOverstock) return;
-    if (hasBelowCost && !confirmBelowCost) return;
     e.preventDefault();
-    setErrorMsg("");
-    const oversell = computeOversellItems();
-    if (oversell.length > 0) {
-      setPendingOversell({ items: oversell, proceed: () => mutation.mutate() });
-      return;
-    }
-    mutation.mutate();
+    void submitCreateOrder();
   };
 
   return (
@@ -2927,7 +3046,7 @@ function CreateOrderModal({
             </div>
           )}
 
-          {hasBelowCost && !confirmBelowCost && (
+          {hasBelowCost && (
             <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800 mb-2">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <div>
@@ -2951,17 +3070,13 @@ function CreateOrderModal({
                     );
                   })}
                 </ul>
+                {!canOverrideBelowCost && (
+                  <div className="mt-2 font-medium text-red-700">
+                    Свържи се с admin за одобрение — само admin може да пуска
+                    поръчки под доставна цена.
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-
-          {hasBelowCost && confirmBelowCost && (
-            <div className="flex items-start gap-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800 mb-2">
-              <CheckCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>
-                Потвърдено — поръчката ще бъде създадена въпреки продажба под
-                ДЦ.
-              </span>
             </div>
           )}
 
@@ -2980,47 +3095,21 @@ function CreateOrderModal({
                 Потвърди въпреки липсата
               </Button>
             )}
-            {!orderCreated &&
-              (!hasStockIssues || confirmOverstock) &&
-              hasBelowCost &&
-              !confirmBelowCost && (
-                <Button
-                  variant="destructive"
-                  onClick={() => setConfirmBelowCost(true)}
-                  className="bg-amber-600 hover:bg-amber-700"
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                  Потвърди под ДЦ
-                </Button>
-              )}
-            {!orderCreated &&
-              (!hasStockIssues || confirmOverstock) &&
-              (!hasBelowCost || confirmBelowCost) && (
-                <Button
-                  onClick={() => {
-                    setErrorMsg("");
-                    const oversell = computeOversellItems();
-                    if (oversell.length > 0) {
-                      setPendingOversell({
-                        items: oversell,
-                        proceed: () => mutation.mutate(),
-                      });
-                      return;
-                    }
-                    mutation.mutate();
-                  }}
-                  disabled={!canSubmit}
-                >
-                  {mutation.isPending ? (
-                    <>
-                      <Spinner size="sm" />
-                      Запазване...
-                    </>
-                  ) : (
-                    "Създай поръчка"
-                  )}
-                </Button>
-              )}
+            {!orderCreated && (!hasStockIssues || confirmOverstock) && (
+              <Button
+                onClick={() => void submitCreateOrder()}
+                disabled={!canSubmit}
+              >
+                {mutation.isPending ? (
+                  <>
+                    <Spinner size="sm" />
+                    Запазване...
+                  </>
+                ) : (
+                  "Създай поръчка"
+                )}
+              </Button>
+            )}
             {orderCreated && (
               <span className="text-sm text-green-600 flex items-center gap-1">
                 <CheckCircle className="h-4 w-4" />
@@ -3070,7 +3159,10 @@ function CreateOrderModal({
 export function Orders() {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const { hasPermission } = usePermissions();
+  const canSeeBelowCostFilter = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
   const [statusFilter, setStatusFilter] = useState("");
+  const [belowCostOnly, setBelowCostOnly] = useState(false);
   // Per-column text filters
   const [filters, setFilters] = useState({
     order_number: "",
@@ -3098,14 +3190,13 @@ export function Orders() {
     isLoading,
     error,
   } = useQuery<Order[]>({
-    queryKey: ["orders", statusFilter],
+    queryKey: ["orders", statusFilter, belowCostOnly],
     queryFn: () => {
-      const params =
-        statusFilter === "invoiced"
-          ? "?invoiced=true"
-          : statusFilter
-            ? `?status=${statusFilter}`
-            : "";
+      const parts: string[] = [];
+      if (statusFilter === "invoiced") parts.push("invoiced=true");
+      else if (statusFilter) parts.push(`status=${statusFilter}`);
+      if (belowCostOnly) parts.push("below_cost_only=true");
+      const params = parts.length > 0 ? `?${parts.join("&")}` : "";
       return api.get(`/orders${params}`).then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
@@ -3437,6 +3528,20 @@ export function Orders() {
             {s === "" ? "Всички" : statusLabels[s]}
           </button>
         ))}
+        {canSeeBelowCostFilter && (
+          <button
+            onClick={() => setBelowCostOnly((v) => !v)}
+            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              belowCostOnly
+                ? "bg-amber-500 text-white"
+                : "bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+            }`}
+            title="Покажи само поръчки с одобрение под доставна цена"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Под cost
+          </button>
+        )}
       </div>
 
       {/* Date filter — same pattern as Приемане на стоки */}
@@ -3626,11 +3731,23 @@ export function Orders() {
                         {formatCurrency(order.total_amount)}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant={statusVariants[order.status] ?? "secondary"}
-                        >
-                          {statusLabels[order.status] ?? order.status}
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <Badge
+                            variant={
+                              statusVariants[order.status] ?? "secondary"
+                            }
+                          >
+                            {statusLabels[order.status] ?? order.status}
+                          </Badge>
+                          {order.below_cost_approved_at && (
+                            <span
+                              className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-300"
+                              title={`Под cost — одобрена ${formatDate(order.below_cost_approved_at)}`}
+                            >
+                              <AlertTriangle className="h-3 w-3" />
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         {order.invoice_id ? (
