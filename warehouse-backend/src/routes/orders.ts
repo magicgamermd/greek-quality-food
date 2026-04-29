@@ -593,13 +593,15 @@ export default async function orderRoutes(app: FastifyInstance) {
               ${WARRANTY_NUMBER_SQL} AS warranty_number,
               ${ORDER_OBJECT_NAME_SQL} AS object_name,
               ${ORDER_OBJECT_CODE_SQL} AS object_code,
-              (o.invoice_id IS NOT NULL) AS invoiced
+              (o.invoice_id IS NOT NULL) AS invoiced,
+              approver.name AS below_cost_approved_by_name
        FROM orders o
        JOIN partners p ON p.id = o.partner_id
        LEFT JOIN invoices inv ON inv.id = o.invoice_id
        LEFT JOIN invoices cn ON cn.related_invoice_id = inv.id
            AND cn.document_type = 'credit_note'
        LEFT JOIN partner_order_objects po ON po.id = o.partner_object_id
+       LEFT JOIN users approver ON approver.id = o.below_cost_approved_by
        WHERE o.id = $1`,
       [id],
     );
