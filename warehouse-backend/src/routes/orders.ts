@@ -1777,6 +1777,80 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /orders/:id/quote — pending → quoted. Cashier prints an offer
+  // (OF-XXX) and waits for the customer; quoted orders never deduct stock.
+  app.post(
+    "/:id/quote",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      return await transaction(async (client) => {
+        const {
+          rows: [order],
+        } = await client.query(
+          "SELECT id, status FROM orders WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+        if (!order) {
+          throw Object.assign(new Error("Order not found"), {
+            statusCode: 404,
+          });
+        }
+        if (order.status !== "pending") {
+          throw Object.assign(
+            new Error(
+              "Само поръчки със статус 'Чакаща' могат да се прехвърлят в оферта.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+        const {
+          rows: [updated],
+        } = await client.query(
+          "UPDATE orders SET status = 'quoted', updated_at = NOW() WHERE id = $1 RETURNING *",
+          [id],
+        );
+        return updated;
+      });
+    },
+  );
+
+  // POST /orders/:id/unquote — quoted → pending. Customer accepted the
+  // offer; the order goes back into the normal pending → confirmed flow.
+  app.post(
+    "/:id/unquote",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      return await transaction(async (client) => {
+        const {
+          rows: [order],
+        } = await client.query(
+          "SELECT id, status FROM orders WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+        if (!order) {
+          throw Object.assign(new Error("Order not found"), {
+            statusCode: 404,
+          });
+        }
+        if (order.status !== "quoted") {
+          throw Object.assign(
+            new Error("Само оферти могат да преминат към обработка."),
+            { statusCode: 400 },
+          );
+        }
+        const {
+          rows: [updated],
+        } = await client.query(
+          "UPDATE orders SET status = 'pending', updated_at = NOW() WHERE id = $1 RETURNING *",
+          [id],
+        );
+        return updated;
+      });
+    },
+  );
+
   // DELETE /orders/:id — cancel an order (soft delete) with stock return for fulfilled orders
   app.delete(
     "/:id",
