@@ -523,6 +523,22 @@ function OrderDetailModal({
   const [partnerOverride, setPartnerOverride] =
     useState<PartnerOverride | null>(null);
   const [partnerOverrideOpen, setPartnerOverrideOpen] = useState(false);
+  // Sub-dialog form state — reset on every open.
+  const [overrideMode, setOverrideMode] = useState<"existing" | "new">(
+    "existing",
+  );
+  const [overrideExistingId, setOverrideExistingId] = useState<number | null>(
+    null,
+  );
+  const [newPartner, setNewPartner] = useState({
+    name: "",
+    eik: "",
+    vat_number: "",
+    address: "",
+    city: "",
+    contact_person: "",
+    phone: "",
+  });
   const [generatedInvoiceId, setGeneratedInvoiceId] = useState<number | null>(
     null,
   );
@@ -559,6 +575,35 @@ function OrderDetailModal({
     // order if the user confirms after switching drawers.
     setPendingFulfillOversell(null);
   }, [order?.id]);
+
+  // Reset the partner-override sub-dialog form whenever it opens, so a
+  // closed-and-reopened dialog never shows stale picks.
+  useEffect(() => {
+    if (!partnerOverrideOpen) return;
+    setOverrideMode("existing");
+    setOverrideExistingId(null);
+    setNewPartner({
+      name: "",
+      eik: "",
+      vat_number: "",
+      address: "",
+      city: "",
+      contact_person: "",
+      phone: "",
+    });
+  }, [partnerOverrideOpen]);
+
+  // Partners catalog for the override picker. Same query key as the outer
+  // page so the cache is shared (no duplicate fetch).
+  const { data: overridePartners = [] } = useQuery<Partner[]>({
+    queryKey: ["partners", "catalog"],
+    queryFn: () =>
+      api.get("/partners?catalog=true&limit=5000").then((r) => {
+        const d = r.data;
+        return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+      }),
+    enabled: partnerOverrideOpen,
+  });
 
   // Close the payment-method dropdown when clicking outside it.
   useEffect(() => {
@@ -1878,6 +1923,162 @@ function OrderDetailModal({
           proceed?.();
         }}
       />
+
+      {/* Batch D — partner override sub-dialog */}
+      <Dialog open={partnerOverrideOpen} onOpenChange={setPartnerOverrideOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Издай фактура на фирма</DialogTitle>
+          </DialogHeader>
+
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant={overrideMode === "existing" ? "default" : "outline"}
+              onClick={() => setOverrideMode("existing")}
+            >
+              Съществуваща
+            </Button>
+            <Button
+              size="sm"
+              variant={overrideMode === "new" ? "default" : "outline"}
+              onClick={() => setOverrideMode("new")}
+            >
+              + Нов партньор
+            </Button>
+          </div>
+
+          {overrideMode === "existing" ? (
+            <div>
+              <Label>Партньор</Label>
+              <Combobox
+                items={overridePartners
+                  .filter((p) => (p as any).partner_type !== "individual")
+                  .map((p) => ({
+                    value: String(p.id),
+                    label: p.name,
+                    hint: p.eik ? `ЕИК: ${p.eik}` : undefined,
+                  }))}
+                value={
+                  overrideExistingId != null ? String(overrideExistingId) : ""
+                }
+                onChange={(v) => setOverrideExistingId(v ? Number(v) : null)}
+                placeholder="Търси по име или ЕИК"
+              />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div>
+                <Label>Име *</Label>
+                <Input
+                  value={newPartner.name}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({ ...p, name: e.target.value }))
+                  }
+                  placeholder="напр. Фирма Х ЕООД"
+                />
+              </div>
+              <div>
+                <Label>ЕИК *</Label>
+                <Input
+                  value={newPartner.eik}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({ ...p, eik: e.target.value }))
+                  }
+                  placeholder="9–13 цифри"
+                />
+              </div>
+              <div>
+                <Label>ДДС №</Label>
+                <Input
+                  value={newPartner.vat_number}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      vat_number: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Адрес</Label>
+                <Input
+                  value={newPartner.address}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      address: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Град</Label>
+                <Input
+                  value={newPartner.city}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({ ...p, city: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Контактно лице</Label>
+                <Input
+                  value={newPartner.contact_person}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      contact_person: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Телефон</Label>
+                <Input
+                  value={newPartner.phone}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      phone: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPartnerOverrideOpen(false)}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={() => {
+                if (overrideMode === "existing") {
+                  const picked = overridePartners.find(
+                    (p) => p.id === overrideExistingId,
+                  );
+                  if (!picked) return;
+                  setPartnerOverride({
+                    partner_id: picked.id,
+                    name: picked.name,
+                    eik: picked.eik,
+                  });
+                } else {
+                  if (!newPartner.name.trim() || !newPartner.eik.trim()) return;
+                  setPartnerOverride({ ...newPartner });
+                }
+                setPartnerOverrideOpen(false);
+              }}
+            >
+              Запази
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
