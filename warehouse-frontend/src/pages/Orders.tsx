@@ -34,6 +34,7 @@ import {
   X as XIcon,
   Truck,
   ShieldCheck,
+  FileSignature,
   History,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -492,6 +493,13 @@ function OrderDetailModal({
   // VAT toggle for invoice/documents
   const [invoiceNote, setInvoiceNote] = useState("");
   const [vatExemptionReason, setVatExemptionReason] = useState("");
+  const [protocolDialogOpen, setProtocolDialogOpen] = useState(false);
+  const [protocolPlace, setProtocolPlace] = useState("");
+  const [protocolDate, setProtocolDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [protocolSellerRep, setProtocolSellerRep] = useState("");
+  const [protocolBuyerRep, setProtocolBuyerRep] = useState("");
   const [includeVat, setIncludeVat] = useState(true);
   // Payment basis printed on the invoice ("Начин на плащане:").
   const [paymentMethod, setPaymentMethod] =
@@ -1662,6 +1670,22 @@ function OrderDetailModal({
                   <ShieldCheck className="h-4 w-4" />
                   Гаранция
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // Pre-fill from the loaded order detail; user can override
+                    // anything in the dialog before downloading.
+                    setProtocolBuyerRep(
+                      (detail as any)?.partner?.contact_person ?? "",
+                    );
+                    setProtocolDialogOpen(true);
+                  }}
+                  className="text-purple-700 border-purple-300 hover:bg-purple-50"
+                  title="Приемо-предавателен протокол"
+                >
+                  <FileSignature className="h-4 w-4" />
+                  Приемо-предавателен
+                </Button>
               </div>
             )}
           </DialogFooter>
@@ -1824,6 +1848,83 @@ function OrderDetailModal({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      </Dialog>
+      {/* Acceptance protocol — manual override dialog before PDF download */}
+      <Dialog
+        open={protocolDialogOpen}
+        onOpenChange={setProtocolDialogOpen}
+        modal={false}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Приемо-предавателен протокол</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-xs">Място</Label>
+              <Input
+                value={protocolPlace}
+                onChange={(e) => setProtocolPlace(e.target.value)}
+                placeholder="напр. София (default: фирмен град)"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Дата</Label>
+              <Input
+                type="date"
+                value={protocolDate}
+                onChange={(e) => setProtocolDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Продавач — представител</Label>
+              <Input
+                value={protocolSellerRep}
+                onChange={(e) => setProtocolSellerRep(e.target.value)}
+                placeholder="default: МОЛ от настройки"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Купувач — представител</Label>
+              <Input
+                value={protocolBuyerRep}
+                onChange={(e) => setProtocolBuyerRep(e.target.value)}
+                placeholder="default: лице за контакт от партньора"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setProtocolDialogOpen(false)}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={() => {
+                if (!detail) return;
+                const params = new URLSearchParams();
+                if (protocolPlace.trim())
+                  params.set("place", protocolPlace.trim());
+                if (protocolDate) params.set("date", protocolDate);
+                if (protocolSellerRep.trim())
+                  params.set("seller_rep", protocolSellerRep.trim());
+                if (protocolBuyerRep.trim())
+                  params.set("buyer_rep", protocolBuyerRep.trim());
+                const qs = params.toString();
+                window.open(
+                  `/api/orders/${detail.id}/protocol-pdf${qs ? "?" + qs : ""}`,
+                  "_blank",
+                );
+                setProtocolDialogOpen(false);
+              }}
+              className="bg-purple-600 hover:bg-purple-700"
+            >
+              <FileSignature className="h-4 w-4" />
+              Свали PDF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
       <OversellConfirmDialog
         open={!!pendingFulfillOversell}
