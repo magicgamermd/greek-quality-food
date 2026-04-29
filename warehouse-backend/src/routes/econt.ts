@@ -311,9 +311,23 @@ export default async function econtRoutes(app: FastifyInstance) {
         };
       }
 
+      // Per Econt JSON API spec (http://ee.econt.com/services/Shipments/), the
+      // payer is expressed via paymentSenderMethod / paymentReceiverMethod —
+      // NOT via "servicesPayer"/"shipmentPayer" (those field names don't exist
+      // in the API and are silently ignored, which is why receiver-pays
+      // shipments were always going through as sender-pays).
+      //
+      // For "receiver pays the entire delivery": set paymentReceiverMethod to
+      // "cash" with paymentReceiverAmount=100 and paymentReceiverAmountIsPercent=true.
+      // For "sender pays" (default): set paymentSenderMethod to "cash".
       const servicesPayer = body.servicesPayer || "SENDER";
-      label.servicesPayer = servicesPayer;
-      label.shipmentPayer = servicesPayer;
+      if (servicesPayer === "RECEIVER") {
+        label.paymentReceiverMethod = "cash";
+        label.paymentReceiverAmount = 100;
+        label.paymentReceiverAmountIsPercent = true;
+      } else {
+        label.paymentSenderMethod = "cash";
+      }
 
       const result = await econtPost(
         "Shipments/LabelService.createLabel.json",
@@ -410,12 +424,27 @@ export default async function econtRoutes(app: FastifyInstance) {
         };
       }
 
-      if (totalWithVat > 0) {
+      // Only add COD if the order originally had COD requested. If the user
+      // chose "no COD", we preserve that even when items change.
+      const hadCod = parseFloat(order.econt_cod_amount ?? 0) > 0;
+      const newCodAmount = hadCod ? totalWithVat : 0;
+      if (hadCod && totalWithVat > 0) {
         label.services = {
           cdAmount: Math.round(totalWithVat * 1.95583 * 100) / 100,
           cdType: "get",
           cdCurrency: "BGN",
         };
+      }
+
+      // Preserve the payer choice (sender vs receiver). See create-shipment
+      // for the full reasoning — the API uses paymentSenderMethod /
+      // paymentReceiverMethod, not the made-up "servicesPayer"/"shipmentPayer".
+      if (order.econt_payer === "receiver") {
+        label.paymentReceiverMethod = "cash";
+        label.paymentReceiverAmount = 100;
+        label.paymentReceiverAmountIsPercent = true;
+      } else {
+        label.paymentSenderMethod = "cash";
       }
 
       const result = await econtPost(
@@ -438,7 +467,7 @@ export default async function econtRoutes(app: FastifyInstance) {
           shipmentNumber,
           trackingUrl,
           pdfURL,
-          totalWithVat,
+          newCodAmount,
           weight,
           body.order_id,
         ],
@@ -448,7 +477,7 @@ export default async function econtRoutes(app: FastifyInstance) {
         shipmentNumber,
         trackingUrl,
         pdfURL,
-        codAmount: totalWithVat,
+        codAmount: newCodAmount,
         weight,
       });
     },

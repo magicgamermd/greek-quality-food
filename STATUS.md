@@ -5,8 +5,8 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-29 (Phase 9 complete — feature SHIPPED, 27 of 27 tasks)
-**Active branch:** `feature/MERTM-tester-attachments-buttons`
+**Last updated:** 2026-04-29 (Batches D and G+H merged into main)
+**Active branch:** `main`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
 **Active feature:** Employee role + per-user permission overrides — **COMPLETE** (Phases 1–9). All 27 tasks committed. Backend: DB migration 053 + 16-permission registry + Redis-cached resolver + 5 REST endpoints (/auth/me extended, /permissions/registry, GET/PATCH/DELETE /users/:id/permissions, GET /users/:id/audit). Frontend: PermissionContext + Can/RequirePermission + permission-driven sidebar + admin UI at /settings/users/:id. E2E test scenarios cover sales role + admin matrix + lockout. Pending follow-ups documented below.
 
@@ -76,6 +76,19 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - BE TS clean except 1 pre-existing; FE TS clean
 - BE tests: 295 passed, 2 pre-existing failures
 - **Open item:** manual E2E (Task 13 in plan, 4-section script) deferred to post-merge user verification
+
+**Batch D — Invoice partner override** (2026-04-29, branch `feature/MERTM-batch-d-invoice-partner-override` from main):
+
+- `createInvoiceSchema` accepts optional `partner_override` — Zod union of `{partner_id}` (existing partner) OR full new-partner data
+- Backend helper `resolveOverridePartner` — upserts by EIK (reuse existing or INSERT new with `partner_type='company'`), runs inside the same transaction as the invoice INSERT
+- POST /invoices: when override is set, invoice's `partner_id` becomes the resolved override id; order's `partner_id` is left unchanged; `client_display_name` forced to NULL (mutually exclusive); 400 if order partner is not individual
+- PDF re-fetches the invoice partner so the company name (not the original individual) is printed on the PDF
+- regenerate explicitly rejects `partner_override` (`z.never()` field with custom error message)
+- Frontend `Orders.tsx` — `PartnerOverride` type + state + sub-dialog with mode toggle (Съществуваща combobox / + Нов партньор inline form, 7 fields), gated on `partner_partner_type === 'individual'`; chip preview ("Фактура на: <name> (ЕИК ...)") with × to clear; `invoiceMutation` sends `partner_override` when set
+- 6 new integration tests (direct partner_id, EIK reuse, EIK upsert, 400 on non-individual, client_display_name nulled, regenerate rejection); all 6 pass
+- BE test baseline: 296 passed, 3 pre-existing/WIP failures (2 razpiska, 1 econt from concurrent agent's WIP — none caused by Batch D)
+- BE+FE TS clean
+- **Open item:** full 9-step manual E2E (Task 10 in plan — invoice generation + PDF verification + EIK reuse round-trip) deferred to post-merge user verification; smoke check via preview confirmed button visibility, sub-dialog open/close, and mode toggle work cleanly
 
 **Batch C — Orders search by article** (2026-04-29, branch `feature/MERTM-batch-c-search-by-article` from main):
 

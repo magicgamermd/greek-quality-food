@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   FileSignature,
   History,
+  Building2,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -286,6 +287,21 @@ interface ProductOption {
   product: OrderProduct;
 }
 
+// Batch D — invoice partner override. Either points to an existing partner
+// from the catalog (carrying name/EIK for the chip preview), or carries the
+// full new-partner data the server will upsert by EIK.
+type PartnerOverride =
+  | { partner_id: number; name: string; eik: string }
+  | {
+      name: string;
+      eik: string;
+      vat_number?: string;
+      address?: string;
+      city?: string;
+      contact_person?: string;
+      phone?: string;
+    };
+
 export interface ProductSearchHandle {
   focus: () => void;
 }
@@ -511,6 +527,29 @@ function OrderDetailModal({
   // exposed when the order's partner is an individual (физ. лице). When
   // empty we fall back to partner.name server-side.
   const [clientDisplayName, setClientDisplayName] = useState("");
+  // Batch D — issue invoice in the name of a different (company) partner.
+  // Only available when the order's partner is an individual. Either pick
+  // an existing company partner, or supply full new-partner data — the
+  // server upserts by EIK.
+  const [partnerOverride, setPartnerOverride] =
+    useState<PartnerOverride | null>(null);
+  const [partnerOverrideOpen, setPartnerOverrideOpen] = useState(false);
+  // Sub-dialog form state — reset on every open.
+  const [overrideMode, setOverrideMode] = useState<"existing" | "new">(
+    "existing",
+  );
+  const [overrideExistingId, setOverrideExistingId] = useState<number | null>(
+    null,
+  );
+  const [newPartner, setNewPartner] = useState({
+    name: "",
+    eik: "",
+    vat_number: "",
+    address: "",
+    city: "",
+    contact_person: "",
+    phone: "",
+  });
   const [generatedInvoiceId, setGeneratedInvoiceId] = useState<number | null>(
     null,
   );
@@ -542,11 +581,42 @@ function OrderDetailModal({
     setVatExemptionReason("");
     setPaymentMethod("bank");
     setPaymentMenuOpen(false);
+    setPartnerOverride(null);
+    setPartnerOverrideOpen(false);
     // Close any in-flight oversell dialog — its `proceed` closure captured
     // the previous order's id, so leaving it open would fulfill the wrong
     // order if the user confirms after switching drawers.
     setPendingFulfillOversell(null);
   }, [order?.id]);
+
+  // Reset the partner-override sub-dialog form whenever it opens, so a
+  // closed-and-reopened dialog never shows stale picks.
+  useEffect(() => {
+    if (!partnerOverrideOpen) return;
+    setOverrideMode("existing");
+    setOverrideExistingId(null);
+    setNewPartner({
+      name: "",
+      eik: "",
+      vat_number: "",
+      address: "",
+      city: "",
+      contact_person: "",
+      phone: "",
+    });
+  }, [partnerOverrideOpen]);
+
+  // Partners catalog for the override picker. Same query key as the outer
+  // page so the cache is shared (no duplicate fetch).
+  const { data: overridePartners = [] } = useQuery<Partner[]>({
+    queryKey: ["partners", "catalog"],
+    queryFn: () =>
+      api.get("/partners?catalog=true&limit=5000").then((r) => {
+        const d = r.data;
+        return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+      }),
+    enabled: partnerOverrideOpen,
+  });
 
   // Close the payment-method dropdown when clicking outside it.
   useEffect(() => {
@@ -675,20 +745,43 @@ function OrderDetailModal({
   });
 
   const invoiceMutation = useMutation({
-    mutationFn: (id: number) =>
-      api.post("/invoices", {
+    mutationFn: (id: number) => {
+      const payload: Record<string, unknown> = {
         order_id: id,
         include_vat: includeVat,
         payment_method: paymentMethod,
-        client_display_name: clientDisplayName.trim() || undefined,
+        // Batch D — when an override is set, client_display_name is mutually
+        // exclusive (server-side too) — drop it so the request stays clean.
+        client_display_name: partnerOverride
+          ? undefined
+          : clientDisplayName.trim() || undefined,
+        // Batch G+H — optional invoice extras
         invoice_note: invoiceNote.trim() || undefined,
         vat_exemption_reason: !includeVat
           ? vatExemptionReason.trim() || undefined
           : undefined,
-      }),
+      };
+      if (partnerOverride) {
+        payload.partner_override =
+          "partner_id" in partnerOverride
+            ? { partner_id: partnerOverride.partner_id }
+            : {
+                name: partnerOverride.name.trim(),
+                eik: partnerOverride.eik.trim(),
+                vat_number: partnerOverride.vat_number?.trim() || undefined,
+                address: partnerOverride.address?.trim() || undefined,
+                city: partnerOverride.city?.trim() || undefined,
+                contact_person:
+                  partnerOverride.contact_person?.trim() || undefined,
+                phone: partnerOverride.phone?.trim() || undefined,
+              };
+      }
+      return api.post("/invoices", payload);
+    },
     onSuccess: (res) => {
       const newInvoiceId = res.data?.id ?? null;
       setGeneratedInvoiceId(newInvoiceId);
+      setPartnerOverride(null);
       invalidateAllOrderRelated();
       // Auto-open PDF for printing immediately after generation
       if (newInvoiceId) {
@@ -1415,17 +1508,51 @@ function OrderDetailModal({
                 )}
 
                 {!hasInvoice ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    {(detail as any)?.partner_partner_type === "individual" && (
-                      <Input
-                        value={clientDisplayName}
-                        onChange={(e) => setClientDisplayName(e.target.value)}
-                        placeholder="Име на клиента (по желание)"
-                        className="w-60 h-9"
-                        title="Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
-                      />
-                    )}
-                    {/* Free-text note printed below totals on the PDF */}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {(detail as any)?.partner_partner_type ===
+                        "individual" && (
+                        <>
+                          <Input
+                            value={clientDisplayName}
+                            onChange={(e) =>
+                              setClientDisplayName(e.target.value)
+                            }
+                            placeholder="Име на клиента (по желание)"
+                            className="w-60 h-9"
+                            disabled={!!partnerOverride}
+                            title={
+                              partnerOverride
+                                ? "Не се ползва, докато фактурата е насочена към фирма."
+                                : "Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
+                            }
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={() => setPartnerOverrideOpen(true)}
+                            className="border-blue-600 text-blue-700 hover:bg-blue-50"
+                          >
+                            <Building2 className="h-4 w-4" />
+                            {partnerOverride
+                              ? "Промени фирма"
+                              : "Издай на фирма"}
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        onClick={() => invoiceMutation.mutate(detail.id)}
+                        disabled={invoiceMutation.isPending}
+                        className="bg-[#f97316] hover:bg-[#ea580c]"
+                      >
+                        {invoiceMutation.isPending ? (
+                          <Spinner size="sm" />
+                        ) : (
+                          <FileText className="h-4 w-4" />
+                        )}
+                        Генерирай фактура {!includeVat && "(без ДДС)"}
+                      </Button>
+                    </div>
+                    {/* Batch G+H — Free-text note printed below totals on the PDF */}
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border w-full">
                       <span className="text-xs text-gray-500 shrink-0">
                         Забележка:
@@ -1439,7 +1566,7 @@ function OrderDetailModal({
                         className="flex-1 px-2 py-1 text-xs border rounded"
                       />
                     </div>
-                    {/* VAT-exemption legal basis — only when issuing without VAT */}
+                    {/* Batch G+H — VAT-exemption legal basis (only when no-VAT) */}
                     {!includeVat && (
                       <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 rounded-lg border border-amber-200 w-full">
                         <span className="text-xs text-amber-700 shrink-0">
@@ -1463,18 +1590,23 @@ function OrderDetailModal({
                         </datalist>
                       </div>
                     )}
-                    <Button
-                      onClick={() => invoiceMutation.mutate(detail.id)}
-                      disabled={invoiceMutation.isPending}
-                      className="bg-[#f97316] hover:bg-[#ea580c]"
-                    >
-                      {invoiceMutation.isPending ? (
-                        <Spinner size="sm" />
-                      ) : (
-                        <FileText className="h-4 w-4" />
-                      )}
-                      Генерирай фактура {!includeVat && "(без ДДС)"}
-                    </Button>
+                    {partnerOverride && (
+                      <div className="text-xs flex items-center gap-1 px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 self-start">
+                        <span>
+                          Фактура на: <b>{partnerOverride.name}</b> (ЕИК{" "}
+                          {partnerOverride.eik})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPartnerOverride(null)}
+                          className="ml-1 text-amber-600 hover:text-amber-900"
+                          title="Премахни"
+                          aria-label="Премахни override-а"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -1633,26 +1765,51 @@ function OrderDetailModal({
                 <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
                   Документи:
                 </span>
-                <Button
-                  variant="outline"
-                  onClick={() => handleDocDownload(detail.id, "stock-dispatch")}
-                  className="text-emerald-600 border-emerald-300 hover:bg-emerald-50"
-                >
-                  <ClipboardList className="h-4 w-4" />
-                  Стокова разписка
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    handleDocDownload(detail.id, "stock-dispatch", {
-                      pricingMode: "gross",
-                    })
-                  }
-                  className="text-emerald-700 border-emerald-400 hover:bg-emerald-50"
-                >
-                  <ClipboardList className="h-4 w-4" />
-                  Стокова разписка (с ДДС)
-                </Button>
+                <div className="inline-flex">
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      handleDocDownload(detail.id, "stock-dispatch", {
+                        pricingMode: "gross",
+                      })
+                    }
+                    className="text-emerald-700 border-emerald-400 hover:bg-emerald-50 rounded-r-none border-r-0"
+                    title="Стокова разписка с ДДС (по подразбиране)"
+                  >
+                    <ClipboardList className="h-4 w-4" />
+                    Стокова разписка
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="text-emerald-700 border-emerald-400 hover:bg-emerald-50 rounded-l-none px-2"
+                        title="Избери дали с или без ДДС"
+                        aria-label="Избери дали с или без ДДС"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem
+                        onClick={() =>
+                          handleDocDownload(detail.id, "stock-dispatch", {
+                            pricingMode: "gross",
+                          })
+                        }
+                      >
+                        💶 Стокова разписка (с ДДС)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() =>
+                          handleDocDownload(detail.id, "stock-dispatch")
+                        }
+                      >
+                        🧾 Стокова разписка (без ДДС)
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
                 <Button
                   variant="outline"
                   onClick={() => handleDocDownload(detail.id, "commercial-doc")}
@@ -1664,7 +1821,7 @@ function OrderDetailModal({
                 <Button
                   variant="outline"
                   onClick={() => handleDocDownload(detail.id, "warranty")}
-                  className="text-amber-700 border-amber-300 hover:bg-amber-50 ml-auto"
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50 ml-auto mr-2"
                   title="Гаранционна карта (сериен номер = номер на поръчката)"
                 >
                   <ShieldCheck className="h-4 w-4" />
@@ -1936,6 +2093,162 @@ function OrderDetailModal({
           proceed?.();
         }}
       />
+
+      {/* Batch D — partner override sub-dialog */}
+      <Dialog open={partnerOverrideOpen} onOpenChange={setPartnerOverrideOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Издай фактура на фирма</DialogTitle>
+          </DialogHeader>
+
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant={overrideMode === "existing" ? "default" : "outline"}
+              onClick={() => setOverrideMode("existing")}
+            >
+              Съществуваща
+            </Button>
+            <Button
+              size="sm"
+              variant={overrideMode === "new" ? "default" : "outline"}
+              onClick={() => setOverrideMode("new")}
+            >
+              + Нов партньор
+            </Button>
+          </div>
+
+          {overrideMode === "existing" ? (
+            <div>
+              <Label>Партньор</Label>
+              <Combobox
+                items={overridePartners
+                  .filter((p) => (p as any).partner_type !== "individual")
+                  .map((p) => ({
+                    value: String(p.id),
+                    label: p.name,
+                    hint: p.eik ? `ЕИК: ${p.eik}` : undefined,
+                  }))}
+                value={
+                  overrideExistingId != null ? String(overrideExistingId) : ""
+                }
+                onChange={(v) => setOverrideExistingId(v ? Number(v) : null)}
+                placeholder="Търси по име или ЕИК"
+              />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div>
+                <Label>Име *</Label>
+                <Input
+                  value={newPartner.name}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({ ...p, name: e.target.value }))
+                  }
+                  placeholder="напр. Фирма Х ЕООД"
+                />
+              </div>
+              <div>
+                <Label>ЕИК *</Label>
+                <Input
+                  value={newPartner.eik}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({ ...p, eik: e.target.value }))
+                  }
+                  placeholder="9–13 цифри"
+                />
+              </div>
+              <div>
+                <Label>ДДС №</Label>
+                <Input
+                  value={newPartner.vat_number}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      vat_number: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Адрес</Label>
+                <Input
+                  value={newPartner.address}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      address: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Град</Label>
+                <Input
+                  value={newPartner.city}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({ ...p, city: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Контактно лице</Label>
+                <Input
+                  value={newPartner.contact_person}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      contact_person: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Телефон</Label>
+                <Input
+                  value={newPartner.phone}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      phone: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPartnerOverrideOpen(false)}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={() => {
+                if (overrideMode === "existing") {
+                  const picked = overridePartners.find(
+                    (p) => p.id === overrideExistingId,
+                  );
+                  if (!picked) return;
+                  setPartnerOverride({
+                    partner_id: picked.id,
+                    name: picked.name,
+                    eik: picked.eik,
+                  });
+                } else {
+                  if (!newPartner.name.trim() || !newPartner.eik.trim()) return;
+                  setPartnerOverride({ ...newPartner });
+                }
+                setPartnerOverrideOpen(false);
+              }}
+            >
+              Запази
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -2851,6 +3164,11 @@ function CreateOrderModal({
       }
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
+      // If saved as quoted, open the offer PDF in a new tab so the cashier
+      // can hand it to the customer immediately.
+      if (createdOrder?.status === "quoted" && createdOrder.id) {
+        window.open(`/api/orders/${createdOrder.id}/offer-pdf`, "_blank");
+      }
       if (onCreated && createdOrder && createdOrder.id) {
         // Open detail modal directly — user sees order summary
         onClose();
@@ -2918,7 +3236,7 @@ function CreateOrderModal({
   // already a UI-level gate (button visibility) so we don't double-check
   // it here. allow_below_cost is sent to the API only when the admin
   // explicitly confirmed the dialog.
-  const submitCreateOrder = async () => {
+  const submitCreateOrder = async ({ asQuoted = false } = {}) => {
     setErrorMsg("");
     if (hasBelowCost) {
       if (!canOverrideBelowCost) {
@@ -2936,15 +3254,19 @@ function CreateOrderModal({
       });
       if (!ok) return;
     }
-    const oversell = computeOversellItems();
-    if (oversell.length > 0) {
-      setPendingOversell({
-        items: oversell,
-        proceed: () => mutation.mutate({ allow_below_cost: hasBelowCost }),
-      });
-      return;
+    // Skip oversell guard for quoted orders — they don't deduct stock.
+    if (!asQuoted) {
+      const oversell = computeOversellItems();
+      if (oversell.length > 0) {
+        setPendingOversell({
+          items: oversell,
+          proceed: () =>
+            mutation.mutate({ allow_below_cost: hasBelowCost, asQuoted }),
+        });
+        return;
+      }
     }
-    mutation.mutate({ allow_below_cost: hasBelowCost });
+    mutation.mutate({ allow_below_cost: hasBelowCost, asQuoted });
   };
 
   // Ctrl/Cmd+Enter anywhere in the dialog submits the order.
@@ -3483,6 +3805,18 @@ function CreateOrderModal({
               >
                 <AlertTriangle className="h-4 w-4" />
                 Потвърди въпреки липсата
+              </Button>
+            )}
+            {!orderCreated && (
+              <Button
+                variant="outline"
+                onClick={() => void submitCreateOrder({ asQuoted: true })}
+                disabled={!canSubmit || mutation.isPending}
+                className="border-amber-500 text-amber-700 hover:bg-amber-50"
+                title="Запази без изваждане от наличности и отвори PDF на офертата"
+              >
+                <FileText className="h-4 w-4" />
+                Запази като оферта
               </Button>
             )}
             {!orderCreated && (!hasStockIssues || confirmOverstock) && (
