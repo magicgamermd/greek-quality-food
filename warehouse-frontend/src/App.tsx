@@ -35,6 +35,7 @@ import { NotFound } from "@/pages/NotFound";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { PermissionProvider } from "@/contexts/PermissionContext";
 import { UsersListPage } from "@/pages/admin/UsersListPage";
+import { UserDetailPage } from "@/pages/admin/UserDetailPage";
 import { RequirePermission } from "@/components/RequirePermission";
 import { PERMISSIONS } from "@/lib/permissions";
 
@@ -245,6 +246,14 @@ function AppRoutes() {
           element={
             <RequirePermission permission={PERMISSIONS.USERS_MANAGE}>
               <UsersListPage />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="settings/users/:id"
+          element={
+            <RequirePermission permission={PERMISSIONS.USERS_MANAGE}>
+              <UserDetailPage />
             </RequirePermission>
           }
         />

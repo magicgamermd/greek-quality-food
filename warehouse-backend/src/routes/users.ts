@@ -105,6 +105,29 @@ export default async function usersRoutes(app: FastifyInstance) {
     },
   );
 
+  // GET /users/:id — Get single user by id (admin only)
+  app.get(
+    "/:id",
+    {
+      preHandler: [
+        async (req: FastifyRequest) => {
+          await req.jwtVerify();
+        },
+        requirePermission(PERMISSIONS.USERS_MANAGE),
+      ],
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const { rows } = await query(
+        "SELECT id, name, email, role, created_at FROM users WHERE id = $1",
+        [id],
+      );
+      if (rows.length === 0)
+        return reply.status(404).send({ error: "User not found" });
+      return rows[0];
+    },
+  );
+
   // PATCH /users/:id/role — Change user role (admin only)
   app.patch(
     "/:id/role",
@@ -133,6 +156,12 @@ export default async function usersRoutes(app: FastifyInstance) {
        RETURNING id, name, email, role, created_at`,
         [body.role, id],
       );
+
+      // Role changed — clear permission cache + delete all overrides (slate reset).
+      await invalidateUserPermissions(id);
+      await query("DELETE FROM user_permission_overrides WHERE user_id = $1", [
+        id,
+      ]);
 
       return rows[0];
     },
