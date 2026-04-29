@@ -1611,6 +1611,17 @@ export default async function orderRoutes(app: FastifyInstance) {
           });
         }
 
+        // Quoted orders may only be cancelled via this endpoint. The
+        // pending-confirmed-processing-fulfilled flow is reachable only
+        // through POST /:id/unquote → /confirm → … (so the cashier never
+        // accidentally activates an offer).
+        if (current.status === "quoted" && status !== "cancelled") {
+          return reply.status(400).send({
+            error:
+              "Оферта не може да преминава директно към работен поток. Използвай 'Премини към обработка'.",
+          });
+        }
+
         // If cancelling a fulfilled order, return stock first
         if (status === "cancelled" && current.status === "fulfilled") {
           await restoreOrderItemsToInventory(client, Number(id));
@@ -1716,6 +1727,14 @@ export default async function orderRoutes(app: FastifyInstance) {
           throw Object.assign(new Error("Cannot fulfill cancelled order"), {
             statusCode: 400,
           });
+        }
+        if (order.status === "quoted") {
+          throw Object.assign(
+            new Error(
+              "Cannot fulfill a quoted order — convert to pending first.",
+            ),
+            { statusCode: 400 },
+          );
         }
 
         const { rows: items } = await client.query(
