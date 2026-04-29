@@ -28,6 +28,20 @@ async function buildApp(role: string) {
 describe("GET /auth/me with permissions", () => {
   beforeEach(() => mockQuery.mockReset());
 
+  it("returns 404 when user row is missing", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] } as any);
+
+    const app = await buildApp("admin");
+    try {
+      const res = await app.inject({ method: "GET", url: "/auth/me" });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error).toBe("User not found");
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("returns user + permissions for sales role", async () => {
     // First query: SELECT user by id
     mockQuery.mockResolvedValueOnce({
