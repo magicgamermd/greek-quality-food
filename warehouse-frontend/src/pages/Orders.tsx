@@ -4419,6 +4419,7 @@ export function Orders() {
         {[
           "",
           "pending",
+          "quoted",
           "confirmed",
           "processing",
           "fulfilled",
