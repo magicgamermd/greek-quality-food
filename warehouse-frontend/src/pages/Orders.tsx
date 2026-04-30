@@ -2205,7 +2205,7 @@ function OrderDetailModal({
               Отказ
             </Button>
             <Button
-              onClick={() => {
+              onClick={async () => {
                 if (!detail) return;
                 const params = new URLSearchParams();
                 if (protocolPlace.trim())
@@ -2216,10 +2216,27 @@ function OrderDetailModal({
                 if (protocolBuyerRep.trim())
                   params.set("buyer_rep", protocolBuyerRep.trim());
                 const qs = params.toString();
-                window.open(
-                  `/api/orders/${detail.id}/protocol-pdf${qs ? "?" + qs : ""}`,
-                  "_blank",
-                );
+                try {
+                  // Fetch as blob via the api wrapper (carries the JWT) —
+                  // window.open on the raw URL fails with 401 because the
+                  // browser strips the Authorization header on cross-context
+                  // navigation.
+                  const res = await api.get(
+                    `/orders/${detail.id}/protocol-pdf${qs ? "?" + qs : ""}`,
+                    { responseType: "blob" },
+                  );
+                  const blob = new Blob([res.data], {
+                    type: "application/pdf",
+                  });
+                  const url = URL.createObjectURL(blob);
+                  window.open(url, "_blank");
+                  setTimeout(() => URL.revokeObjectURL(url), 60000);
+                } catch (err: any) {
+                  toast.error(
+                    err?.response?.data?.error ||
+                      "Грешка при сваляне на протокола",
+                  );
+                }
                 setProtocolDialogOpen(false);
               }}
               className="bg-purple-600 hover:bg-purple-700"
