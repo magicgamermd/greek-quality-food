@@ -5,10 +5,10 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-29 (Batches D and G+H merged into main)
-**Active branch:** `main`
+**Last updated:** 2026-04-30 (Daily Report PR ready to merge)
+**Active branch:** `feature/MERTM-daily-report`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active feature:** Employee role + per-user permission overrides — **COMPLETE** (Phases 1–9). All 27 tasks committed. Backend: DB migration 053 + 16-permission registry + Redis-cached resolver + 5 REST endpoints (/auth/me extended, /permissions/registry, GET/PATCH/DELETE /users/:id/permissions, GET /users/:id/audit). Frontend: PermissionContext + Can/RequirePermission + permission-driven sidebar + admin UI at /settings/users/:id. E2E test scenarios cover sales role + admin matrix + lockout. Pending follow-ups documented below.
+**Active feature:** Daily Report (Дневен отчет) — **CODE COMPLETE**. New `GET /reports/daily-pdf` endpoint + 6-section A4 PDF service + Dashboard date-picker dialog with authed blob download. REPORTS_VIEW permission gate (admin + accountant); warehouse blocked. 7 unit/integration tests passing; offer-pdf currency bug fixed in same PR. Manual E2E (Task 8 in plan, 5-step script) deferred to user verification before merge.
 
 ---
 
@@ -60,6 +60,20 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 ---
 
 ## Done — Recent Sessions
+
+**Daily Report (Дневен отчет)** (2026-04-30, branch `feature/MERTM-daily-report` from main):
+
+- New endpoint `GET /reports/daily-pdf?date=YYYY-MM-DD` returns a 6-section A4 PDF: Поръчки (per-order list + summary by status), Фактури (active/credit-noted/cancelled + per-payment-method breakdown), Постъпления (real cash inflow by method), Еконт доставки (only if any), Неплатени (top 10 oldest unpaid AS OF end-of-day), Top 5 артикула.
+- New service `services/daily-report-pdf.ts` mirroring `offer-pdf.ts`; auto-page-break for long order lists; local `fmtEur` wrapper appends " €" to all amounts.
+- 7 aggregation SQL queries inside `assembleDailyReportData` — uses Batch B's `name_bg_snapshot` / `sku_snapshot` for top products.
+- Permission `REPORTS_VIEW` already in registry (admin + accountant); warehouse blocked.
+- Frontend Dashboard gets a "Дневен отчет" button (gated by `<Can permission={REPORTS_VIEW}>`) → date-picker dialog → authed blob fetch → opens PDF in new tab. Local-tz date helper (`toLocaleDateString("sv-SE")`) avoids UTC midnight off-by-one. In-flight guard disables button during download (`Сваляне…`); blob-error path reads `Blob.text()` → `JSON.parse` so backend error messages reach the user.
+- All amounts in EUR via existing `formatEurAmount`.
+- 5 integration tests (`reports-daily.test.ts`): admin happy default + explicit date, 400 invalid format, 403 warehouse, 200 future date.
+- 2 unit tests (`daily-report-pdf.test.ts`): non-empty PDF for a populated day, valid PDF for an empty day. (Third test for Еконт-mixed path was added after spec review caught the missing case.)
+- Bonus bug fix: `services/offer-pdf.ts` was using `fmtBGN` (" лв.") — switched to `formatEurAmount` (€) via local `fmtEur` wrapper to match daily-report and codebase EUR migration.
+- BE+FE type-check clean; new tests passing (orders-quotation 7/7 still green after offer-pdf swap).
+- **Open item:** manual E2E (Task 8 in plan, 5-step script) deferred to post-merge user verification.
 
 **Batch E — Quotation (Оферта)** (2026-04-29, branch `feature/MERTM-batch-e-quotation` from main):
 
