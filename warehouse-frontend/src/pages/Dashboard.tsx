@@ -70,16 +70,19 @@ const kpiCards = [
   },
 ];
 
+const todayLocal = (): string => new Date().toLocaleDateString("sv-SE");
+
 export function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
   const [dailyReportOpen, setDailyReportOpen] = useState(false);
-  const [reportDate, setReportDate] = useState<string>(
-    new Date().toISOString().slice(0, 10),
-  );
+  const [reportDate, setReportDate] = useState<string>(todayLocal());
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const downloadDailyReport = async () => {
+    if (isDownloading) return;
+    setIsDownloading(true);
     try {
       const res = await api.get(`/reports/daily-pdf?date=${reportDate}`, {
         responseType: "blob",
@@ -90,7 +93,20 @@ export function Dashboard() {
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       setDailyReportOpen(false);
     } catch (err: any) {
-      toast.error(err?.response?.data?.error || "Грешка при сваляне на отчета");
+      console.error("Error downloading daily report:", err);
+      let msg = "Грешка при сваляне на отчета";
+      try {
+        if (err?.response?.data instanceof Blob) {
+          const text = await err.response.data.text();
+          const json = JSON.parse(text);
+          if (json.error) msg = json.error;
+        } else if (err?.response?.data?.error) {
+          msg = err.response.data.error;
+        }
+      } catch {}
+      toast.error(msg);
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -392,7 +408,7 @@ export function Dashboard() {
               type="date"
               value={reportDate}
               onChange={(e) => setReportDate(e.target.value)}
-              max={new Date().toISOString().slice(0, 10)}
+              max={todayLocal()}
             />
           </div>
           <DialogFooter>
@@ -401,10 +417,11 @@ export function Dashboard() {
             </Button>
             <Button
               onClick={() => void downloadDailyReport()}
+              disabled={isDownloading}
               className="bg-[#f97316] hover:bg-[#ea580c]"
             >
               <Printer className="h-4 w-4" />
-              Свали PDF
+              {isDownloading ? "Сваляне…" : "Свали PDF"}
             </Button>
           </DialogFooter>
         </DialogContent>
