@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Parse ПРОДУКТИ.txt (full Microinvest nomenclature) -> CSV + SQL.
+
+Differences vs. parse_zhelezarya.py:
+  * 3 price columns (Доставна / Цена на дребно / Цена на едро)
+  * Many products have 0 quantity (full nomenclature, not just stock report)
+  * Some products have NO microinvest code (the name overflows the code column)
+  * 35 different unit spellings — normalised to a small canonical set
+  * One known dup (CHВЕ3148) — second occurrence dropped
+"""
+from __future__ import annotations
+import csv
+import hashlib
+import re
+import sys
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Optional
+
+SRC = Path("/Users/magic/Projects/mert-m/data-imports/produkti.utf8.txt")
+OUT_CSV = Path("/Users/magic/Projects/mert-m/data-imports/produkti.csv")
+OUT_SQL = Path("/Users/magic/Projects/mert-m/data-imports/produkti-import.sql")
+
+ITEM_RE = re.compile(r"^ {10}\S")
+SKIP_TOKENS = ("СПРАВКА", "Дата:", "стр.", "ОБЩО ЗА ОБЕКТА", "ЦЕНТРАЛЕН")
+
+# All 35 unit variants normalised to a small set. Anything unknown
+# falls through and is stored verbatim.
+UNIT_MAP = {
+    "БР":   "pcs",  "БР.":  "pcs", "бр.": "pcs", "БР...": "pcs",
+    "(БР.": "pcs",  "БЕ":   "pcs",
+    "КУТИЯ": "box", "КУТУЯ": "box", "КАШОН": "box",
+    "ТОП":  "bundle", "ТОП.": "bundle",
+    "М.":   "m", "М..":  "m", "МЕТРИ": "m", "метри": "m", "метър": "m",
+    "МЕТЪР": "m", "метра": "m", "МЕТРА": "m",
+    "РОЛКА": "roll",
+    "КГ.":  "kg", "КГ":   "kg",
+    "ПАКЕТ": "pack", "СТЕК":  "pack",
+    "БЛ-Р": "blister", "БЛИСТ": "blister",
+    "К-Т":  "set", "КОМПЛ": "set",
+    "КВ.М": "m2", "КВ.М.": "m2", "КВ.M": "m2", "КВ.": "m2",
+    "ТОРБА": "bag",
+    "ЧИФТ": "pair",
+    "ТОН":  "ton",
+}
+
+
+def parse_dec(token: str) -> Optional[Decimal]:
+    token = token.strip()
+    if not token:
+        return None
+    try:
+        return Decimal(token)
+    except InvalidOperation:
+        return None
+
+
+def synthetic_sku(name: str) -> str:
+    h = hashlib.md5(name.encode("utf-8")).hexdigest()[:10].upper()
+    return f"NOC-{h}"
+
+
+def main() -> int:
+    rows = []
+    seen_codes: set[str] = set()
+    seen_skus: set[str] = set()
+    duplicates_dropped = 0
+
+    with SRC.open(encoding="utf-8") as f:
+        for lineno, raw in enumerate(f, start=1):
+            line = raw.rstrip("\r\n")
+            if not ITEM_RE.match(line):
+                continue
+            stripped = line.strip()
+            if not stripped or any(t in line for t in SKIP_TOKENS):
+                continue
+            if stripped.startswith(("---", "===")):
+                continue
+            # Header row "Код             Стока ..."
+            if stripped.startswith("Код"):
+                continue
+
+            code_zone = line[10:26].strip()
+            name_zone = line[26:57].strip()
+            unit_zone = line[57:65].strip()
+            tail = line[65:].split()
+            if len(tail) != 7:
+                continue
+            qty, purch, _t1, retail, _t2, sell, _t3 = (parse_dec(t) for t in tail)
+            if any(v is None for v in (qty, purch, retail, sell)):
+                continue
+
+            # Trust the column position: anything in the code zone IS the code.
+            # Only fall back to NOC- when the code zone is genuinely empty.
+            if code_zone:
+                code = code_zone
+                name = name_zone
+                sku = code
+            else:
+                code = ""
+                name = line[10:57].strip()
+                sku = synthetic_sku(name)
+
+            # Drop true duplicates (same code, same name): one occurrence only
+            dedup_key = (code, name) if code else (None, name)
+            if dedup_key in seen_skus:
+                duplicates_dropped += 1
+                continue
+            seen_skus.add(dedup_key)
+            if code:
+                seen_codes.add(code)
+
+            unit = UNIT_MAP.get(unit_zone, unit_zone.lower() or "pcs")
+
+            rows.append({
+                "lineno":  lineno,
+                "code":    code,        # may be ""
+                "sku":     sku,
+                "name_bg": name,
+                "unit":    unit,
+                "unit_raw": unit_zone,
+                "quantity": qty,
+                "purchase_price": purch,
+                "retail_price":   retail,
+                "selling_price":  sell,
+            })
+
+    # ---- CSV ----
+    with OUT_CSV.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "sku", "microinvest_code", "name_bg", "unit", "unit_raw",
+            "quantity", "purchase_price", "retail_price", "selling_price",
+        ])
+        for r in rows:
+            w.writerow([
+                r["sku"], r["code"], r["name_bg"], r["unit"], r["unit_raw"],
+                r["quantity"], r["purchase_price"], r["retail_price"], r["selling_price"],
+            ])
+
+    # ---- SQL ----
+    sql = []
+    sql.append("-- ПРОДУКТИ full nomenclature import — generated by parse_produkti.py")
+    sql.append(f"-- Source: {SRC.name}")
+    sql.append(f"-- Items: {len(rows)} (duplicates dropped: {duplicates_dropped})")
+    sql.append("")
+    sql.append("BEGIN;")
+    sql.append("")
+    sql.append("CREATE TEMP TABLE _produkti_stage (")
+    sql.append("  sku              VARCHAR(50)   NOT NULL,")
+    sql.append("  microinvest_code VARCHAR(50),")
+    sql.append("  name_bg          VARCHAR(255)  NOT NULL,")
+    sql.append("  unit             VARCHAR(20)   NOT NULL,")
+    sql.append("  quantity         NUMERIC(12,3) NOT NULL,")
+    sql.append("  purchase_price   NUMERIC(10,2),")
+    sql.append("  retail_price     NUMERIC(10,2),")
+    sql.append("  selling_price    NUMERIC(10,2)")
+    sql.append(") ON COMMIT DROP;")
+    sql.append("")
+
+    def q(s: str) -> str:
+        return s.replace("'", "''")
+
+    def numornull(v):
+        return "NULL" if v is None or v == 0 else str(v)
+
+    for r in rows:
+        code_lit = "NULL" if not r["code"] else f"'{q(r['code'])}'"
+        sql.append(
+            "INSERT INTO _produkti_stage VALUES "
+            f"('{q(r['sku'])}', {code_lit}, '{q(r['name_bg'])}', '{q(r['unit'])}', "
+            f"{r['quantity']}, {numornull(r['purchase_price'])}, "
+            f"{numornull(r['retail_price'])}, {numornull(r['selling_price'])});"
+        )
+
+    sql.extend([
+        "",
+        "-- 1) UPSERT products by SKU",
+        "INSERT INTO products (",
+        "    name_bg, name_en, sku, microinvest_code, unit,",
+        "    purchase_price, retail_price, selling_price,",
+        "    is_active",
+        ")",
+        "SELECT s.name_bg, s.name_bg, s.sku, s.microinvest_code, s.unit,",
+        "       s.purchase_price, s.retail_price, s.selling_price,",
+        "       true",
+        "  FROM _produkti_stage s",
+        "ON CONFLICT (sku) DO UPDATE SET",
+        "    name_bg          = EXCLUDED.name_bg,",
+        "    microinvest_code = COALESCE(EXCLUDED.microinvest_code, products.microinvest_code),",
+        "    unit             = EXCLUDED.unit,",
+        "    purchase_price   = COALESCE(EXCLUDED.purchase_price, products.purchase_price),",
+        "    retail_price     = COALESCE(EXCLUDED.retail_price, products.retail_price),",
+        "    selling_price    = COALESCE(EXCLUDED.selling_price, products.selling_price),",
+        "    updated_at       = NOW();",
+        "",
+        "-- 2) UPSERT inventory in default warehouse (id = 1)",
+        "INSERT INTO inventory (product_id, batch_id, warehouse_id, quantity)",
+        "SELECT p.id, NULL, 1, s.quantity",
+        "  FROM _produkti_stage s",
+        "  JOIN products p ON p.sku = s.sku",
+        "ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL DO UPDATE SET",
+        "    quantity   = EXCLUDED.quantity,",
+        "    updated_at = NOW();",
+        "",
+        "-- Sanity checks",
+        "DO $$",
+        "DECLARE",
+        "  staged INT; products_total INT; inv_total INT; inv_nonzero INT;",
+        "BEGIN",
+        "  SELECT COUNT(*) INTO staged FROM _produkti_stage;",
+        "  SELECT COUNT(*) INTO products_total FROM products;",
+        "  SELECT COUNT(*) INTO inv_total FROM inventory WHERE warehouse_id = 1;",
+        "  SELECT COUNT(*) INTO inv_nonzero FROM inventory WHERE warehouse_id = 1 AND quantity > 0;",
+        "  RAISE NOTICE 'staged=%  products_total=%  inv_total=%  inv_nonzero=%',",
+        "               staged, products_total, inv_total, inv_nonzero;",
+        "END $$;",
+        "",
+        "COMMIT;",
+        "",
+    ])
+
+    OUT_SQL.write_text("\n".join(sql), encoding="utf-8")
+
+    # ---- Report ----
+    total_qty   = sum(r["quantity"] for r in rows)
+    in_stock    = sum(1 for r in rows if r["quantity"] > 0)
+    no_code     = sum(1 for r in rows if not r["code"])
+    with_code   = len(rows) - no_code
+    total_value = sum(r["quantity"] * (r["purchase_price"] or 0) for r in rows)
+
+    print(f"parsed rows:     {len(rows)}")
+    print(f"  with code:     {with_code}")
+    print(f"  no code (NOC): {no_code}")
+    print(f"duplicates drop: {duplicates_dropped}")
+    print(f"in stock (>0):   {in_stock}")
+    print(f"qty total:       {total_qty}")
+    print(f"value (purch):   {total_value:.2f} BGN")
+    print()
+    print(f"-> CSV: {OUT_CSV}")
+    print(f"-> SQL: {OUT_SQL}  (set COMMIT to apply)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

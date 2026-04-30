@@ -26,8 +26,115 @@ const partnersManagePreHandler = [
   requirePermission(PERMISSIONS.PARTNERS_MANAGE),
 ];
 
+// CompanyBook returns the legal form spelled out ("Еднолично дружество с
+// ограничена отговорност") — collapse it to the abbreviation Bulgarian
+// users actually write on invoices ("ЕООД"). If the form is unknown or
+// already short, we fall back to the raw value.
+const LEGAL_FORM_ABBREV: Record<string, string> = {
+  "Еднолично дружество с ограничена отговорност": "ЕООД",
+  "Дружество с ограничена отговорност": "ООД",
+  "Едноличен търговец": "ЕТ",
+  "Еднолично акционерно дружество": "ЕАД",
+  "Акционерно дружество": "АД",
+  "Командитно дружество с акции": "КДА",
+  "Командитно дружество": "КД",
+  "Събирателно дружество": "СД",
+};
+
+function formatCompanyName(
+  name: string | undefined,
+  legalForm: string | undefined,
+): string {
+  const cleanName = (name ?? "").replace(/^"|"$/g, "").trim();
+  if (!cleanName) return "";
+  const cleanForm = (legalForm ?? "").trim();
+  if (!cleanForm) return cleanName;
+  const abbrev = LEGAL_FORM_ABBREV[cleanForm] ?? cleanForm;
+  return cleanName.endsWith(abbrev) ? cleanName : `${cleanName} ${abbrev}`;
+}
+
+// CompanyBook's `registerInfo.address` arrives with the location appended,
+// e.g. "ПРОФ.АЛ.БАЛАБАНОВ №10 обл.КЮСТЕНДИЛ, гр.ДУПНИЦА 2600". The street
+// portion is what users put in the address field on a Bulgarian invoice
+// (city/zip live in their own fields), so we strip the trailing
+// "обл.<X>, гр.<Y> <ZIP>" or just "гр.<Y> <ZIP>" tail.
+function stripCityTail(raw: string | undefined): string {
+  if (!raw) return "";
+  return raw
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\s*обл\.[^,]+,?\s*гр\.[А-ЯЁA-Z\s.-]+(?:\s+\d{4})?\s*$/, "")
+    .replace(/\s*гр\.[А-ЯЁA-Z\s.-]+(?:\s+\d{4})?\s*$/, "")
+    .trim();
+}
+
+// CompanyBook returns settlement as "гр. София" / "с. Бистрица" — strip the
+// "гр./с./к.с./мах." prefix so we end up with just the city name.
+function stripSettlementPrefix(raw: string | undefined): string {
+  return (raw ?? "")
+    .trim()
+    .replace(/^(гр\.|с\.|к\.с\.|мах\.)\s*/i, "")
+    .trim();
+}
+
+type CompanyBookFull = {
+  name: string;
+  legalForm: string;
+  address: string;
+  city: string;
+  vatNumber: string;
+  manager: string;
+  email: string;
+  phone: string;
+};
+
+async function fetchCompanyBook(
+  eik: string,
+  apiKey: string,
+): Promise<CompanyBookFull | "not_found" | null> {
+  const res = await fetch(
+    `https://api.companybook.bg/api/companies/${eik}?with_data=true`,
+    { headers: { "X-API-Key": apiKey } },
+  );
+  if (res.status === 404) return "not_found";
+  if (!res.ok) return null;
+
+  const body = (await res.json()) as {
+    company?: {
+      companyName?: { name?: string };
+      legalForm?: string;
+      seat?: { settlement?: string };
+      contacts?: { phone?: string; email?: string };
+      registerInfo?: { vat?: string; address?: string; settlement?: string };
+      managers?: Array<{ name?: string }>;
+    };
+  };
+  const c = body.company ?? {};
+
+  const managers = (c.managers ?? [])
+    .map((m) => (m?.name ?? "").trim())
+    .filter((n) => n.length > 0);
+
+  const cityFromRegister = stripSettlementPrefix(c.registerInfo?.settlement);
+  const cityFromSeat = stripSettlementPrefix(c.seat?.settlement);
+
+  return {
+    name: c.companyName?.name ?? "",
+    legalForm: c.legalForm ?? "",
+    address: stripCityTail(c.registerInfo?.address ?? ""),
+    city: cityFromRegister || cityFromSeat,
+    vatNumber: c.registerInfo?.vat ?? "",
+    manager: managers.join(", "),
+    email: c.contacts?.email ?? "",
+    phone: c.contacts?.phone ?? "",
+  };
+}
+
 export default async function partnerRoutes(app: FastifyInstance) {
   // GET /partners/lookup/:eik — auto-fill company data from EIK
+  // Backed by CompanyBook (api.companybook.bg) with `?with_data=true`,
+  // which returns the full company record: name, legal form, structured
+  // address, VAT number (when VAT-registered), managers, contacts.
   app.get(
     "/lookup/:eik",
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -38,21 +145,42 @@ export default async function partnerRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "ЕИК трябва да е 9-13 цифри" });
       }
 
+      const apiKey = process.env.COMPANYBOOK_API_KEY;
+      if (!apiKey) {
+        return reply.status(503).send({
+          error:
+            "Lookup услугата не е конфигурирана (COMPANYBOOK_API_KEY липсва)",
+        });
+      }
+
+      let cb: CompanyBookFull | "not_found" | null;
       try {
-        const res = await fetch(`https://papagal.bg/api/eik/${eik}`);
-        if (!res.ok) throw new Error("Not found");
-        const data = (await res.json()) as Record<string, any>;
-        return {
-          name: data.company_name || data.name || "",
-          address: data.address || "",
-          city: data.city || "",
-          vat_number:
-            data.vat_number || (data.is_vat_registered ? `BG${eik}` : ""),
-          manager: data.manager || data.representative || "",
-        };
-      } catch {
+        cb = await fetchCompanyBook(eik, apiKey);
+      } catch (err) {
+        request.log.error({ err, eik }, "CompanyBook fetch failed");
+        return reply
+          .status(502)
+          .send({ error: "Грешка от търговския регистър" });
+      }
+
+      if (cb === "not_found") {
         return reply.status(404).send({ error: "Фирмата не е намерена" });
       }
+      if (cb === null) {
+        return reply
+          .status(502)
+          .send({ error: "Грешка от търговския регистър" });
+      }
+
+      return {
+        name: formatCompanyName(cb.name, cb.legalForm),
+        address: cb.address,
+        city: cb.city,
+        vat_number: cb.vatNumber,
+        manager: cb.manager,
+        email: cb.email,
+        phone: cb.phone,
+      };
     },
   );
 
@@ -64,9 +192,9 @@ export default async function partnerRoutes(app: FastifyInstance) {
     const pageNum = Math.max(1, parseInt(page) || 1);
     // Allow larger page size when catalog=true so dropdown consumers
     // (Orders, Invoices, Partners list) can fetch the full partner
-    // directory in a single request. 5000 is safe — partners rarely
-    // exceed a few hundred in practice.
-    const maxLimit = catalog === "true" ? 5000 : 100;
+    // directory in a single request. Bumped to 25000 to cover the full
+    // Microinvest partner registry (~12.5k entries today).
+    const maxLimit = catalog === "true" ? 25000 : 100;
     const pageSize = Math.min(maxLimit, Math.max(1, parseInt(limit) || 50));
     const offset = (pageNum - 1) * pageSize;
 
