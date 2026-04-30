@@ -238,6 +238,8 @@ export interface Order {
   econt_weight?: number | null;
   econt_shipping_cost?: number | null;
   econt_payer?: "sender" | "receiver" | null;
+  econt_shipment_description?: string | null;
+  econt_shipment_date?: string | null;
   econt_shipment_number?: string | null;
   econt_tracking_url?: string | null;
   econt_pdf_url?: string | null;

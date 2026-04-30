@@ -77,6 +77,14 @@ function buildInitialForm(order: Order): Partial<EcontShippingValue> {
     econt_cod_amount: order.econt_cod_amount ?? 0,
     econt_payer: order.econt_payer ?? "sender",
     econt_has_cod: (order.econt_cod_amount ?? 0) > 0,
+    econt_shipment_description: order.econt_shipment_description ?? "",
+    econt_shipment_date:
+      order.econt_shipment_date ??
+      (() => {
+        const t = new Date();
+        t.setDate(t.getDate() + 1);
+        return t.toISOString().slice(0, 10);
+      })(),
   };
 }
 
@@ -111,6 +119,8 @@ export function EcontShipmentActions({
         econt_weight: form.econt_weight || null,
         econt_cod_amount: form.econt_has_cod ? form.econt_cod_amount || 0 : 0,
         econt_payer: form.econt_payer || "sender",
+        econt_shipment_description: form.econt_shipment_description || null,
+        econt_shipment_date: form.econt_shipment_date || null,
       }),
     onSuccess: () => {
       toast.success("Данните за Еконт са запазени");
@@ -132,13 +142,22 @@ export function EcontShipmentActions({
           receiverName: order.econt_receiver_name,
           receiverPhone: order.econt_receiver_phone,
           receiverCity: order.econt_city,
-          receiverOfficeCode: order.econt_office_code,
-          receiverStreet: order.econt_street,
-          receiverNum: order.econt_street_num,
+          // Send EITHER office OR address — backend treats a truthy
+          // receiverOfficeCode as "office delivery" regardless of street.
+          // Use the order's stored delivery type (or fall back to "office"
+          // if a code is present).
+          ...(order.econt_delivery_type === "address"
+            ? {
+                receiverStreet: order.econt_street,
+                receiverNum: order.econt_street_num,
+              }
+            : { receiverOfficeCode: order.econt_office_code }),
           weight: order.econt_weight || 1,
           codAmount: order.econt_cod_amount || undefined,
           servicesPayer:
             order.econt_payer === "receiver" ? "RECEIVER" : "SENDER",
+          shipmentDescription: order.econt_shipment_description || undefined,
+          shipmentDate: order.econt_shipment_date || undefined,
         },
       ),
     onSuccess: (data) => {

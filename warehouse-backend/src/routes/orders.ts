@@ -128,6 +128,8 @@ const createOrderSchema = z.object({
   econt_weight: z.coerce.number().positive().optional(),
   econt_shipping_cost: z.coerce.number().nonnegative().optional(),
   econt_payer: z.enum(["sender", "receiver"]).optional(),
+  econt_shipment_description: z.string().trim().max(500).optional(),
+  econt_shipment_date: z.string().trim().optional(),
   items: z.array(orderItemSchema).min(1),
   // Admin-only override: explicit acknowledgement that one or more lines
   // are priced below products.purchase_price. Backend re-validates and
@@ -169,6 +171,8 @@ const updateOrderSchema = z.object({
   econt_cod_amount: z.coerce.number().nonnegative().nullish(),
   econt_weight: z.coerce.number().positive().nullish(),
   econt_payer: z.enum(["sender", "receiver"]).nullish(),
+  econt_shipment_description: z.string().trim().max(500).nullish(),
+  econt_shipment_date: z.string().trim().nullish(),
 
   items: z.array(orderItemSchema).min(1).optional(),
   allow_below_cost: z.boolean().optional().default(false),
@@ -902,13 +906,15 @@ export default async function orderRoutes(app: FastifyInstance) {
            econt_city, econt_office_code, econt_office_name,
            econt_street, econt_street_num, econt_cod_amount,
            econt_weight, econt_shipping_cost, econt_payer,
+           econt_shipment_description, econt_shipment_date,
            below_cost_approved_by, below_cost_approved_at, below_cost_details,
            status, order_number
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                 $21, $22, $23,
-                 $24, nextval('order_number_seq'))
+                 $21, $22,
+                 $23, $24, $25,
+                 $26, nextval('order_number_seq'))
          RETURNING *`,
             [
               body.partner_id,
@@ -931,6 +937,8 @@ export default async function orderRoutes(app: FastifyInstance) {
               body.econt_weight ?? null,
               body.econt_shipping_cost ?? null,
               body.econt_payer ?? null,
+              body.econt_shipment_description ?? null,
+              body.econt_shipment_date || null,
               belowCostApprovedBy,
               belowCostApprovedAt,
               belowCostDetails != null
@@ -1328,6 +1336,8 @@ export default async function orderRoutes(app: FastifyInstance) {
             "econt_cod_amount",
             "econt_weight",
             "econt_payer",
+            "econt_shipment_description",
+            "econt_shipment_date",
           ];
           for (const field of econtFields) {
             if (body[field] !== undefined) {

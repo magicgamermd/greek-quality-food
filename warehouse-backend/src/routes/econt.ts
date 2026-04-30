@@ -8,6 +8,27 @@ import {
 
 const ECONT_BASE = "http://ee.econt.com/services";
 
+/**
+ * Normalize any ISO date / datetime / Date object to plain YYYY-MM-DD
+ * (Econt's `sendDate` field format). Returns tomorrow's date when input
+ * is missing / unparseable so address shipments never error out on a
+ * forgotten field.
+ */
+function normalizeIsoDate(input: unknown): string {
+  let d: Date | null = null;
+  if (input instanceof Date && !isNaN(input.getTime())) {
+    d = input;
+  } else if (typeof input === "string" && input.trim()) {
+    const parsed = new Date(input);
+    if (!isNaN(parsed.getTime())) d = parsed;
+  }
+  if (!d) {
+    d = new Date();
+    d.setDate(d.getDate() + 1);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 // In-memory cache for nomenclature (refreshed on restart)
 let citiesCache: any[] | null = null;
 let officesCache: any[] | null = null;
@@ -39,6 +60,28 @@ function getEcontAuth(): string {
   return "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
 }
 
+/** Extract the deepest human-readable message from Econt's nested error JSON. */
+function extractEcontErrorMessage(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as any;
+    const walk = (n: any): string | null => {
+      if (!n) return null;
+      const inner = n.innerErrors;
+      if (Array.isArray(inner) && inner.length > 0) {
+        for (const child of inner) {
+          const m = walk(child);
+          if (m) return m;
+        }
+      }
+      const msg = (n.message || "").toString().trim();
+      return msg && msg !== "Error" ? msg : null;
+    };
+    return walk(parsed) || parsed.message || text.slice(0, 200);
+  } catch {
+    return text.slice(0, 200);
+  }
+}
+
 async function econtPost(
   path: string,
   body: Record<string, unknown>,
@@ -53,8 +96,12 @@ async function econtPost(
   });
   if (!res.ok) {
     const text = await res.text();
-    throw Object.assign(new Error(`Econt API error: ${res.status} ${text}`), {
-      statusCode: 502,
+    // Surface Econt's deepest message so the UI shows the real cause
+    // ("Моля, изберете ден за доставка на пратката", "Невалидно населено
+    // място", etc.) instead of a wall of nested JSON.
+    const friendly = extractEcontErrorMessage(text);
+    throw Object.assign(new Error(`Еконт: ${friendly}`), {
+      statusCode: 400,
     });
   }
   return res.json();
@@ -137,6 +184,39 @@ export default async function econtRoutes(app: FastifyInstance) {
         city: o.address?.city?.name || city,
       }));
     return reply.send({ data: offices });
+  });
+
+  // GET /econt/streets?city_id=… — list streets for a city (autocomplete)
+  app.get("/streets", async (request: FastifyRequest, reply: FastifyReply) => {
+    const authRes = await requireAuth(request, reply);
+    if (authRes) return authRes;
+    const { city_id, q } = request.query as { city_id?: string; q?: string };
+    if (!city_id) return reply.send({ data: [] });
+
+    try {
+      const res = await econtPost(
+        "Nomenclatures/NomenclaturesService.getStreets.json",
+        { cityID: Number(city_id) },
+      );
+      const all = (res.streets || []) as any[];
+      const ql = (q || "").toLowerCase();
+      const filtered = ql
+        ? all.filter(
+            (s: any) =>
+              (s.name || "").toLowerCase().includes(ql) ||
+              (s.nameEn || "").toLowerCase().includes(ql),
+          )
+        : all;
+      return reply.send({
+        data: filtered.slice(0, 50).map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          nameEn: s.nameEn,
+        })),
+      });
+    } catch {
+      return reply.send({ data: [] });
+    }
   });
 
   // POST /econt/calculate
@@ -243,6 +323,8 @@ export default async function econtRoutes(app: FastifyInstance) {
         codAmount?: number;
         shipmentDescription?: string;
         servicesPayer?: "SENDER" | "RECEIVER";
+        /** ISO date YYYY-MM-DD. Required by Econt for address-based delivery. */
+        shipmentDate?: string;
       };
 
       const weight = body.weight || 1;
@@ -255,10 +337,24 @@ export default async function econtRoutes(app: FastifyInstance) {
           name: body.receiverName,
           phones: [body.receiverPhone],
         },
+        // Econt requires receiverAgent (authorized person) when receiverClient
+        // looks like a juridical entity (ООД/ЕООД/АД/etc). Sending the same
+        // name as the agent works for both private and corporate receivers
+        // and avoids error 517 ("За юридическо лице, задължително се
+        // попълва упълномощено лице"). If a real contact person is known
+        // upstream, pass it via body.receiverAgentName.
+        receiverAgent: {
+          name: (body as any).receiverAgentName?.trim() || body.receiverName,
+          phones: [body.receiverPhone],
+        },
         shipmentType,
         weight,
         packCount: 1,
         shipmentDescription: body.shipmentDescription || "Кухненско оборудване",
+        // Econt requires sendDate (YYYY-MM-DD) for address delivery.
+        // Normalize ISO datetime / DATE column to plain date; fall back
+        // to tomorrow if caller didn't pass one.
+        sendDate: normalizeIsoDate(body.shipmentDate),
       };
 
       let officeCode = body.receiverOfficeCode?.trim();
@@ -407,11 +503,21 @@ export default async function econtRoutes(app: FastifyInstance) {
           name: order.econt_receiver_name,
           phones: [order.econt_receiver_phone],
         },
+        // See note in create-shipment: Econt requires receiverAgent for
+        // juridical receivers; mirror the receiver name to satisfy that.
+        receiverAgent: {
+          name: order.econt_receiver_name,
+          phones: [order.econt_receiver_phone],
+        },
         shipmentType:
           weight <= 50 ? "pack" : weight <= 500 ? "cargo" : "pallet",
         weight,
         packCount: 1,
-        shipmentDescription: body.description || "Кухненско оборудване",
+        shipmentDescription:
+          body.description ||
+          order.econt_shipment_description ||
+          "Кухненско оборудване",
+        sendDate: normalizeIsoDate(order.econt_shipment_date),
       };
 
       if (order.econt_office_code) {

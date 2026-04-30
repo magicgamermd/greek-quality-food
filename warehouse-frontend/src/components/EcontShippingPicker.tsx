@@ -28,6 +28,10 @@ export interface EcontShippingValue {
   econt_cod_amount?: number;
   econt_payer?: "sender" | "receiver";
   econt_has_cod?: boolean;
+  /** Free-text — what's inside the parcel. Required by Econt. */
+  econt_shipment_description?: string;
+  /** ISO date YYYY-MM-DD. Required by Econt for address delivery; default = tomorrow. */
+  econt_shipment_date?: string;
 }
 
 export interface EcontShippingPickerProps {
@@ -105,6 +109,32 @@ export function EcontShippingPicker({
     placeholderData: keepPreviousData,
   });
 
+  // Resolve city ID by exact name match — needed for street autocomplete
+  const cityId = useMemo(() => {
+    const list = citiesQuery.data?.data || [];
+    const exact = list.find(
+      (c) => c.name === cityInput || c.nameEn === cityInput,
+    );
+    return exact?.id ?? null;
+  }, [citiesQuery.data, cityInput]);
+
+  const streetInput = value.econt_street ?? "";
+  const debouncedStreet = useDebouncedValue(streetInput);
+  const streetsQuery = useQuery({
+    queryKey: ["econt-streets", cityId, debouncedStreet],
+    queryFn: () =>
+      apiGet<{ data: { id: number; name: string; nameEn?: string }[] }>(
+        apiBaseUrl,
+        token,
+        `/econt/streets?city_id=${cityId}&q=${encodeURIComponent(debouncedStreet)}`,
+      ),
+    enabled:
+      deliveryType === "address" &&
+      cityId !== null &&
+      debouncedStreet.length >= 1,
+    placeholderData: keepPreviousData,
+  });
+
   const officesQuery = useQuery({
     queryKey: ["econt-offices", cityInput],
     queryFn: () =>
@@ -137,8 +167,10 @@ export function EcontShippingPicker({
     queryKey: [
       "econt-price",
       cityInput,
+      deliveryType,
       value.econt_office_code,
       value.econt_street,
+      value.econt_street_num,
       debouncedWeight,
       debouncedCod,
       payer,
@@ -150,9 +182,16 @@ export function EcontShippingPicker({
         "/econt/calculate",
         {
           receiverCity: cityInput,
-          receiverOfficeCode: value.econt_office_code,
-          receiverStreet: value.econt_street,
-          receiverNum: value.econt_street_num,
+          // Send EITHER office OR address — never both. The backend treats a
+          // truthy receiverOfficeCode as "office delivery" regardless of any
+          // street fields, so leftover office_code from a previous picker
+          // state would mask the address selection.
+          ...(deliveryType === "office"
+            ? { receiverOfficeCode: value.econt_office_code }
+            : {
+                receiverStreet: value.econt_street,
+                receiverNum: value.econt_street_num,
+              }),
           weight: debouncedWeight,
           codAmount: hasCod ? debouncedCod || undefined : undefined,
           servicesPayer: payer === "sender" ? "SENDER" : "RECEIVER",
@@ -225,11 +264,25 @@ export function EcontShippingPicker({
               <select
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
                 value={deliveryType}
-                onChange={(e) =>
-                  onChange({
-                    econt_delivery_type: e.target.value as "office" | "address",
-                  })
-                }
+                onChange={(e) => {
+                  const next = e.target.value as "office" | "address";
+                  // Clear the other mode's fields so a stale office_code
+                  // doesn't sneak past the address-mode UI and back into
+                  // the calculate / create-shipment payload.
+                  onChange(
+                    next === "office"
+                      ? {
+                          econt_delivery_type: "office",
+                          econt_street: undefined,
+                          econt_street_num: undefined,
+                        }
+                      : {
+                          econt_delivery_type: "address",
+                          econt_office_code: undefined,
+                          econt_office_name: undefined,
+                        },
+                  );
+                }}
               >
                 <option value="office">До офис на Еконт</option>
                 <option value="address">До адрес</option>
@@ -286,32 +339,76 @@ export function EcontShippingPicker({
               </select>
             </div>
           ) : (
-            <div className="grid grid-cols-[3fr_1fr] gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Улица
-                </label>
-                <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
-                  placeholder="Улица"
-                  value={value.econt_street ?? ""}
-                  onChange={(e) => onChange({ econt_street: e.target.value })}
-                />
+            <>
+              <div className="grid grid-cols-[3fr_1fr] gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Улица
+                  </label>
+                  <input
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                    placeholder={
+                      cityId
+                        ? "Започни да пишеш — Еконт ще предложи улици"
+                        : "Първо избери град от списъка"
+                    }
+                    value={value.econt_street ?? ""}
+                    onChange={(e) => onChange({ econt_street: e.target.value })}
+                    list="econt-street-list"
+                    autoComplete="off"
+                  />
+                  <datalist id="econt-street-list">
+                    {(streetsQuery.data?.data || []).map((s) => (
+                      <option key={s.id} value={s.name} />
+                    ))}
+                  </datalist>
+                  {!cityId && cityInput && (
+                    <p className="text-[11px] text-amber-600 mt-1">
+                      ⚠ Избери град от автокомплит-списъка, за да тръгне
+                      auto-complete на улиците
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    №
+                  </label>
+                  <input
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                    placeholder="№"
+                    value={value.econt_street_num ?? ""}
+                    onChange={(e) =>
+                      onChange({ econt_street_num: e.target.value })
+                    }
+                  />
+                </div>
               </div>
+              {/* Date picker — Econt requires this for address delivery */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  №
+                  Дата на доставка *
                 </label>
                 <input
+                  type="date"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
-                  placeholder="№"
-                  value={value.econt_street_num ?? ""}
+                  value={
+                    value.econt_shipment_date ??
+                    (() => {
+                      const t = new Date();
+                      t.setDate(t.getDate() + 1);
+                      return t.toISOString().slice(0, 10);
+                    })()
+                  }
                   onChange={(e) =>
-                    onChange({ econt_street_num: e.target.value })
+                    onChange({ econt_shipment_date: e.target.value })
                   }
                 />
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Еконт изисква дата на доставка при изпращане до адрес. По
+                  подразбиране — утрешен ден.
+                </p>
               </div>
-            </div>
+            </>
           )}
 
           {/* Row 4: Тежест / Доставка за сметка на */}
@@ -363,6 +460,24 @@ export function EcontShippingPicker({
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Row 4.5: Съдържание на пратката (Econt задължително) */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Съдържание на пратката *
+            </label>
+            <input
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+              placeholder="напр. Кухненско оборудване, хардуерни артикули, мрежи..."
+              value={value.econt_shipment_description ?? ""}
+              onChange={(e) =>
+                onChange({ econt_shipment_description: e.target.value })
+              }
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              Описание какво е в кутията — Еконт изисква това поле.
+            </p>
           </div>
 
           {/* Row 5: Наложен платеж */}
