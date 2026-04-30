@@ -1892,14 +1892,6 @@ function OrderDetailModal({
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => handleDocDownload(detail.id, "commercial-doc")}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  <ScrollText className="h-4 w-4" />
-                  Търговски документ
-                </Button>
-                <Button
-                  variant="outline"
                   onClick={() => handleDocDownload(detail.id, "offer")}
                   className="text-amber-700 border-amber-300 hover:bg-amber-50"
                   title="Оферта (информационна — без задължение)"
