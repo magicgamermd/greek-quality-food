@@ -4,11 +4,7 @@ import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { query } from "../db.js";
-import {
-  PERMISSIONS,
-  requirePermission,
-  type Permission,
-} from "../lib/permissions.js";
+import { PERMISSIONS, requirePermission } from "../lib/permissions.js";
 import {
   generateDailyReportPdf,
   type DailyReportData,
@@ -32,7 +28,7 @@ async function jwtVerify(request: FastifyRequest, reply: FastifyReply) {
 
 const reportsViewPreHandler = [
   jwtVerify,
-  requirePermission(PERMISSIONS.REPORTS_VIEW as Permission),
+  requirePermission(PERMISSIONS.REPORTS_VIEW),
 ];
 
 export default async function reportsRoutes(app: FastifyInstance) {
@@ -48,16 +44,12 @@ export default async function reportsRoutes(app: FastifyInstance) {
           .send({ error: parsed.error.errors[0]?.message ?? "Bad date" });
       }
       const { date } = parsed.data;
-
       const data = await assembleDailyReportData(date, request);
-
       const pdfDir = path.resolve(process.cwd(), "data", "reports");
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
       const outputPath = path.join(pdfDir, `daily-${date}.pdf`);
       data.outputPath = outputPath;
-
       await generateDailyReportPdf(data);
-
       const stream = fs.createReadStream(outputPath);
       const filename = `Дневен_отчет_${date}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
@@ -71,7 +63,6 @@ export default async function reportsRoutes(app: FastifyInstance) {
     },
   );
 }
-
 // Placeholder body — Task 3 replaces this with 7 real aggregation queries.
 // Returns the company name from settings + zero counts everywhere else, so
 // this commit compiles and the route can be tested end-to-end.
