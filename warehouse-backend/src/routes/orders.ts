@@ -1779,11 +1779,22 @@ export default async function orderRoutes(app: FastifyInstance) {
         // MERT-M: simple per-product deduction. COGS snapshot comes from
         // products.purchase_price; batch-sourced COGS (cost_source_batch_id)
         // stays NULL since there are no batches for durable goods.
+        //
+        // Batch F1: branch on line_status —
+        //   - 'awaiting'        → pre-order; skip entirely (no stock, no COGS)
+        //   - 'paid_not_taken'  → customer already paid; allow inventory
+        //                          to go negative (promised stock)
+        //   - 'normal' (default) → standard pre-checked deduction
         for (const item of items) {
+          if (item.line_status === "awaiting") {
+            continue;
+          }
+          const allowNegative = item.line_status === "paid_not_taken";
           const costUnitPrice = await deductProductStock(
             client,
             item.product_id,
             parseFloat(item.quantity),
+            { allowNegative },
           );
 
           await client.query(
