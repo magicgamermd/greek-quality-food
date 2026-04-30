@@ -860,6 +860,19 @@ function OrderDetailModal({
     },
   });
 
+  // Batch F1 — line-status transitions per row (drawer). Both endpoints are
+  // idempotent on the backend; we just refetch after success.
+  const handoverMutation = useMutation({
+    mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) =>
+      api.post(`/orders/${orderId}/items/${itemId}/handover`),
+    onSuccess: () => invalidateAllOrderRelated(),
+  });
+  const confirmAwaitingMutation = useMutation({
+    mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) =>
+      api.post(`/orders/${orderId}/items/${itemId}/confirm-from-awaiting`),
+    onSuccess: () => invalidateAllOrderRelated(),
+  });
+
   // Batch E — Quotation transitions. /quote moves pending → quoted (and
   // opens the offer PDF in a new tab on success). /unquote takes a quoted
   // order back to pending so the normal workflow can resume.
@@ -1301,6 +1314,38 @@ function OrderDetailModal({
                                   <div className="text-xs text-gray-400">
                                     {item.product?.sku || item.sku}
                                   </div>
+                                )}
+                                {lineStatus === "paid_not_taken" && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handoverMutation.mutate({
+                                        orderId: detail.id,
+                                        itemId: item.id,
+                                      })
+                                    }
+                                    disabled={handoverMutation.isPending}
+                                    className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                                    title="Маркирай като предадено (paid_not_taken → normal)"
+                                  >
+                                    ✓ Предадено
+                                  </button>
+                                )}
+                                {lineStatus === "awaiting" && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      confirmAwaitingMutation.mutate({
+                                        orderId: detail.id,
+                                        itemId: item.id,
+                                      })
+                                    }
+                                    disabled={confirmAwaitingMutation.isPending}
+                                    className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-gray-400 text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                    title="Потвърди и извади от наличност (awaiting → normal). Ще откаже ако няма стока."
+                                  >
+                                    ✓ Потвърди
+                                  </button>
                                 )}
                               </div>
                             </div>
@@ -4314,14 +4359,17 @@ export function Orders() {
         ]);
         if (!ok) return false;
       }
-      // Partner — name
-      if (
-        !matchField(
-          order.partner?.name ?? order.partner_name ?? "",
-          filters.partner,
-        )
-      )
-        return false;
+      // Partner — match against the override receiver if any (so a row
+      // displayed as "ЖОКЕР ЕНТЪРТЕЙМЪНТ" is found by typing "ЖОКЕР"), and
+      // still fall back to the original partner name.
+      if (filters.partner.trim()) {
+        const ok = matchesAnyField(filters.partner, [
+          (order as any).invoice_partner_name ?? "",
+          order.partner?.name ?? "",
+          order.partner_name ?? "",
+        ]);
+        if (!ok) return false;
+      }
       // Invoice — invoice_number OR annulled_invoice_number
       if (filters.invoice.trim()) {
         const ok = matchesAnyField(filters.invoice, [
