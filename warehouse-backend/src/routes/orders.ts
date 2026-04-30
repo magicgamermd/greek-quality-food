@@ -445,6 +445,8 @@ export default async function orderRoutes(app: FastifyInstance) {
       q,
       below_cost_only,
       article,
+      has_paid_not_taken,
+      has_awaiting,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -478,6 +480,22 @@ export default async function orderRoutes(app: FastifyInstance) {
     // cannot see purchase_price elsewhere in the app.
     if (below_cost_only === "true") {
       where += ` AND o.below_cost_approved_at IS NOT NULL`;
+    }
+
+    // Batch F1 filter pills — show only orders with the matching line state.
+    // EXISTS keeps the query plan tight (no JOIN cardinality blowup); the
+    // partial index idx_order_items_line_status_pending matches both clauses.
+    if (has_paid_not_taken === "true") {
+      where += ` AND EXISTS (
+        SELECT 1 FROM order_items oi
+        WHERE oi.order_id = o.id AND oi.line_status = 'paid_not_taken'
+      )`;
+    }
+    if (has_awaiting === "true") {
+      where += ` AND EXISTS (
+        SELECT 1 FROM order_items oi
+        WHERE oi.order_id = o.id AND oi.line_status = 'awaiting'
+      )`;
     }
 
     const fromDate = normalizeOptionalText(date_from);
@@ -2514,15 +2532,37 @@ export default async function orderRoutes(app: FastifyInstance) {
     orderId: number,
     db: DbExecutor = { query },
   ) {
+    // Batch D — when an active invoice was issued with `partner_override`,
+    // its receiver (a company) supersedes the original order partner (an
+    // individual) on every transaction document: Стокова разписка, Оферта,
+    // Приемо-предавателен протокол — and the order drawer header. The JOIN
+    // is skipped when the invoice was cancelled or its receiver matches the
+    // original partner (no override took place); deletion clears
+    // orders.invoice_id via FK ON DELETE SET NULL, so that case yields NULL
+    // here too.
     const {
       rows: [order],
     } = await db.query(
-      `SELECT o.*, p.name AS partner_name, p.eik AS partner_eik,
+      `SELECT o.*,
+              p.name AS partner_name, p.eik AS partner_eik,
               p.vat_number AS partner_vat, p.address AS partner_address,
               p.city AS partner_city, p.phone AS partner_phone,
-              p.contact_person AS partner_mol
+              p.contact_person AS partner_mol,
+              p.contact_person AS partner_contact_person,
+              ip.id   AS invoice_partner_id,
+              ip.name AS invoice_partner_name,
+              ip.eik  AS invoice_partner_eik,
+              ip.vat_number AS invoice_partner_vat,
+              ip.address    AS invoice_partner_address,
+              ip.city       AS invoice_partner_city,
+              ip.phone      AS invoice_partner_phone,
+              ip.contact_person AS invoice_partner_mol
        FROM orders o
        JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN invoices inv ON inv.id = o.invoice_id
+                              AND inv.status <> 'cancelled'
+                              AND inv.partner_id <> o.partner_id
+       LEFT JOIN partners ip ON ip.id = inv.partner_id
        WHERE o.id = $1`,
       [orderId],
     );
@@ -2544,6 +2584,37 @@ export default async function orderRoutes(app: FastifyInstance) {
     );
 
     return { order, items };
+  }
+
+  // Pick the partner that should appear as the receiver on transaction
+  // documents (Стокова разписка, Оферта, ППП, header). When an active
+  // invoice override is present (loadOrderWithBatches surfaced
+  // `invoice_partner_*`), prefer it; otherwise fall back to the original
+  // order partner. Keeps the four PDF endpoints uniform without each one
+  // re-implementing the precedence rule.
+  function effectiveReceiver(order: any) {
+    if (order?.invoice_partner_id) {
+      return {
+        name: order.invoice_partner_name,
+        eik: order.invoice_partner_eik,
+        vat_number: order.invoice_partner_vat,
+        address: order.invoice_partner_address,
+        city: order.invoice_partner_city,
+        phone: order.invoice_partner_phone,
+        mol: order.invoice_partner_mol,
+        contact_person: order.invoice_partner_mol,
+      };
+    }
+    return {
+      name: order.partner_name,
+      eik: order.partner_eik,
+      vat_number: order.partner_vat,
+      address: order.partner_address,
+      city: order.partner_city,
+      phone: order.partner_phone,
+      mol: order.partner_mol,
+      contact_person: order.partner_contact_person ?? order.partner_mol,
+    };
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -2604,15 +2675,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         doc_number: docNumber,
         doc_date: order.order_date || order.created_at,
         company,
-        partner: {
-          name: order.partner_name,
-          eik: order.partner_eik,
-          vat_number: order.partner_vat,
-          address: order.partner_address,
-          city: order.partner_city,
-          phone: order.partner_phone,
-          mol: order.partner_mol,
-        },
+        partner: effectiveReceiver(order),
         warehouse_name: "Склад Овча Купел",
         items: items.map((i: any) => ({
           sku: i.sku,
@@ -2682,15 +2745,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         doc_number: docNumber,
         doc_date: order.order_date || order.created_at,
         company,
-        partner: {
-          name: order.partner_name,
-          eik: order.partner_eik,
-          vat_number: order.partner_vat,
-          address: order.partner_address,
-          city: order.partner_city,
-          phone: order.partner_phone,
-          mol: order.partner_mol,
-        },
+        partner: effectiveReceiver(order),
         items: items.map((i: any) => ({
           sku: i.sku,
           name_bg: i.name_bg,
@@ -2763,15 +2818,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         date: (order.order_date || order.created_at || new Date().toISOString())
           .toString()
           .slice(0, 10),
-        partner: {
-          name: order.partner_name,
-          eik: order.partner_eik,
-          vat_number: order.partner_vat,
-          address: order.partner_address,
-          city: order.partner_city,
-          phone: order.partner_phone,
-          contact_person: order.partner_contact_person,
-        },
+        partner: effectiveReceiver(order),
         company: {
           name: company.company_name,
           eik: company.eik,
