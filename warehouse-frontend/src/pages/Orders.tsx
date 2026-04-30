@@ -302,6 +302,7 @@ type PartnerOverride =
       city?: string;
       contact_person?: string;
       phone?: string;
+      email?: string;
     };
 
 export interface ProductSearchHandle {
@@ -555,6 +556,7 @@ function OrderDetailModal({
     city: "",
     contact_person: "",
     phone: "",
+    email: "",
   });
   const [generatedInvoiceId, setGeneratedInvoiceId] = useState<number | null>(
     null,
@@ -610,7 +612,50 @@ function OrderDetailModal({
       contact_person: "",
       phone: "",
     });
+    setEikLookupLoading(false);
+    setEikAutoFilled(false);
   }, [partnerOverrideOpen]);
+
+  // Auto-fill new partner data from the Bulgarian Trade Registry (papagal.bg)
+  // whenever the user types a valid 9- or 13-digit EIK. Debounced to avoid
+  // spamming the API on every keystroke.
+  const [eikLookupLoading, setEikLookupLoading] = useState(false);
+  const [eikAutoFilled, setEikAutoFilled] = useState(false);
+  useEffect(() => {
+    const eik = newPartner.eik.trim();
+    if (!/^\d{9}$|^\d{13}$/.test(eik)) {
+      setEikAutoFilled(false);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setEikLookupLoading(true);
+      try {
+        const res = await api.get(`/partners/lookup/${eik}`);
+        if (cancelled) return;
+        const data = res.data || {};
+        setNewPartner((p) => ({
+          ...p,
+          name: p.name || data.name || "",
+          address: p.address || data.address || "",
+          city: p.city || data.city || "",
+          vat_number: p.vat_number || data.vat_number || "",
+          contact_person: p.contact_person || data.manager || "",
+          phone: p.phone || data.phone || "",
+          email: p.email || data.email || "",
+        }));
+        setEikAutoFilled(true);
+      } catch {
+        // Silent — user can fill manually
+      } finally {
+        if (!cancelled) setEikLookupLoading(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [newPartner.eik]);
 
   // Partners catalog for the override picker. Same query key as the outer
   // page so the cache is shared (no duplicate fetch).
@@ -780,6 +825,7 @@ function OrderDetailModal({
                 contact_person:
                   partnerOverride.contact_person?.trim() || undefined,
                 phone: partnerOverride.phone?.trim() || undefined,
+                email: partnerOverride.email?.trim() || undefined,
               };
       }
       return api.post("/invoices", payload);
@@ -875,6 +921,23 @@ function OrderDetailModal({
       invalidateAllOrderRelated();
       setCancelInvoiceOpen(false);
       setCancelInvoiceReason("");
+    },
+  });
+
+  // DELETE — physically remove an invoice issued by mistake. Only allowed
+  // before order fulfillment; after that, only annul (cancel) is legal.
+  const deleteInvoiceMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/invoices/${id}`),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+      setGeneratedInvoiceId(null);
+    },
+    onError: (err: any) => {
+      const detail =
+        err?.response?.data?.error ||
+        err?.message ||
+        "Неизвестна грешка при изтриване";
+      window.alert(`Грешка: ${detail}`);
     },
   });
 
@@ -1078,12 +1141,6 @@ function OrderDetailModal({
                 <div className="text-xs text-gray-500 mb-1">Стокова №</div>
                 <div className="text-sm">
                   {detail.stock_dispatch_number || "—"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Търговски №</div>
-                <div className="text-sm">
-                  {detail.commercial_document_number || "—"}
                 </div>
               </div>
               <div>
@@ -1786,6 +1843,34 @@ function OrderDetailModal({
                           Сторнирай
                         </Button>
                       )}
+                      {/* Изтрий — само когато поръчката НЕ е изпълнена.
+                          След fulfilled остава само Анулирай (правилен
+                          legal flow при вече изпратени стоки). */}
+                      {!detail.credit_note_id &&
+                        detail.invoice_status !== "cancelled" &&
+                        detail.status !== "fulfilled" &&
+                        detail.status !== "invoiced" && (
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  "Сигурен ли си, че искаш да ИЗТРИЕШ фактурата? Номерът ѝ ще се освободи и ще бъде ползван за следващата.",
+                                )
+                              ) {
+                                deleteInvoiceMutation.mutate(
+                                  detail.invoice_id!,
+                                );
+                              }
+                            }}
+                            className="text-red-600 border-red-300 hover:bg-red-50"
+                            title="Изтрий фактурата физически (само преди поръчката да е изпълнена). Номерът се освобождава."
+                            disabled={deleteInvoiceMutation.isPending}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Изтрий
+                          </Button>
+                        )}
                       {!detail.credit_note_id &&
                         detail.invoice_status !== "cancelled" && (
                           <Button
@@ -1795,7 +1880,7 @@ function OrderDetailModal({
                               setCancelInvoiceReason("");
                             }}
                             className="text-red-600 border-red-300 hover:bg-red-50"
-                            title="Анулирай фактурата (само ако не е ползвана от получателя)"
+                            title="Анулирай фактурата (запазва номера и legal trail)"
                           >
                             <XCircle className="h-4 w-4" />
                             Анулирай
@@ -2326,8 +2411,18 @@ function OrderDetailModal({
                   onChange={(e) =>
                     setNewPartner((p) => ({ ...p, eik: e.target.value }))
                   }
-                  placeholder="9–13 цифри"
+                  placeholder="9–13 цифри (автоматично попълва от Търговски регистър)"
                 />
+                {eikLookupLoading && (
+                  <p className="text-[11px] text-blue-600 mt-1">
+                    🔎 Търся фирмата в Търговски регистър...
+                  </p>
+                )}
+                {eikAutoFilled && !eikLookupLoading && (
+                  <p className="text-[11px] text-emerald-600 mt-1">
+                    ✓ Данните са попълнени автоматично от Търговски регистър
+                  </p>
+                )}
               </div>
               <div>
                 <Label>ДДС №</Label>
@@ -2363,9 +2458,10 @@ function OrderDetailModal({
                 />
               </div>
               <div>
-                <Label>Контактно лице</Label>
+                <Label>МОЛ</Label>
                 <Input
                   value={newPartner.contact_person}
+                  placeholder="Управител / материално отговорно лице"
                   onChange={(e) =>
                     setNewPartner((p) => ({
                       ...p,
@@ -2382,6 +2478,19 @@ function OrderDetailModal({
                     setNewPartner((p) => ({
                       ...p,
                       phone: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>Имейл</Label>
+                <Input
+                  type="email"
+                  value={newPartner.email}
+                  onChange={(e) =>
+                    setNewPartner((p) => ({
+                      ...p,
+                      email: e.target.value,
                     }))
                   }
                 />
@@ -2979,6 +3088,12 @@ function CreateOrderModal({
     econt_cod_amount: 0,
     econt_payer: "sender" as "sender" | "receiver",
     econt_has_cod: false,
+    econt_shipment_description: "",
+    econt_shipment_date: (() => {
+      const t = new Date();
+      t.setDate(t.getDate() + 1);
+      return t.toISOString().slice(0, 10);
+    })(),
   });
   const { token: authToken } = useAuth();
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
@@ -3069,6 +3184,12 @@ function CreateOrderModal({
         econt_cod_amount: 0,
         econt_payer: "sender",
         econt_has_cod: false,
+        econt_shipment_description: "",
+        econt_shipment_date: (() => {
+          const t = new Date();
+          t.setDate(t.getDate() + 1);
+          return t.toISOString().slice(0, 10);
+        })(),
       });
       setItems([emptyItem()]);
       setStockWarnings([]);
@@ -3225,9 +3346,13 @@ function CreateOrderModal({
     (i) => i.product_id && Number(i.quantity) > 0,
   );
   // Line totals respect per-line отстъпка: qty × unit × (1 − disc/100).
+  // Round each line to 2 decimals BEFORE summing, so the displayed total
+  // matches what the backend persists per-row → no 1-cent drift between
+  // the modal and the PDF / order detail.
   const orderTotal = validItems.reduce((sum, i) => {
     const disc = Number(i.discount_percent) || 0;
-    return sum + Number(i.quantity) * Number(i.unit_price) * (1 - disc / 100);
+    const line = Number(i.quantity) * Number(i.unit_price) * (1 - disc / 100);
+    return sum + Math.round(line * 100) / 100;
   }, 0);
   const hasStockIssues = validItems.some(
     (i) =>
@@ -3292,6 +3417,9 @@ function CreateOrderModal({
             ? form.econt_cod_amount
             : undefined,
         econt_payer: form.econt_city ? form.econt_payer : undefined,
+        econt_shipment_description:
+          form.econt_shipment_description?.trim() || undefined,
+        econt_shipment_date: form.econt_shipment_date || undefined,
         items: validItems.map((i) => ({
           product_id: Number(i.product_id),
           quantity: Number(i.quantity),
@@ -3880,6 +4008,9 @@ function CreateOrderModal({
                 econt_cod_amount: form.econt_cod_amount,
                 econt_payer: form.econt_payer,
                 econt_has_cod: form.econt_has_cod,
+                econt_shipment_description:
+                  form.econt_shipment_description || undefined,
+                econt_shipment_date: form.econt_shipment_date || undefined,
               }}
               onChange={(patch) =>
                 setForm((f) => ({
@@ -4078,7 +4209,6 @@ export function Orders() {
     partner: "",
     invoice: "",
     stock_dispatch: "",
-    commercial_doc: "",
     article: "",
   });
   // Article filter is sent to the backend (other text filters are
@@ -4170,9 +4300,6 @@ export function Orders() {
       }
       // Stock dispatch
       if (!matchField(order.stock_dispatch_number, filters.stock_dispatch))
-        return false;
-      // Commercial document
-      if (!matchField(order.commercial_document_number, filters.commercial_doc))
         return false;
 
       // Date range — based on order_date
@@ -4297,12 +4424,16 @@ export function Orders() {
   // ── Document PDF downloads ──
   const handleDocumentDownload = async (
     orderId: number,
-    docType: "stock-dispatch" | "commercial-doc",
+    docType: "stock-dispatch",
   ) => {
     try {
-      const res = await api.get(`/orders/${orderId}/${docType}-pdf`, {
-        responseType: "blob",
-      });
+      // Default to gross pricing (с ДДС) — that's МЕРТ-М's standard format.
+      // The order detail drawer has explicit "без ДДС" item in the dropdown
+      // for the rare case the user needs net.
+      const res = await api.get(
+        `/orders/${orderId}/${docType}-pdf?pricing_mode=gross`,
+        { responseType: "blob" },
+      );
       const blob = new Blob([res.data], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
 
@@ -4317,10 +4448,7 @@ export function Orders() {
       // Also trigger download
       const link = document.createElement("a");
       link.href = url;
-      link.download =
-        docType === "stock-dispatch"
-          ? `Стокова_разписка_${orderId}.pdf`
-          : `Търговски_документ_${orderId}.pdf`;
+      link.download = `Стокова_разписка_${orderId}.pdf`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -4543,17 +4671,6 @@ export function Orders() {
             className="pl-8 h-9 text-sm"
           />
         </div>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-          <Input
-            value={filters.commercial_doc}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, commercial_doc: e.target.value }))
-            }
-            placeholder="Търговски документ"
-            className="pl-8 h-9 text-sm"
-          />
-        </div>
         {/* Article search — finds orders containing this product (snapshot match) */}
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
@@ -4585,7 +4702,6 @@ export function Orders() {
                 partner: "",
                 invoice: "",
                 stock_dispatch: "",
-                commercial_doc: "",
                 article: "",
               });
               setShowHistory(false);
@@ -4840,20 +4956,6 @@ export function Orders() {
                               >
                                 <ClipboardList className="h-3 w-3" />
                                 СР
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDocumentDownload(
-                                    order.id,
-                                    "commercial-doc",
-                                  );
-                                }}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
-                                title="Търговски документ"
-                              >
-                                <ScrollText className="h-3 w-3" />
-                                ТД
                               </button>
                               {order.invoice_id && (
                                 <button
