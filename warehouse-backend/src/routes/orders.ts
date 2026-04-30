@@ -1492,10 +1492,16 @@ export default async function orderRoutes(app: FastifyInstance) {
               // (cost_source_batch_id) is obsolete — left NULL in the DB.
               let costUnitPrice: number | null = null;
               if (mustReconcileStock) {
+                // Edit-order flow has historically allowed negative
+                // inventory (no pre-check). Preserve that behaviour
+                // explicitly so the new helper signature doesn't tighten
+                // edits unintentionally; line_status enforcement happens
+                // in the fulfill flow.
                 costUnitPrice = await deductProductStock(
                   client,
                   item.product_id,
                   item.quantity,
+                  { allowNegative: true },
                 );
               }
 
@@ -2102,7 +2108,33 @@ export default async function orderRoutes(app: FastifyInstance) {
     db: DbExecutor,
     productId: number,
     quantity: number,
+    options: { allowNegative?: boolean } = {},
   ): Promise<number | null> {
+    const { allowNegative = false } = options;
+
+    // Pre-check: refuse to go below zero unless the caller explicitly
+    // opted in (used by paid_not_taken lines, where the customer has
+    // already paid so promised stock can run negative).
+    if (!allowNegative) {
+      const {
+        rows: [inv],
+      } = await db.query(
+        `SELECT COALESCE(SUM(quantity), 0)::numeric AS qty
+           FROM inventory
+          WHERE product_id = $1 AND warehouse_id = 1`,
+        [productId],
+      );
+      const current = parseFloat(inv?.qty ?? "0");
+      if (current < quantity) {
+        throw Object.assign(
+          new Error(
+            `Insufficient stock for product ${productId}: have ${current}, need ${quantity}`,
+          ),
+          { statusCode: 409 },
+        );
+      }
+    }
+
     const { rowCount } = await db.query(
       `UPDATE inventory
          SET quantity = quantity - $1,
