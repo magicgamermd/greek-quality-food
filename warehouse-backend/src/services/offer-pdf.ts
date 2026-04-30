@@ -82,6 +82,10 @@ function formatDateBg(iso: string): string {
   return `${d}.${m}.${y}`;
 }
 
+function fmtEur(v: number | string): string {
+  return formatEurAmount(v) + " €";
+}
+
 export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -198,11 +202,11 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
           minimumFractionDigits: 0,
           maximumFractionDigits: 3,
         }),
-        formatEurAmount(toNum(it.unit_price)),
+        fmtEur(toNum(it.unit_price)),
         toNum(it.discount_percent) > 0
           ? toNum(it.discount_percent).toFixed(0) + "%"
           : "—",
-        formatEurAmount(toNum(it.total_price)),
+        fmtEur(toNum(it.total_price)),
       ];
       cx = L;
       cells.forEach((val, i) => {
@@ -241,15 +245,15 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
       });
       doc.y = y + 14;
     };
-    totalLine("Сума без ДДС:", formatEurAmount(data.totalNet));
-    totalLine("ДДС 20%:", formatEurAmount(data.totalVat));
+    totalLine("Сума без ДДС:", fmtEur(data.totalNet));
+    totalLine("ДДС 20%:", fmtEur(data.totalVat));
     doc
       .moveTo(totalsX + labelW - 60, doc.y - 2)
       .lineTo(totalsX + labelW + valueW + 5, doc.y - 2)
       .lineWidth(0.5)
       .strokeColor("#94a3b8")
       .stroke();
-    totalLine("Обща сума:", formatEurAmount(data.totalGross), true);
+    totalLine("Обща сума:", fmtEur(data.totalGross), true);
 
     // ── Footer note ────────────────────────────────────────
     doc.moveDown(2);
