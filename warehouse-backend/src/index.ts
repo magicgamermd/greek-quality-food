@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import dotenv from "dotenv";
 
 import dbPool from "./db.js";
+import { ensureSeedData } from "./seed.js";
 import authRoutes from "./routes/auth.js";
 import productRoutes from "./routes/products.js";
 import inventoryRoutes from "./routes/inventory.js";
@@ -71,9 +72,14 @@ export async function build() {
     "http://127.0.0.1:3010",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
   ];
   const devCorsPatterns = [
-    /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):5173$/,
+    // LAN access on port 5173 or 5174
+    /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):517[34]$/,
+    // Tailscale CGNAT range 100.64.0.0/10
+    /^http:\/\/100\.\d{1,3}\.\d{1,3}\.\d{1,3}:517[34]$/,
   ];
 
   await app.register(cors, {
@@ -277,6 +283,13 @@ async function start() {
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
+
+  const seedResult = await ensureSeedData(dbPool);
+  if (seedResult.individualPartnerCreated) {
+    app.log.warn(
+      "seed: re-created missing 'Физическо лице — краен потребител' partner",
+    );
+  }
 
   // Start server
   const port = parseInt(process.env.PORT || "3000", 10);

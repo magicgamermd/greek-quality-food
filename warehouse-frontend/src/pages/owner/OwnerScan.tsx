@@ -87,7 +87,7 @@ export function OwnerScan() {
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["owner-products-catalog"],
     queryFn: async () => {
-      const res = await api.get("/products?limit=2000&catalog=true");
+      const res = await api.get("/products?limit=25000&catalog=true");
       return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
     },
     staleTime: 5 * 60_000,

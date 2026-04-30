@@ -234,7 +234,9 @@ export default async function productRoutes(app: FastifyInstance) {
     const pageNum = Math.max(1, parseInt(page) || 1);
     // Allow larger page size when catalog=true so consumers (owner PWA,
     // AI match service) can fetch the full catalog in a single request.
-    const maxLimit = catalog === "true" ? 5000 : 100;
+    // Bumped to 25000 to cover the full Microinvest product catalog
+    // (~15k entries today, headroom for growth).
+    const maxLimit = catalog === "true" ? 25000 : 100;
     const pageSize = Math.min(maxLimit, Math.max(1, parseInt(limit) || 50));
     const offset = (pageNum - 1) * pageSize;
     const rawSearch = typeof search === "string" && search.trim() ? search : q;
