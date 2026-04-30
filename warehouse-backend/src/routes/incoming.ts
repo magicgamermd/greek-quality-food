@@ -2122,6 +2122,47 @@ export default async function incomingRoutes(app: FastifyInstance) {
               [item.selling_price, item.product_id],
             );
           }
+
+          // Batch F1: notify any open orders waiting on this product.
+          // We fire one notification per matching order_items row so the
+          // bell badge / future toast logic can click straight into the
+          // right line. cancelled orders are excluded; everything else
+          // (including invoiced orders with paid_not_taken lines waiting
+          // for handover) qualifies.
+          const { rows: pendingLines } = await client.query(
+            `SELECT oi.id          AS item_id,
+                    oi.order_id,
+                    oi.product_id,
+                    oi.quantity,
+                    oi.line_status,
+                    oi.name_bg_snapshot AS product_name,
+                    p.name              AS partner_name
+               FROM order_items oi
+               JOIN orders o   ON o.id = oi.order_id
+               JOIN partners p ON p.id = o.partner_id
+              WHERE oi.product_id = $1
+                AND oi.line_status IN ('paid_not_taken', 'awaiting')
+                AND o.status NOT IN ('cancelled')`,
+            [item.product_id],
+          );
+
+          for (const pending of pendingLines) {
+            await client.query(
+              `INSERT INTO notifications (type, message, payload)
+               VALUES ('pending_order_ready', $1, $2)`,
+              [
+                `Поръчка #${pending.order_id} (${pending.partner_name}) — ${pending.product_name} вече е наличен`,
+                JSON.stringify({
+                  order_id: pending.order_id,
+                  order_item_id: pending.item_id,
+                  product_id: pending.product_id,
+                  qty_pending: pending.quantity,
+                  line_status: pending.line_status,
+                  partner_name: pending.partner_name,
+                }),
+              ],
+            );
+          }
         }
 
         // Create notification
