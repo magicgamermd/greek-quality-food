@@ -5,28 +5,34 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-30 (Batch F1 SHIPPED to main locally — Tailscale push pending Tuesday)
-**Active branch:** `main` (Batch F1 merged)
+**Last updated:** 2026-04-30 (Batch F1 — all tasks complete on `feature/MERTM-batch-f1-line-status`; merge + Tailscale push pending Tuesday)
+**Active branch:** `feature/MERTM-batch-f1-line-status` (ahead of main by ~16 commits — ready to merge)
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active task:** Tuesday — push Batch F1 to client Mac via `./scripts/push-to-client.sh`.
-Manual E2E (Task 17 of plan) is best done on the live data once pushed.
+**Active task:** Tuesday — merge `feature/MERTM-batch-f1-line-status` → main, then `./scripts/push-to-client.sh` to client Mac. Run Task 17 manual E2E on live data once pushed.
 
-**Batch F1 — COMPLETE (Tasks 1-9 + 12-16 + verification):**
+**Batch F1 — COMPLETE (all 18 tasks of the plan):**
 
-- Migrations 064 (`order_items.line_status` enum) + 065 (`notifications.payload`)
-- Backend: shared constant, `deductProductStock({allowNegative})`, fulfill
-  branches per status, persistence in 3 INSERT sites, 2 transition endpoints
-  (`/handover`, `/confirm-from-awaiting`), incoming notification trigger, 2
-  filter params (`?has_paid_not_taken=`, `?has_awaiting=`)
-- Frontend: types, bg-tint + chip in drawer items, per-row "✓ Предадено" / "✓
-  Потвърди" buttons, 3-button split-on-oversell in OversellConfirmDialog,
-  2 filter pills
-- Smoke-tested: order with mixed line_status fulfilled correctly (normal -2,
-  paid_not_taken allowed -100, awaiting skipped); handover flipped to
-  normal w/o stock change; confirm-from-awaiting blocked by 409 when
-  insufficient stock (guard works as designed)
-- Tasks 10+11 (formal vitest tests) deferred — manual smoke covers happy
-  paths; Task 17 manual E2E pending on real client data
+- Migrations 064 (`order_items.line_status` enum + partial index) + 065
+  (`notifications.payload` jsonb)
+- Backend: shared `ORDER_LINE_STATUSES` constant,
+  `deductProductStock({allowNegative})` helper, fulfill branches per
+  status, persistence in 3 INSERT sites, 2 transition endpoints
+  (`/handover`, `/confirm-from-awaiting`), `pending_order_ready`
+  notification trigger on incoming confirm, 2 filter params
+  (`?has_paid_not_taken=`, `?has_awaiting=`)
+- Frontend: types, bg-tint + chip in drawer items, per-row
+  "✓ Предадено" / "✓ Потвърди" buttons, 3-button split-on-oversell in
+  `OversellConfirmDialog`, 2 filter pills, parse-error fix in same dialog
+  (typographic " inside double-quoted string)
+- Tests: `orders-line-status.test.ts` (11 tests — fulfill skip/allow-neg
+  branches, /handover, /confirm-from-awaiting, filter EXISTS clauses) +
+  `incoming-pending-notification.test.ts` (3 tests — 1-per-line emit,
+  no-match, cancelled excluded). Updated `negative-inventory.test.ts` and
+  `incoming-confirm-inventory.test.ts` to mock the new SELECT pendingLines
+  call/`paid_not_taken` opt-in. **326/332 tests pass; the 6 remaining
+  failures are pre-existing on `main` (verified before F1 work)**
+- Task 17 manual E2E **pending** on real client data (paid_not_taken flow,
+  handover, awaiting flow, filter pills, cancel-with-paid_not_taken)
 
 ---
 
