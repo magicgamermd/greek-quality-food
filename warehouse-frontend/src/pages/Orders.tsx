@@ -4280,6 +4280,10 @@ export function Orders() {
   const canSeeBelowCostFilter = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
   const [statusFilter, setStatusFilter] = useState("");
   const [belowCostOnly, setBelowCostOnly] = useState(false);
+  // Batch F1 filter pills — surface only orders containing the matching
+  // open line state. Backend uses EXISTS on order_items.line_status.
+  const [hasPaidNotTaken, setHasPaidNotTaken] = useState(false);
+  const [hasAwaiting, setHasAwaiting] = useState(false);
   // Per-column text filters
   const [filters, setFilters] = useState({
     order_number: "",
@@ -4311,12 +4315,21 @@ export function Orders() {
     isLoading,
     error,
   } = useQuery<Order[]>({
-    queryKey: ["orders", statusFilter, belowCostOnly, debouncedArticle],
+    queryKey: [
+      "orders",
+      statusFilter,
+      belowCostOnly,
+      hasPaidNotTaken,
+      hasAwaiting,
+      debouncedArticle,
+    ],
     queryFn: () => {
       const parts: string[] = [];
       if (statusFilter === "invoiced") parts.push("invoiced=true");
       else if (statusFilter) parts.push(`status=${statusFilter}`);
       if (belowCostOnly) parts.push("below_cost_only=true");
+      if (hasPaidNotTaken) parts.push("has_paid_not_taken=true");
+      if (hasAwaiting) parts.push("has_awaiting=true");
       if (debouncedArticle)
         parts.push(`article=${encodeURIComponent(debouncedArticle)}`);
       const params = parts.length > 0 ? `?${parts.join("&")}` : "";
@@ -4667,6 +4680,29 @@ export function Orders() {
             Под cost
           </button>
         )}
+        {/* Batch F1 — line-status filter pills (open paid_not_taken / awaiting) */}
+        <button
+          onClick={() => setHasPaidNotTaken((v) => !v)}
+          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            hasPaidNotTaken
+              ? "bg-amber-500 text-white"
+              : "bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+          }`}
+          title="Покажи само поръчки с платени-невзети редове"
+        >
+          💰 Платени невзети
+        </button>
+        <button
+          onClick={() => setHasAwaiting((v) => !v)}
+          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            hasAwaiting
+              ? "bg-gray-500 text-white"
+              : "bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100"
+          }`}
+          title="Покажи само поръчки с редове на изчакване (pre-order)"
+        >
+          ⏳ На изчакване
+        </button>
       </div>
 
       {/* Date filter — same pattern as Приемане на стоки */}
