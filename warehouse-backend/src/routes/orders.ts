@@ -8,6 +8,7 @@ import {
   PERMISSIONS,
 } from "../lib/permissions.js";
 import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
+import { orderLineStatusSchema } from "../lib/order-line-status.js";
 import {
   computeBelowCostItems,
   type ProductCost,
@@ -105,6 +106,9 @@ const orderItemSchema = z.object({
   // Per-line отстъпка % (0–100). Прилага се при запис на total_price.
   // Default 0 → backward-compatible за стари callers които не подават.
   discount_percent: z.number().min(0).max(100).optional().default(0),
+  // Batch F1: per-line state. Optional; defaults to 'normal' on the
+  // backend side via orderLineStatusSchema's .default.
+  line_status: orderLineStatusSchema.optional(),
 });
 
 const createOrderSchema = z.object({
@@ -980,8 +984,8 @@ export default async function orderRoutes(app: FastifyInstance) {
             } = await client.query(
               `INSERT INTO order_items
                  (order_id, product_id, quantity, unit_price, discount_percent, total_price,
-                  name_bg_snapshot, name_en_snapshot, sku_snapshot)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+                  name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
               [
                 order.id,
                 item.product_id,
@@ -992,6 +996,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                 prod.name_bg,
                 prod.name_en,
                 prod.sku,
+                item.line_status ?? "normal",
               ],
             );
             items.push(orderItem);
@@ -1195,8 +1200,8 @@ export default async function orderRoutes(app: FastifyInstance) {
           } = await client.query(
             `INSERT INTO order_items
                (order_id, product_id, quantity, unit_price, total_price,
-                name_bg_snapshot, name_en_snapshot, sku_snapshot)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+                name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
             [
               order.id,
               productId,
@@ -1206,6 +1211,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               snap.name_bg,
               snap.name_en,
               snap.sku,
+              (item as any).line_status ?? "normal",
             ],
           );
           items.push(orderItem);
@@ -1522,8 +1528,8 @@ export default async function orderRoutes(app: FastifyInstance) {
               } = await client.query(
                 `INSERT INTO order_items
                    (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price,
-                    name_bg_snapshot, name_en_snapshot, sku_snapshot)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [
                   id,
                   item.product_id,
@@ -1535,6 +1541,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                   snap.name_bg,
                   snap.name_en,
                   snap.sku,
+                  (item as any).line_status ?? "normal",
                 ],
               );
               items.push(orderItem);
