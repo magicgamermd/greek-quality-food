@@ -613,7 +613,7 @@ function OrderDetailModal({
   const { data: overridePartners = [] } = useQuery<Partner[]>({
     queryKey: ["partners", "catalog"],
     queryFn: () =>
-      api.get("/partners?catalog=true&limit=5000").then((r) => {
+      api.get("/partners?catalog=true&limit=25000").then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
       }),
@@ -1914,6 +1914,17 @@ function OrderDetailModal({
                 >
                   <ScrollText className="h-4 w-4" />
                   Търговски документ
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    window.open(`/api/orders/${detail.id}/offer-pdf`, "_blank")
+                  }
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                  title="Оферта (информационна — без задължение)"
+                >
+                  <FileText className="h-4 w-4" />
+                  Оферта
                 </Button>
                 <Button
                   variant="outline"
@@ -4041,7 +4052,7 @@ export function Orders() {
     queryFn: () =>
       // catalog=true bypasses the 100-row API cap so the partner picker
       // dropdown sees ALL partners (the DB already has 400+ rows).
-      api.get("/partners?catalog=true&limit=5000").then((r) => {
+      api.get("/partners?catalog=true&limit=25000").then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
       }),

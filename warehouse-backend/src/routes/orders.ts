@@ -322,6 +322,10 @@ export default async function orderRoutes(app: FastifyInstance) {
       const params: any[] = [];
       let paramIdx = 1;
 
+      // Track the param index of the FIRST search word's normalized form,
+      // so the ORDER BY below can rank rows by where the word appears in
+      // the product name (1st-word match → 2nd-word → 3rd+).
+      let firstWordParamIdx: number | null = null;
       if (search) {
         // Split search into words so "Beef P" matches 'Beef "PASTRAMI"'.
         // Uses normalize_search() for Cyrillic↔Latin transliteration.
@@ -329,6 +333,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         const wordClauses: string[] = [];
         for (const word of words) {
           const escaped = word.replace(/[%_\\]/g, "\\$&");
+          if (firstWordParamIdx === null) firstWordParamIdx = paramIdx;
           wordClauses.push(
             `(
               normalize_search(p.name_bg) ILIKE '%' || normalize_search($${paramIdx}) || '%'
@@ -388,7 +393,18 @@ export default async function orderRoutes(app: FastifyInstance) {
       ${where}
       GROUP BY p.id ${priceListId ? ", pli.price" : ""}
       ${in_stock_only === "true" ? "HAVING COALESCE(SUM(inv.quantity), 0) > 0" : ""}
-      ORDER BY p.name_bg
+      ORDER BY
+        CASE
+          WHEN COALESCE(${priceListId ? "pli.price, " : ""}p.${groupPriceCol}, p.selling_price, 0) <= 0 THEN 2
+          WHEN COALESCE(SUM(inv.quantity), 0) > 0 THEN 0
+          ELSE 1
+        END,
+        ${
+          firstWordParamIdx !== null
+            ? `NULLIF(POSITION(normalize_search($${firstWordParamIdx}) IN normalize_search(p.name_bg)), 0) NULLS LAST,`
+            : ""
+        }
+        p.name_bg
       LIMIT 100
     `;
       if (priceListId) params.splice(paramIdx - 2, 0, priceListId);
@@ -2562,10 +2578,13 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!data) return reply.status(404).send({ error: "Order not found" });
 
       const { order, items } = data;
-      if (order.status !== "quoted") {
+      // Quoted orders use it as their primary document; for confirmed +
+      // beyond, it's an additional informational price summary the cashier
+      // can hand to the customer alongside Стокова разписка / Търговски
+      // документ. Cancelled orders shouldn't generate new offers.
+      if (order.status === "cancelled") {
         return reply.status(400).send({
-          error:
-            "Оферта може да се генерира само за поръчки в статус 'Оферта'.",
+          error: "Оферта не може да се генерира за анулирана поръчка.",
         });
       }
 

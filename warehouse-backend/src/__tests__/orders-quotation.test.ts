@@ -200,11 +200,13 @@ describe("Quotation flow", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("GET /orders/:id/offer-pdf rejects 400 when status != quoted", async () => {
-    // loadOrderWithBatches: 1st query = SELECT order, 2nd = SELECT items
+  it("GET /orders/:id/offer-pdf rejects 400 only for cancelled orders", async () => {
+    // After Batch E follow-up, offers are also generatable for
+    // confirmed/processing/fulfilled (informational). Only cancelled
+    // orders are rejected.
     mockQuery
       .mockResolvedValueOnce(
-        rows([{ id: 1, status: "pending", order_number: 42 }]),
+        rows([{ id: 1, status: "cancelled", order_number: 42 }]),
       )
       .mockResolvedValueOnce(rows([])); // items
     const res = await app.inject({
