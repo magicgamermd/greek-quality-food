@@ -61,6 +61,28 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ## Done — Recent Sessions
 
+**Batch E — Quotation (Оферта)** (2026-04-29, branch `feature/MERTM-batch-e-quotation` from main):
+
+- Migration 059 — `'quoted'` added to `orders.status` CHECK constraint
+- POST `/orders` accepts initial `status: 'quoted'` (skips oversell validation; never deducts stock)
+- POST `/orders/:id/quote` (pending → quoted) + POST `/orders/:id/unquote` (quoted → pending)
+- POST `/orders/:id/fulfill` rejects `400` when status is `quoted` ("convert to pending first")
+- PUT `/orders/:id/status` rejects direct workflow transitions out of `quoted` (only `cancelled` allowed)
+- New PDF service `services/offer-pdf.ts` — title "ОФЕРТА", number `OF-NNNNNNN`, items table with prices/discount, totals (net + VAT 20% + gross), validity-disclaimer footer
+- New endpoint `GET /orders/:id/offer-pdf` — only available for `quoted` status, returns PDF stream
+- 7 integration tests (`orders-quotation.test.ts`): create-with-quoted, /quote happy + reject, /unquote happy + reject, fulfill rejection, offer-pdf rejection
+- Frontend `Order.status` union adds `'quoted'`
+- `statusLabels.quoted = "Оферта"` + `statusVariants.quoted = "warning"` (auto-generates filter pill + amber badge)
+- New `quoteMutation` + `unquoteMutation` (quote auto-opens offer PDF in new tab on success)
+- Drawer workflow row gates on status:
+  - `pending` → "Генерирай оферта" + "Потвърди поръчка"
+  - `quoted` → "Регенерирай оферта" + "Премини към обработка" + "Откажи оферта" + days-since hint
+  - other statuses → existing flow (dispatch/fulfill); both `quoted` and `pending` excluded from dispatch
+- Документи row hidden for `quoted` (excluded from confirmed/processing/fulfilled/invoiced gate)
+- New-order modal: "Запази като оферта" button alongside "Създай поръчка" (auto-opens PDF on success)
+- BE+FE type-check clean; new tests 7/7 passing
+- **Open item:** manual E2E (Task 14 in plan, 7-step script) deferred to post-merge user verification
+
 **Batch G+H — Invoice extra fields + Acceptance protocol** (2026-04-29, branch `feature/MERTM-batch-gh-invoice-fields-protocol` from main):
 
 - Migration 058 — `invoices.vat_exemption_reason` (TEXT) + `invoice_note` (TEXT)

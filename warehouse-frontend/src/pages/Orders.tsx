@@ -110,6 +110,7 @@ const statusLabels: Record<string, string> = {
   fulfilled: "Изпълнена",
   cancelled: "Анулирана",
   invoiced: "Фактурирана",
+  quoted: "Оферта",
 };
 const statusVariants: Record<
   string,
@@ -121,6 +122,7 @@ const statusVariants: Record<
   fulfilled: "success",
   cancelled: "destructive",
   invoiced: "default",
+  quoted: "warning",
 };
 
 function hasAnnulledInvoice(order: Pick<Order, "annulled_invoice_at">) {
@@ -808,6 +810,24 @@ function OrderDetailModal({
     },
   });
 
+  // Batch E — Quotation transitions. /quote moves pending → quoted (and
+  // opens the offer PDF in a new tab on success). /unquote takes a quoted
+  // order back to pending so the normal workflow can resume.
+  const quoteMutation = useMutation({
+    mutationFn: (id: number) => api.post(`/orders/${id}/quote`),
+    onSuccess: (_res, id) => {
+      invalidateAllOrderRelated();
+      window.open(`/api/orders/${id}/offer-pdf`, "_blank");
+    },
+  });
+
+  const unquoteMutation = useMutation({
+    mutationFn: (id: number) => api.post(`/orders/${id}/unquote`),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+    },
+  });
+
   const regenerateInvoiceMutation = useMutation({
     mutationFn: (
       input: number | { id: number; payment_method?: InvoicePaymentMethod },
@@ -1315,21 +1335,98 @@ function OrderDetailModal({
             {/* Row 1 — primary workflow action */}
             <div className="flex flex-wrap gap-2 items-center justify-end">
               {detail.status === "pending" && (
-                <Button
-                  onClick={() => confirmOrderMutation.mutate(detail.id)}
-                  disabled={confirmOrderMutation.isPending}
-                  className="bg-green-600 hover:bg-green-700"
-                >
-                  {confirmOrderMutation.isPending ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <CheckCircle className="h-4 w-4" />
-                  )}
-                  Потвърди поръчка
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => quoteMutation.mutate(detail.id)}
+                    disabled={quoteMutation.isPending}
+                    className="border-amber-500 text-amber-700 hover:bg-amber-50"
+                    title="Запази като оферта (без изваждане от наличности)"
+                  >
+                    {quoteMutation.isPending ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <FileText className="h-4 w-4" />
+                    )}
+                    Генерирай оферта
+                  </Button>
+                  <Button
+                    onClick={() => confirmOrderMutation.mutate(detail.id)}
+                    disabled={confirmOrderMutation.isPending}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    {confirmOrderMutation.isPending ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <CheckCircle className="h-4 w-4" />
+                    )}
+                    Потвърди поръчка
+                  </Button>
+                </>
+              )}
+              {detail.status === "quoted" && (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      window.open(
+                        `/api/orders/${detail.id}/offer-pdf`,
+                        "_blank",
+                      )
+                    }
+                    className="border-amber-500 text-amber-700 hover:bg-amber-50"
+                    title="Отвори / регенерирай PDF на офертата"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Регенерирай оферта
+                  </Button>
+                  <Button
+                    onClick={() => unquoteMutation.mutate(detail.id)}
+                    disabled={unquoteMutation.isPending}
+                    className="bg-emerald-600 hover:bg-emerald-700"
+                    title="Премини към обработка (pending → confirmed → ...)"
+                  >
+                    {unquoteMutation.isPending ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <CheckCircle className="h-4 w-4" />
+                    )}
+                    Премини към обработка
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      statusMutation.mutate({
+                        id: detail.id,
+                        status: "cancelled",
+                      })
+                    }
+                    disabled={statusMutation.isPending}
+                    className="border-red-500 text-red-700 hover:bg-red-50"
+                    title="Откажи офертата"
+                  >
+                    <XIcon className="h-4 w-4" />
+                    Откажи оферта
+                  </Button>
+                  <span className="text-xs text-gray-500 ml-2">
+                    Издадена преди{" "}
+                    {Math.max(
+                      0,
+                      Math.floor(
+                        (Date.now() -
+                          new Date(
+                            detail.updated_at ?? detail.order_date,
+                          ).getTime()) /
+                          (1000 * 60 * 60 * 24),
+                      ),
+                    )}{" "}
+                    дни
+                  </span>
+                </>
               )}
               {detail.status !== "pending" &&
                 detail.status !== "cancelled" &&
+                detail.status !== "quoted" &&
                 (() => {
                   const dispatched = Boolean(detail.dispatched_to_warehouse_at);
                   return (
@@ -3098,7 +3195,9 @@ function CreateOrderModal({
   }, [totalItemsWeight]);
 
   const mutation = useMutation({
-    mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
+    mutationFn: async (
+      vars: { allow_below_cost?: boolean; asQuoted?: boolean } = {},
+    ) => {
       const res = await api.post("/orders", {
         partner_id: Number(form.partner_id),
         delivery_date: form.delivery_date || undefined,
@@ -3126,6 +3225,7 @@ function CreateOrderModal({
           discount_percent: Number(i.discount_percent) || 0,
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
+        status: vars.asQuoted ? "quoted" : undefined,
       });
 
       // Persist any edited weights back to the product catalog so
