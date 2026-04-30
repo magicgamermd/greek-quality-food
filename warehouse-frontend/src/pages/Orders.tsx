@@ -165,6 +165,9 @@ interface OrderItemRow {
   /** Product's stored weight at pick time. If the user edits weight_kg
    *  and this snapshot differs, we PATCH it back to the product on save. */
   original_weight_kg: number | null;
+  /** Batch F1 — per-line state. Defaults to 'normal'. paid_not_taken
+   *  and awaiting opt out of the oversell guard (split-on-oversell UI). */
+  line_status: "normal" | "paid_not_taken" | "awaiting";
 }
 
 let orderItemRowSeq = 0;
@@ -183,6 +186,7 @@ const makeOrderItemRow = (
   cost_price: 0,
   weight_kg: "",
   original_weight_kg: null,
+  line_status: "normal",
   ...overrides,
 });
 
@@ -2664,6 +2668,10 @@ function EditOrderItemsModal({
           weight_kg: productWeight != null ? String(productWeight) : "",
           original_weight_kg: productWeight,
           cost_price: Number.isFinite(costNum) && costNum > 0 ? costNum : 0,
+          line_status: (item.line_status ?? "normal") as
+            | "normal"
+            | "paid_not_taken"
+            | "awaiting",
         });
       }) || [];
 
@@ -2729,10 +2737,63 @@ function EditOrderItemsModal({
   const validItems = items.filter(
     (i) => i.product_id && Number(i.quantity) > 0 && Number(i.unit_price) >= 0,
   );
-  const hasStockIssues = validItems.some(
+  // Batch F1 — only NORMAL lines participate in the oversell guard.
+  // paid_not_taken / awaiting lines are explicit opt-outs (the cashier
+  // already chose to split or pre-order them), so they never block save.
+  const oversellNormalItems = validItems.filter(
     (i) =>
-      getEffectiveStock(i) >= 0 && Number(i.quantity) > getEffectiveStock(i),
+      i.line_status === "normal" &&
+      getEffectiveStock(i) >= 0 &&
+      Number(i.quantity) > getEffectiveStock(i),
   );
+  const hasStockIssues = oversellNormalItems.length > 0;
+
+  // Split a normal-status line that's gone over stock into two rows:
+  //   - the original kept at the available stock (still 'normal')
+  //   - a new row carrying the overage with the chosen line_status
+  // No-op when the line is already within stock or already non-normal.
+  const splitOversellLine = (
+    rowKey: string,
+    target: "paid_not_taken" | "awaiting",
+  ) => {
+    setItems((prev) => {
+      const idx = prev.findIndex((r) => r.row_key === rowKey);
+      if (idx < 0) return prev;
+      const orig = prev[idx];
+      if (orig.line_status !== "normal") return prev;
+      const available = getEffectiveStock(orig);
+      const requested = Number(orig.quantity);
+      if (!(available >= 0) || requested <= available) return prev;
+      const overage = requested - available;
+      const taken: OrderItemRow = { ...orig, quantity: String(available) };
+      const pending: OrderItemRow = makeOrderItemRow({
+        product_id: orig.product_id,
+        product_name: orig.product_name,
+        quantity: String(overage),
+        unit_price: orig.unit_price,
+        discount_percent: orig.discount_percent,
+        unit: orig.unit,
+        stock: orig.stock,
+        cost_price: orig.cost_price,
+        weight_kg: orig.weight_kg,
+        original_weight_kg: orig.original_weight_kg,
+        line_status: target,
+      });
+      return [...prev.slice(0, idx), taken, pending, ...prev.slice(idx + 1)];
+    });
+  };
+
+  // Reduce-to-available — the simple "no, just sell what we have" path.
+  const reduceToAvailable = (rowKey: string) => {
+    setItems((prev) =>
+      prev.map((r) => {
+        if (r.row_key !== rowKey) return r;
+        const available = getEffectiveStock(r);
+        if (!(available >= 0)) return r;
+        return { ...r, quantity: String(available) };
+      }),
+    );
+  };
 
   const belowCostItems = validItems.filter((i) => {
     const disc = Number(i.discount_percent) || 0;
@@ -2757,6 +2818,9 @@ function EditOrderItemsModal({
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price),
           discount_percent: Number(i.discount_percent) || 0,
+          // Batch F1 — only send when not the default; spares the wire
+          // and lets the backend's column DEFAULT 'normal' handle it.
+          line_status: i.line_status !== "normal" ? i.line_status : undefined,
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
       });
@@ -2899,19 +2963,40 @@ function EditOrderItemsModal({
                     const lineTotal = qty * price * (1 - discount / 100);
                     const availableStock = getEffectiveStock(item);
                     const hasKnownStock = availableStock >= 0;
-                    const overStock = hasKnownStock && qty > availableStock;
+                    // Batch F1 — split rows opt out of the oversell guard
+                    // (their whole purpose is to carry the overage). Only
+                    // 'normal' lines get the red bg.
+                    const overStock =
+                      item.line_status === "normal" &&
+                      hasKnownStock &&
+                      qty > availableStock;
+                    const rowBg =
+                      item.line_status === "paid_not_taken"
+                        ? "bg-amber-50"
+                        : item.line_status === "awaiting"
+                          ? "bg-gray-50"
+                          : overStock
+                            ? "bg-red-50"
+                            : "";
                     return (
-                      <TableRow
-                        key={item.row_key}
-                        className={overStock ? "bg-red-50" : ""}
-                      >
+                      <TableRow key={item.row_key} className={rowBg}>
                         <TableCell>
                           {item.product_id ? (
                             <div className="flex items-center gap-2">
                               <Package className="h-4 w-4 text-gray-400 shrink-0" />
                               <div className="min-w-0 flex-1">
-                                <div className="text-sm font-medium truncate">
-                                  {item.product_name}
+                                <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
+                                  <span>{item.product_name}</span>
+                                  {item.line_status === "paid_not_taken" && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
+                                      💰 Платена невзета
+                                    </span>
+                                  )}
+                                  {item.line_status === "awaiting" && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
+                                      ⏳ Изчакване
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-xs text-gray-400">
                                   {item.unit}
@@ -3063,8 +3148,57 @@ function EditOrderItemsModal({
         </div>
 
         {hasStockIssues && (
-          <div className="text-sm bg-red-50 border border-red-200 rounded-md px-3 py-2 text-red-700">
-            Количеството надвишава наличността за някои артикули.
+          <div className="text-sm bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-amber-900 space-y-2">
+            <div className="font-medium">
+              ⚠ Има артикули над наличността. Избери действие за всеки ред:
+            </div>
+            <ul className="space-y-1.5">
+              {oversellNormalItems.map((i) => {
+                const available = getEffectiveStock(i);
+                const overage = Number(i.quantity) - available;
+                return (
+                  <li
+                    key={i.row_key}
+                    className="flex flex-wrap items-center gap-2 text-xs"
+                  >
+                    <span className="font-medium">{i.product_name}</span>
+                    <span className="text-gray-600">
+                      ({i.quantity}, налично {available}, недостигат {overage})
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => reduceToAvailable(i.row_key)}
+                    >
+                      Намали до {available}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="border-amber-500 text-amber-800 hover:bg-amber-100"
+                      onClick={() =>
+                        splitOversellLine(i.row_key, "paid_not_taken")
+                      }
+                      title="Раздели: налично като нормално + остатъка като платена-невзета"
+                    >
+                      💰 Платена невзета (×{overage})
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="border-gray-400 text-gray-700 hover:bg-gray-100"
+                      onClick={() => splitOversellLine(i.row_key, "awaiting")}
+                      title="Раздели: налично като нормално + остатъка като изчакване (pre-order, не вади стока)"
+                    >
+                      ⏳ На изчакване (×{overage})
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
         {hasBelowCost && (
@@ -3502,6 +3636,8 @@ function CreateOrderModal({
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price) || undefined,
           discount_percent: Number(i.discount_percent) || 0,
+          // Batch F1 — tunnel through the line state set by split-on-oversell
+          line_status: (i as any).line_status ?? undefined,
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
         status: vars.asQuoted ? "quoted" : undefined,
@@ -3607,10 +3743,11 @@ function CreateOrderModal({
       }
     }
     const result: OversellItem[] = [];
-    for (const [, info] of byProduct) {
+    for (const [pid, info] of byProduct) {
       const finalStock = info.available - info.requested;
       if (finalStock < 0) {
         result.push({
+          product_id: pid,
           product_name: info.name,
           available: info.available,
           requested: info.requested,
@@ -3619,6 +3756,53 @@ function CreateOrderModal({
       }
     }
     return result;
+  }
+
+  // Batch F1 — three resolutions for an oversell warning:
+  //  - reduce  → clamp every over-stock line to its available qty
+  //  - split   → keep available-qty as 'normal' + add sibling line tagged
+  //              'paid_not_taken' or 'awaiting' for the rest
+  // All three close the dialog; the user can re-submit with the now-clean
+  // items[] and the order goes through.
+  function reduceOversellToAvailable(over: OversellItem[]) {
+    setItems((prev) =>
+      prev.map((row) => {
+        const o = over.find(
+          (x) =>
+            x.product_id != null && x.product_id === Number(row.product_id),
+        );
+        if (!o) return row;
+        return { ...row, quantity: o.available };
+      }),
+    );
+    setPendingOversell(null);
+  }
+  function splitOversellTo(
+    over: OversellItem[],
+    status: "paid_not_taken" | "awaiting",
+  ) {
+    setItems((prev) => {
+      const out: typeof prev = [];
+      for (const row of prev) {
+        const o = over.find(
+          (x) =>
+            x.product_id != null && x.product_id === Number(row.product_id),
+        );
+        if (!o) {
+          out.push(row);
+          continue;
+        }
+        const overQty = Number(row.quantity) - o.available;
+        out.push({ ...row, quantity: o.available });
+        out.push({
+          ...row,
+          quantity: overQty,
+          line_status: status,
+        } as any);
+      }
+      return out;
+    });
+    setPendingOversell(null);
   }
 
   // Single entry point for the create-order submit. Gates: below-cost
@@ -4264,6 +4448,11 @@ function CreateOrderModal({
           setPendingOversell(null);
           proceed?.();
         }}
+        onReduceToAvailable={reduceOversellToAvailable}
+        onSplitToPaidNotTaken={(over) =>
+          splitOversellTo(over, "paid_not_taken")
+        }
+        onSplitToAwaiting={(over) => splitOversellTo(over, "awaiting")}
       />
     </Dialog>
   );
