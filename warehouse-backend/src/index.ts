@@ -26,6 +26,7 @@ import exportRoutes from "./routes/export.js";
 import productAliasRoutes from "./routes/product-aliases.js";
 import fiscalRoutes from "./routes/fiscal.js";
 import econtRoutes from "./routes/econt.js";
+import reportsRoutes from "./routes/reports.js";
 import chatRoutes from "./routes/chat.js";
 import agentRoutes from "./routes/agent.js";
 import permissionsRoutes from "./routes/permissions.js";
@@ -242,6 +243,7 @@ export async function build() {
   await app.register(productAliasRoutes, { prefix: "/product-aliases" });
   await app.register(fiscalRoutes, { prefix: "/fiscal" });
   await app.register(econtRoutes, { prefix: "/econt" });
+  await app.register(reportsRoutes, { prefix: "/reports" });
   await app.register(chatRoutes);
   await app.register(agentRoutes, { prefix: "/agent" });
 
