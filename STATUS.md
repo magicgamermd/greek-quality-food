@@ -5,10 +5,16 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-30 (Client deployment + Econt + Combobox fixes — IN PROGRESS)
-**Active branch:** `main` (uncommitted changes, see "Pending commits" below)
+**Last updated:** 2026-04-30 (Batch F1 — backend done + frontend types/markers; resumes at Task 14)
+**Active branch:** `feature/MERTM-batch-f1-line-status`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active task:** Bug fixes + Econt full integration on the live client Mac. Local dev stack runs in parallel for fast iteration. See "Live deployment" below.
+**Active task:** Batch F1 (paid-not-taken + awaiting line statuses). Backend
+fully complete (migrations 064 + 065, schema + INSERT, fulfill branch,
+handover + confirm-from-awaiting endpoints, incoming notification trigger,
+2 filter params). Frontend has types + bg-tint + chip in drawer. Next:
+Task 14 (per-row Предадено / Потвърди buttons), Task 15 (split-on-oversell
+in edit modal — biggest piece), Task 16 (2 filter pills). Plan:
+`docs/superpowers/plans/2026-04-29-batch-f1-paid-not-taken-and-awaiting.md`.
 
 ---
 
