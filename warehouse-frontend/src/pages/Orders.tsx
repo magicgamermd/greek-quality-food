@@ -511,6 +511,10 @@ function OrderDetailModal({
   // VAT toggle for invoice/documents
   const [invoiceNote, setInvoiceNote] = useState("");
   const [vatExemptionReason, setVatExemptionReason] = useState("");
+  // Popover-style dialog for the optional invoice note + VAT-exemption
+  // legal-basis fields. Replaces the inline inputs that were pushing the
+  // "Генерирай фактура" button around.
+  const [invoiceExtrasOpen, setInvoiceExtrasOpen] = useState(false);
   const [protocolDialogOpen, setProtocolDialogOpen] = useState(false);
   const [protocolPlace, setProtocolPlace] = useState("");
   const [protocolDate, setProtocolDate] = useState(
@@ -1643,45 +1647,29 @@ function OrderDetailModal({
                         )}
                         Генерирай фактура {!includeVat && "(без ДДС)"}
                       </Button>
+                      {/* Compact „note" button — opens the extras dialog
+                          (Забележка + Основание-без-ДДС). Filled-amber when
+                          either field has a value. */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setInvoiceExtrasOpen(true)}
+                        className={
+                          invoiceNote || (!includeVat && vatExemptionReason)
+                            ? "border-amber-500 bg-amber-50 text-amber-800 hover:bg-amber-100 px-2 relative"
+                            : "border-gray-300 text-gray-600 hover:bg-gray-50 px-2"
+                        }
+                        title="Добави забележка / основание (по желание)"
+                        aria-label="Допълнителни полета на фактурата"
+                      >
+                        <Pencil className="h-4 w-4" />
+                        {(invoiceNote ||
+                          (!includeVat && vatExemptionReason)) && (
+                          <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-amber-500" />
+                        )}
+                      </Button>
                     </div>
-                    {/* Batch G+H — Free-text note printed below totals on the PDF */}
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border w-full">
-                      <span className="text-xs text-gray-500 shrink-0">
-                        Забележка:
-                      </span>
-                      <input
-                        type="text"
-                        value={invoiceNote}
-                        onChange={(e) => setInvoiceNote(e.target.value)}
-                        placeholder="напр. по проект X (по желание)"
-                        maxLength={2000}
-                        className="flex-1 px-2 py-1 text-xs border rounded"
-                      />
-                    </div>
-                    {/* Batch G+H — VAT-exemption legal basis (only when no-VAT) */}
-                    {!includeVat && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 rounded-lg border border-amber-200 w-full">
-                        <span className="text-xs text-amber-700 shrink-0">
-                          Основание (без ДДС):
-                        </span>
-                        <input
-                          type="text"
-                          list="vat-exemption-suggestions"
-                          value={vatExemptionReason}
-                          onChange={(e) =>
-                            setVatExemptionReason(e.target.value)
-                          }
-                          placeholder="избери или въведи свободно"
-                          maxLength={500}
-                          className="flex-1 px-2 py-1 text-xs border rounded"
-                        />
-                        <datalist id="vat-exemption-suggestions">
-                          {VAT_EXEMPTION_REASONS.map((r) => (
-                            <option key={r} value={r} />
-                          ))}
-                        </datalist>
-                      </div>
-                    )}
                     {partnerOverride && (
                       <div className="text-xs flex items-center gap-1 px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 self-start">
                         <span>
@@ -2106,6 +2094,72 @@ function OrderDetailModal({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      </Dialog>
+      {/* Invoice extras — popover-style dialog for the optional Забележка
+          and Основание (без ДДС) fields. Triggered by the small pencil
+          button next to "Генерирай фактура". */}
+      <Dialog
+        open={invoiceExtrasOpen}
+        onOpenChange={setInvoiceExtrasOpen}
+        modal={false}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Допълнително към фактурата</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-xs">Забележка</Label>
+              <Textarea
+                value={invoiceNote}
+                onChange={(e) => setInvoiceNote(e.target.value)}
+                placeholder="напр. по проект X — отпечатва се под сумите във фактурата"
+                maxLength={2000}
+                rows={3}
+                className="text-sm"
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                Свободен текст, до 2000 знака. По желание.
+              </div>
+            </div>
+            {!includeVat && (
+              <div>
+                <Label className="text-xs text-amber-700">
+                  Основание (без ДДС)
+                </Label>
+                <Input
+                  list="vat-exemption-suggestions"
+                  value={vatExemptionReason}
+                  onChange={(e) => setVatExemptionReason(e.target.value)}
+                  placeholder="избери или въведи свободно"
+                  maxLength={500}
+                  className="text-sm"
+                />
+                <datalist id="vat-exemption-suggestions">
+                  {VAT_EXEMPTION_REASONS.map((r) => (
+                    <option key={r} value={r} />
+                  ))}
+                </datalist>
+                <div className="text-xs text-amber-700 mt-1">
+                  Задължително при фактура без ДДС (legal basis).
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setInvoiceNote("");
+                setVatExemptionReason("");
+              }}
+              title="Изчисти полетата"
+            >
+              Изчисти
+            </Button>
+            <Button onClick={() => setInvoiceExtrasOpen(false)}>Готово</Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
       {/* Acceptance protocol — manual override dialog before PDF download */}
       <Dialog
