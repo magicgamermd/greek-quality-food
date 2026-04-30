@@ -1081,17 +1081,32 @@ function OrderDetailModal({
               <div>
                 <div className="text-xs text-gray-500 mb-1">Партньор</div>
                 <div className="font-medium text-sm">
+                  {/* Precedence:
+                      1. `partnerOverride` — local state during the invoice
+                         creation flow (shown immediately as the user picks).
+                      2. `invoice_partner_name` — server-side persisted
+                         override exposed by GET /orders/:id once the
+                         invoice has been created and is still active.
+                      3. Original partner. */}
                   {partnerOverride
                     ? partnerOverride.name
-                    : (detail.partner?.name ??
+                    : ((detail as any).invoice_partner_name ??
+                      detail.partner?.name ??
                       detail.partner_name ??
                       `#${detail.partner_id}`)}
                 </div>
-                {partnerOverride && partnerOverride.eik && (
+                {partnerOverride && partnerOverride.eik ? (
                   <div className="text-[11px] text-gray-500 mt-0.5">
                     ЕИК: {partnerOverride.eik}
                   </div>
-                )}
+                ) : (detail as any).invoice_partner_eik ? (
+                  <div className="text-[11px] text-gray-500 mt-0.5">
+                    ЕИК: {(detail as any).invoice_partner_eik}
+                    <span className="ml-1 text-amber-600">
+                      (издадена на фирма)
+                    </span>
+                  </div>
+                ) : null}
               </div>
               <div>
                 <div className="text-xs text-gray-500 mb-1">
@@ -1256,14 +1271,31 @@ function OrderDetailModal({
                         item.product?.sku ||
                         item.sku ||
                         `Продукт #${item.product_id}`;
+                      const lineStatus = item.line_status ?? "normal";
+                      const rowBg =
+                        lineStatus === "paid_not_taken"
+                          ? "bg-amber-50"
+                          : lineStatus === "awaiting"
+                            ? "bg-gray-50"
+                            : "";
                       return (
-                        <TableRow key={item.id}>
+                        <TableRow key={item.id} className={rowBg}>
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <Package className="h-4 w-4 text-gray-400 shrink-0" />
                               <div className="min-w-0">
-                                <div className="text-sm font-medium truncate">
-                                  {prodName}
+                                <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
+                                  <span>{prodName}</span>
+                                  {lineStatus === "paid_not_taken" && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
+                                      💰 Платена невзета
+                                    </span>
+                                  )}
+                                  {lineStatus === "awaiting" && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
+                                      ⏳ Изчакване
+                                    </span>
+                                  )}
                                 </div>
                                 {(item.product?.sku || item.sku) && (
                                   <div className="text-xs text-gray-400">
@@ -4774,6 +4806,7 @@ export function Orders() {
                       <TableCell
                         className="font-medium truncate max-w-[220px]"
                         title={
+                          (order as any).invoice_partner_name ??
                           order.partner?.name ??
                           order.partner_name ??
                           `#${order.partner_id}`
@@ -4781,12 +4814,18 @@ export function Orders() {
                       >
                         <HighlightMatch
                           text={
+                            (order as any).invoice_partner_name ??
                             order.partner?.name ??
                             order.partner_name ??
                             `#${order.partner_id}`
                           }
                           query={filters.partner}
                         />
+                        {(order as any).invoice_partner_name ? (
+                          <div className="text-[10px] text-amber-600 mt-0.5 truncate">
+                            издадена на фирма
+                          </div>
+                        ) : null}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {formatDate(order.order_date)}
