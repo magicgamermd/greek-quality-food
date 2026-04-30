@@ -5,21 +5,78 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-30 (Daily Report merged + live-validated)
-**Active branch:** `main`
+**Last updated:** 2026-04-30 (Client deployment + Econt + Combobox fixes — IN PROGRESS)
+**Active branch:** `main` (uncommitted changes, see "Pending commits" below)
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active feature:** Daily Report (Дневен отчет) — **MERGED + LIVE-VALIDATED**. `GET /reports/daily-pdf?date=YYYY-MM-DD` returns 200 + valid PDF against real Postgres for today/yesterday/older dates; bad date format returns 400. Two schema mismatches that mocked tests missed (`credit_note_id` and `payment_date`) were caught and hot-fixed in commit `7be88f9`.
+**Active task:** Bug fixes + Econt full integration on the live client Mac. Local dev stack runs in parallel for fast iteration. See "Live deployment" below.
+
+---
+
+## 🔁 Session handover
+
+**Read this whole file FIRST** at the start of every new session. Then read
+`/Users/magic/CLAUDE.md` and `/Users/magic/Projects/mert-m/CLAUDE.md` for the
+permanent project rules.
+
+**End of session checklist** — before closing the conversation:
+
+1. Update **"Active task"** at the top with what's in flight.
+2. Update **"Pending commits"** — list every modified file not yet committed.
+3. Update **"Live deployment"** — what's already pushed to the client.
+4. Append to **"Session log"** — what got done today, dated entry.
+5. Optional: `git add -p && git commit` so changes are persisted.
+
+**Start of session checklist:**
+
+1. Read `STATUS.md` (this file) top to bottom.
+2. `git status` — see uncommitted changes from previous session.
+3. Run `./scripts/start-mertm.sh` if local dev stack isn't up.
+4. Open the client tunnel: `ssh mertm@100.83.242.8 'echo connected'`.
+5. Confirm with user what's the priority for today.
 
 ---
 
 ## Where We Are
 
-**Phase:** Hard separation between MERT-M and the upstream
-greek-foods-platform clone is **complete**. Operational cleanup +
-production-readiness blockers are next.
+**Phase:** First live client deployment on a Mac Mini at МЕРТ-М. Catalog
+imported from Microinvest exports (14,959 products + 12,568 partners).
+We're now hardening the UI and Econt integration based on user testing.
 
-**Current blocker focus:** P0 items from the production-readiness report
-(secrets rotation, observability gaps, fiscal printer test, etc).
+**Current focus (2026-04-30):** Bug fixes + Econt waybill flow + auto-fill
+new partner from Bulgarian commercial registry.
+
+---
+
+## 🚚 Live deployment (Mac Mini at client site)
+
+|              |                                                                                                             |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| Host         | Mac Mini M4, macOS 26.2, hostname `MERTMs-Mac-mini.local`                                                   |
+| User         | `mertm`, sudo password `0000`, admin                                                                        |
+| Tailscale IP | `100.83.242.8` (SSH key already installed from dev Mac)                                                     |
+| LAN IP       | `192.168.0.122`                                                                                             |
+| Project root | `/Applications/MERT-M/`                                                                                     |
+| Docker       | Docker Desktop (auto-start hidden on boot, see Login Items)                                                 |
+| LaunchAgent  | `bg.mertm.app` runs `start-mertm.sh` at login (auto-warmup)                                                 |
+| LaunchAgent  | `bg.mertm.backup` daily 03:00 → `~/mertm-data/backups/*.sql.gz` (30-day retention)                          |
+| Launchers    | `~/Desktop/Start MERT-M.app` + Stop + Update (custom MERT logo)                                             |
+| Login        | `admin@mertm.bg` / `admin123`                                                                               |
+| Browser      | Chrome `--app=http://localhost:5174` (from Start launcher)                                                  |
+| Econt        | Username `magicgamermd@gmail.com` (private profile, sender = "Валери Тошков Иванов" София бул. Тотлебен 67) |
+
+### Push code to client
+
+```bash
+./scripts/push-to-client.sh           # default: pack + scp + migrate + restart
+./scripts/push-to-client.sh --no-restart   # push only (Vite hot-reload only)
+```
+
+### Remote SSH
+
+```bash
+ssh mertm@100.83.242.8                 # passwordless via Tailscale
+tail -f /tmp/mertm-{backend,frontend,ai,launcher,launchagent}.log
+```
 
 ---
 
@@ -59,7 +116,121 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 
 ---
 
-## Done — Recent Sessions
+## 🚧 Pending commits
+
+Current uncommitted state on `main` (run `git status` to refresh):
+
+**Modified:**
+
+- `warehouse-backend/src/index.ts` — CORS adds 5174 + LAN/Tailscale patterns
+- `warehouse-backend/src/routes/econt.ts` — receiverAgent + sendDate (NOT shipmentDate) + shipment_description plumbing
+- `warehouse-backend/src/routes/orders.ts` — econt_shipment_description + econt_shipment_date insert/update + 3-tier sort + word-position rank in /products-for-order
+- `warehouse-backend/src/routes/partners.ts` — maxLimit 5000 → 25000
+- `warehouse-backend/src/routes/products.ts` — maxLimit 5000 → 25000
+- `warehouse-frontend/src/components/EcontShipmentActions.tsx` — pass shipment_description + shipment_date
+- `warehouse-frontend/src/components/EcontShippingPicker.tsx` — new "Съдържание" input + date picker (address delivery only)
+- `warehouse-frontend/src/components/ui/combobox.tsx` — React Portal + fixed-position dropdown + stopPropagation + onMouseDown selection (fixes clipping inside Dialog)
+- `warehouse-frontend/src/pages/Orders.tsx` — partner picker limit=25000 (×2), shipment fields wired, debounced EIK lookup in new-partner form
+- `warehouse-frontend/src/pages/owner/OwnerScan.tsx` — limit=25000
+- `warehouse-frontend/src/types/index.ts` — `econt_shipment_description` + `econt_shipment_date` on `Order`
+- `STATUS.md` — this update
+
+**New (untracked):**
+
+- `data-imports/` — Microinvest .txt parsers + CSV/SQL outputs (products + partners)
+- `macos-installer/` — Start/Stop/Update .app bundles + install.sh + README + assets/mertm.icns
+- `scripts/push-to-client.sh` — automate dev→client deploy
+- `warehouse-backend/migrations/060_orders_econt_shipment_description.sql`
+- `warehouse-backend/migrations/061_orders_econt_shipment_date.sql`
+- `warehouse-backend/backups/` — pre-import DB dumps from dev sessions
+
+When you're ready to commit, do small focused commits per concern (Econt
+fixes / Combobox fix / partner-import tooling / installer / etc) so PR
+review (or future bisect) stays sane.
+
+---
+
+## 📝 Session log
+
+### 2026-04-30 (afternoon) — Client deployment + Econt + UI fixes — IN PROGRESS
+
+Done in this session (uncommitted, see "Pending commits" below):
+
+**Deployment**
+
+- First production install on Mac Mini at client (see "Live deployment").
+- Tailscale SSH (key-based, no password) from dev Mac → client.
+- Docker Desktop auto-starts hidden on boot (settings-store.json patched).
+- Two LaunchAgents: `bg.mertm.app` (backend warmup at login), `bg.mertm.backup` (daily 03:00 pg_dump).
+- Three custom-icon `.app` launchers on Desktop (Start / Stop / Update).
+- Daily backup → `~/mertm-data/backups/`, 30-day rotation.
+- Imported 14,959 products + 12,568 partners from Microinvest .txt exports
+  (parsers in `data-imports/parse_*.py`; CSV+SQL in same folder).
+
+**Bug fixes shipped to client**
+
+1. CORS: backend allowed only port 5173; bumped to also accept 5174 + LAN
+   `192.168.x.x:517[34]` + Tailscale `100.x.x.x:517[34]`. (`warehouse-backend/src/index.ts`)
+2. Partner search cap: backend limit 5,000 → 25,000 (we have 12,568).
+   `warehouse-backend/src/routes/partners.ts:69` + `Orders.tsx` callsites.
+3. Product catalog cap: backend limit 5,000 → 25,000.
+   `warehouse-backend/src/routes/products.ts:237` + `OwnerScan.tsx`.
+4. Products-for-order sort hierarchy (matches user request "стъпаловидно"):
+   tier (in-stock+price → 0-stock+price → priceless) → word-position of
+   search term in name → alphabetical. `warehouse-backend/src/routes/orders.ts:391`.
+5. Econt credentials configured in client `.env` (note: password contains `#`,
+   MUST be quoted in `.env` or dotenv strips it as comment).
+6. Econt receiver_agent always sent (previously missing → error 517 "За
+   юридическо лице, задължително се попълва упълномощено лице").
+   `warehouse-backend/src/routes/econt.ts`.
+7. Econt `sendDate` (NOT `shipmentDate` — Econt API quirk, took an hour to
+   find) defaults to tomorrow if caller omits. Required for address delivery.
+8. Migrations 060 (`econt_shipment_description`) + 061 (`econt_shipment_date`)
+   on orders.
+9. New "Съдържание на пратката" + "Дата на доставка" inputs in
+   `EcontShippingPicker.tsx` (date only shown for address delivery).
+10. Cleanup of all today's test orders + restock of fulfilled inventory.
+
+**In-progress (NOT yet pushed to client at end of session)**
+
+- Combobox dropdown was clipped inside dialogs → switched to React Portal +
+  `position: fixed` + `stopPropagation` + `onMouseDown` on options.
+  `warehouse-frontend/src/components/ui/Combobox.tsx`.
+- New-partner form in Orders.tsx now has debounced EIK auto-lookup
+  (papagal.bg endpoint already at `/partners/lookup/:eik`). Last user test
+  said clicking on a partner option in the dropdown still closes without
+  selecting — `onMouseDown` fix may resolve this; pending live confirmation.
+
+**API issue with EIK auto-fill**
+
+- `papagal.bg` is now Cloudflare-blocked from server-side calls (returns
+  HTML challenge). User mentioned having a paid trade-registry API key for
+  the Telegram bot but didn't share it. Need to ask user for:
+  - API URL
+  - API key
+  - Sample response shape
+    Then swap papagal.bg out for the working service.
+
+**Open questions / things to remember**
+
+- User wants to review FULL Econt API documentation and craft a waybill
+  template that matches Econt's standard form. Pending screenshot/template.
+- After 4 today's orders + linked invoices were deleted, order numbering
+  sequence kept going (next will be #5 etc). User aware.
+- Local dev stack now mirrors client exactly (same DB content, same admin
+  password). Vite hot-reload + `tsx watch` make iteration fast on dev Mac;
+  `./scripts/push-to-client.sh` ships changes when ready.
+
+**Plan parked for next session — Замяна на стока + Частично КИ:**
+
+- File: `docs/superpowers/plans/2026-04-30-replacements-and-partial-credit-notes.md`
+- 16 tasks across 8 phases (~3 work-days)
+- **Awaits user answers on 8 open questions before execution** (касови
+  продажби flow, decimals в qty, permissions, срок-cutoff и т.н. — изброени
+  в plan-а)
+- When ready: `git checkout main && git pull && git checkout -b feature/MERTM-replacements-and-partial-credit-notes` then run `executing-plans` skill against the file.
+
+### Earlier today — Daily Report
 
 **Daily Report (Дневен отчет)** (2026-04-30, branch `feature/MERTM-daily-report` from main):
 
