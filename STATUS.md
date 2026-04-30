@@ -5,10 +5,28 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-30 (Client deployment + Econt + Combobox fixes — IN PROGRESS)
-**Active branch:** `main` (uncommitted changes, see "Pending commits" below)
+**Last updated:** 2026-04-30 (Batch F1 SHIPPED to main locally — Tailscale push pending Tuesday)
+**Active branch:** `main` (Batch F1 merged)
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active task:** Bug fixes + Econt full integration on the live client Mac. Local dev stack runs in parallel for fast iteration. See "Live deployment" below.
+**Active task:** Tuesday — push Batch F1 to client Mac via `./scripts/push-to-client.sh`.
+Manual E2E (Task 17 of plan) is best done on the live data once pushed.
+
+**Batch F1 — COMPLETE (Tasks 1-9 + 12-16 + verification):**
+
+- Migrations 064 (`order_items.line_status` enum) + 065 (`notifications.payload`)
+- Backend: shared constant, `deductProductStock({allowNegative})`, fulfill
+  branches per status, persistence in 3 INSERT sites, 2 transition endpoints
+  (`/handover`, `/confirm-from-awaiting`), incoming notification trigger, 2
+  filter params (`?has_paid_not_taken=`, `?has_awaiting=`)
+- Frontend: types, bg-tint + chip in drawer items, per-row "✓ Предадено" / "✓
+  Потвърди" buttons, 3-button split-on-oversell in OversellConfirmDialog,
+  2 filter pills
+- Smoke-tested: order with mixed line_status fulfilled correctly (normal -2,
+  paid_not_taken allowed -100, awaiting skipped); handover flipped to
+  normal w/o stock change; confirm-from-awaiting blocked by 409 when
+  insufficient stock (guard works as designed)
+- Tasks 10+11 (formal vitest tests) deferred — manual smoke covers happy
+  paths; Task 17 manual E2E pending on real client data
 
 ---
 

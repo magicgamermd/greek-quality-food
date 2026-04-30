@@ -8,6 +8,7 @@ import {
   PERMISSIONS,
 } from "../lib/permissions.js";
 import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
+import { orderLineStatusSchema } from "../lib/order-line-status.js";
 import {
   computeBelowCostItems,
   type ProductCost,
@@ -105,6 +106,9 @@ const orderItemSchema = z.object({
   // Per-line отстъпка % (0–100). Прилага се при запис на total_price.
   // Default 0 → backward-compatible за стари callers които не подават.
   discount_percent: z.number().min(0).max(100).optional().default(0),
+  // Batch F1: per-line state. Optional; defaults to 'normal' on the
+  // backend side via orderLineStatusSchema's .default.
+  line_status: orderLineStatusSchema.optional(),
 });
 
 const createOrderSchema = z.object({
@@ -441,6 +445,8 @@ export default async function orderRoutes(app: FastifyInstance) {
       q,
       below_cost_only,
       article,
+      has_paid_not_taken,
+      has_awaiting,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -474,6 +480,22 @@ export default async function orderRoutes(app: FastifyInstance) {
     // cannot see purchase_price elsewhere in the app.
     if (below_cost_only === "true") {
       where += ` AND o.below_cost_approved_at IS NOT NULL`;
+    }
+
+    // Batch F1 filter pills — show only orders with the matching line state.
+    // EXISTS keeps the query plan tight (no JOIN cardinality blowup); the
+    // partial index idx_order_items_line_status_pending matches both clauses.
+    if (has_paid_not_taken === "true") {
+      where += ` AND EXISTS (
+        SELECT 1 FROM order_items oi
+        WHERE oi.order_id = o.id AND oi.line_status = 'paid_not_taken'
+      )`;
+    }
+    if (has_awaiting === "true") {
+      where += ` AND EXISTS (
+        SELECT 1 FROM order_items oi
+        WHERE oi.order_id = o.id AND oi.line_status = 'awaiting'
+      )`;
     }
 
     const fromDate = normalizeOptionalText(date_from);
@@ -980,8 +1002,8 @@ export default async function orderRoutes(app: FastifyInstance) {
             } = await client.query(
               `INSERT INTO order_items
                  (order_id, product_id, quantity, unit_price, discount_percent, total_price,
-                  name_bg_snapshot, name_en_snapshot, sku_snapshot)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+                  name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
               [
                 order.id,
                 item.product_id,
@@ -992,6 +1014,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                 prod.name_bg,
                 prod.name_en,
                 prod.sku,
+                item.line_status ?? "normal",
               ],
             );
             items.push(orderItem);
@@ -1195,8 +1218,8 @@ export default async function orderRoutes(app: FastifyInstance) {
           } = await client.query(
             `INSERT INTO order_items
                (order_id, product_id, quantity, unit_price, total_price,
-                name_bg_snapshot, name_en_snapshot, sku_snapshot)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+                name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
             [
               order.id,
               productId,
@@ -1206,6 +1229,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               snap.name_bg,
               snap.name_en,
               snap.sku,
+              (item as any).line_status ?? "normal",
             ],
           );
           items.push(orderItem);
@@ -1492,10 +1516,16 @@ export default async function orderRoutes(app: FastifyInstance) {
               // (cost_source_batch_id) is obsolete — left NULL in the DB.
               let costUnitPrice: number | null = null;
               if (mustReconcileStock) {
+                // Edit-order flow has historically allowed negative
+                // inventory (no pre-check). Preserve that behaviour
+                // explicitly so the new helper signature doesn't tighten
+                // edits unintentionally; line_status enforcement happens
+                // in the fulfill flow.
                 costUnitPrice = await deductProductStock(
                   client,
                   item.product_id,
                   item.quantity,
+                  { allowNegative: true },
                 );
               }
 
@@ -1516,8 +1546,8 @@ export default async function orderRoutes(app: FastifyInstance) {
               } = await client.query(
                 `INSERT INTO order_items
                    (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price,
-                    name_bg_snapshot, name_en_snapshot, sku_snapshot)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [
                   id,
                   item.product_id,
@@ -1529,6 +1559,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                   snap.name_bg,
                   snap.name_en,
                   snap.sku,
+                  (item as any).line_status ?? "normal",
                 ],
               );
               items.push(orderItem);
@@ -1773,11 +1804,22 @@ export default async function orderRoutes(app: FastifyInstance) {
         // MERT-M: simple per-product deduction. COGS snapshot comes from
         // products.purchase_price; batch-sourced COGS (cost_source_batch_id)
         // stays NULL since there are no batches for durable goods.
+        //
+        // Batch F1: branch on line_status —
+        //   - 'awaiting'        → pre-order; skip entirely (no stock, no COGS)
+        //   - 'paid_not_taken'  → customer already paid; allow inventory
+        //                          to go negative (promised stock)
+        //   - 'normal' (default) → standard pre-checked deduction
         for (const item of items) {
+          if (item.line_status === "awaiting") {
+            continue;
+          }
+          const allowNegative = item.line_status === "paid_not_taken";
           const costUnitPrice = await deductProductStock(
             client,
             item.product_id,
             parseFloat(item.quantity),
+            { allowNegative },
           );
 
           await client.query(
@@ -1821,6 +1863,102 @@ export default async function orderRoutes(app: FastifyInstance) {
       }
 
       return result;
+    },
+  );
+
+  // POST /orders/:id/items/:itemId/handover — Batch F1
+  // Flip a paid_not_taken line to normal (customer has now picked up the
+  // already-deducted goods). No stock change — the deduction happened at
+  // fulfill time with allowNegative=true. Idempotent guard rejects the
+  // call if the line is in any other status.
+  app.post(
+    "/:id/items/:itemId/handover",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, itemId } = request.params as {
+        id: string;
+        itemId: string;
+      };
+      return await transaction(async (client) => {
+        const {
+          rows: [item],
+        } = await client.query(
+          `SELECT id, order_id, line_status FROM order_items
+           WHERE id = $1 AND order_id = $2 FOR UPDATE`,
+          [itemId, id],
+        );
+        if (!item) {
+          throw Object.assign(new Error("Order item not found"), {
+            statusCode: 404,
+          });
+        }
+        if (item.line_status !== "paid_not_taken") {
+          throw Object.assign(
+            new Error("Only paid_not_taken lines can be handed over."),
+            { statusCode: 400 },
+          );
+        }
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE order_items SET line_status = 'normal'
+           WHERE id = $1 RETURNING *`,
+          [itemId],
+        );
+        return updated;
+      });
+    },
+  );
+
+  // POST /orders/:id/items/:itemId/confirm-from-awaiting — Batch F1
+  // Promote an awaiting (pre-order) line to normal AND deduct stock now.
+  // Refuses 409 when stock is insufficient — the caller (cashier) is
+  // expected to confirm the goods have arrived (typically via the
+  // pending_order_ready notification).
+  app.post(
+    "/:id/items/:itemId/confirm-from-awaiting",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, itemId } = request.params as {
+        id: string;
+        itemId: string;
+      };
+      return await transaction(async (client) => {
+        const {
+          rows: [item],
+        } = await client.query(
+          `SELECT * FROM order_items
+           WHERE id = $1 AND order_id = $2 FOR UPDATE`,
+          [itemId, id],
+        );
+        if (!item) {
+          throw Object.assign(new Error("Order item not found"), {
+            statusCode: 404,
+          });
+        }
+        if (item.line_status !== "awaiting") {
+          throw Object.assign(
+            new Error("Only awaiting lines can be confirmed."),
+            { statusCode: 400 },
+          );
+        }
+        const costUnitPrice = await deductProductStock(
+          client,
+          item.product_id,
+          parseFloat(item.quantity),
+          { allowNegative: false },
+        );
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE order_items
+             SET line_status = 'normal',
+                 cost_unit_price = $1
+           WHERE id = $2 RETURNING *`,
+          [costUnitPrice, itemId],
+        );
+        return updated;
+      });
     },
   );
 
@@ -2102,7 +2240,33 @@ export default async function orderRoutes(app: FastifyInstance) {
     db: DbExecutor,
     productId: number,
     quantity: number,
+    options: { allowNegative?: boolean } = {},
   ): Promise<number | null> {
+    const { allowNegative = false } = options;
+
+    // Pre-check: refuse to go below zero unless the caller explicitly
+    // opted in (used by paid_not_taken lines, where the customer has
+    // already paid so promised stock can run negative).
+    if (!allowNegative) {
+      const {
+        rows: [inv],
+      } = await db.query(
+        `SELECT COALESCE(SUM(quantity), 0)::numeric AS qty
+           FROM inventory
+          WHERE product_id = $1 AND warehouse_id = 1`,
+        [productId],
+      );
+      const current = parseFloat(inv?.qty ?? "0");
+      if (current < quantity) {
+        throw Object.assign(
+          new Error(
+            `Insufficient stock for product ${productId}: have ${current}, need ${quantity}`,
+          ),
+          { statusCode: 409 },
+        );
+      }
+    }
+
     const { rowCount } = await db.query(
       `UPDATE inventory
          SET quantity = quantity - $1,
@@ -2368,15 +2532,37 @@ export default async function orderRoutes(app: FastifyInstance) {
     orderId: number,
     db: DbExecutor = { query },
   ) {
+    // Batch D — when an active invoice was issued with `partner_override`,
+    // its receiver (a company) supersedes the original order partner (an
+    // individual) on every transaction document: Стокова разписка, Оферта,
+    // Приемо-предавателен протокол — and the order drawer header. The JOIN
+    // is skipped when the invoice was cancelled or its receiver matches the
+    // original partner (no override took place); deletion clears
+    // orders.invoice_id via FK ON DELETE SET NULL, so that case yields NULL
+    // here too.
     const {
       rows: [order],
     } = await db.query(
-      `SELECT o.*, p.name AS partner_name, p.eik AS partner_eik,
+      `SELECT o.*,
+              p.name AS partner_name, p.eik AS partner_eik,
               p.vat_number AS partner_vat, p.address AS partner_address,
               p.city AS partner_city, p.phone AS partner_phone,
-              p.contact_person AS partner_mol
+              p.contact_person AS partner_mol,
+              p.contact_person AS partner_contact_person,
+              ip.id   AS invoice_partner_id,
+              ip.name AS invoice_partner_name,
+              ip.eik  AS invoice_partner_eik,
+              ip.vat_number AS invoice_partner_vat,
+              ip.address    AS invoice_partner_address,
+              ip.city       AS invoice_partner_city,
+              ip.phone      AS invoice_partner_phone,
+              ip.contact_person AS invoice_partner_mol
        FROM orders o
        JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN invoices inv ON inv.id = o.invoice_id
+                              AND inv.status <> 'cancelled'
+                              AND inv.partner_id <> o.partner_id
+       LEFT JOIN partners ip ON ip.id = inv.partner_id
        WHERE o.id = $1`,
       [orderId],
     );
@@ -2398,6 +2584,37 @@ export default async function orderRoutes(app: FastifyInstance) {
     );
 
     return { order, items };
+  }
+
+  // Pick the partner that should appear as the receiver on transaction
+  // documents (Стокова разписка, Оферта, ППП, header). When an active
+  // invoice override is present (loadOrderWithBatches surfaced
+  // `invoice_partner_*`), prefer it; otherwise fall back to the original
+  // order partner. Keeps the four PDF endpoints uniform without each one
+  // re-implementing the precedence rule.
+  function effectiveReceiver(order: any) {
+    if (order?.invoice_partner_id) {
+      return {
+        name: order.invoice_partner_name,
+        eik: order.invoice_partner_eik,
+        vat_number: order.invoice_partner_vat,
+        address: order.invoice_partner_address,
+        city: order.invoice_partner_city,
+        phone: order.invoice_partner_phone,
+        mol: order.invoice_partner_mol,
+        contact_person: order.invoice_partner_mol,
+      };
+    }
+    return {
+      name: order.partner_name,
+      eik: order.partner_eik,
+      vat_number: order.partner_vat,
+      address: order.partner_address,
+      city: order.partner_city,
+      phone: order.partner_phone,
+      mol: order.partner_mol,
+      contact_person: order.partner_contact_person ?? order.partner_mol,
+    };
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -2458,15 +2675,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         doc_number: docNumber,
         doc_date: order.order_date || order.created_at,
         company,
-        partner: {
-          name: order.partner_name,
-          eik: order.partner_eik,
-          vat_number: order.partner_vat,
-          address: order.partner_address,
-          city: order.partner_city,
-          phone: order.partner_phone,
-          mol: order.partner_mol,
-        },
+        partner: effectiveReceiver(order),
         warehouse_name: "Склад Овча Купел",
         items: items.map((i: any) => ({
           sku: i.sku,
@@ -2536,15 +2745,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         doc_number: docNumber,
         doc_date: order.order_date || order.created_at,
         company,
-        partner: {
-          name: order.partner_name,
-          eik: order.partner_eik,
-          vat_number: order.partner_vat,
-          address: order.partner_address,
-          city: order.partner_city,
-          phone: order.partner_phone,
-          mol: order.partner_mol,
-        },
+        partner: effectiveReceiver(order),
         items: items.map((i: any) => ({
           sku: i.sku,
           name_bg: i.name_bg,
@@ -2617,15 +2818,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         date: (order.order_date || order.created_at || new Date().toISOString())
           .toString()
           .slice(0, 10),
-        partner: {
-          name: order.partner_name,
-          eik: order.partner_eik,
-          vat_number: order.partner_vat,
-          address: order.partner_address,
-          city: order.partner_city,
-          phone: order.partner_phone,
-          contact_person: order.partner_contact_person,
-        },
+        partner: effectiveReceiver(order),
         company: {
           name: company.company_name,
           eik: company.eik,
