@@ -817,7 +817,7 @@ function OrderDetailModal({
     mutationFn: (id: number) => api.post(`/orders/${id}/quote`),
     onSuccess: (_res, id) => {
       invalidateAllOrderRelated();
-      window.open(`/api/orders/${id}/offer-pdf`, "_blank");
+      void handleDocDownload(id, "offer");
     },
   });
 
@@ -877,7 +877,7 @@ function OrderDetailModal({
   // Document PDF download + print
   const handleDocDownload = async (
     orderId: number,
-    docType: "stock-dispatch" | "commercial-doc" | "warranty",
+    docType: "stock-dispatch" | "commercial-doc" | "warranty" | "offer",
     options?: { pricingMode?: "net" | "gross" },
   ) => {
     try {
@@ -1368,12 +1368,7 @@ function OrderDetailModal({
                 <>
                   <Button
                     variant="outline"
-                    onClick={() =>
-                      window.open(
-                        `/api/orders/${detail.id}/offer-pdf`,
-                        "_blank",
-                      )
-                    }
+                    onClick={() => handleDocDownload(detail.id, "offer")}
                     className="border-amber-500 text-amber-700 hover:bg-amber-50"
                     title="Отвори / регенерирай PDF на офертата"
                   >
@@ -1917,9 +1912,7 @@ function OrderDetailModal({
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() =>
-                    window.open(`/api/orders/${detail.id}/offer-pdf`, "_blank")
-                  }
+                  onClick={() => handleDocDownload(detail.id, "offer")}
                   className="text-amber-700 border-amber-300 hover:bg-amber-50"
                   title="Оферта (информационна — без задължение)"
                 >
@@ -3275,10 +3268,21 @@ function CreateOrderModal({
       }
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
-      // If saved as quoted, open the offer PDF in a new tab so the cashier
-      // can hand it to the customer immediately.
+      // If saved as quoted, fetch the offer PDF as a blob (auth headers are
+      // attached by the api wrapper) and open it in a new tab. window.open
+      // on the raw URL fails because the browser doesn't carry the JWT.
       if (createdOrder?.status === "quoted" && createdOrder.id) {
-        window.open(`/api/orders/${createdOrder.id}/offer-pdf`, "_blank");
+        api
+          .get(`/orders/${createdOrder.id}/offer-pdf`, { responseType: "blob" })
+          .then((pdfRes) => {
+            const blob = new Blob([pdfRes.data], { type: "application/pdf" });
+            const url = URL.createObjectURL(blob);
+            window.open(url, "_blank");
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+          })
+          .catch(() => {
+            /* swallow — order was created, PDF can be re-opened from drawer */
+          });
       }
       if (onCreated && createdOrder && createdOrder.id) {
         // Open detail modal directly — user sees order summary
