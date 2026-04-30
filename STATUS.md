@@ -5,10 +5,10 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-30 (Batch F1 — all tasks complete on `feature/MERTM-batch-f1-line-status`; merge + Tailscale push pending Tuesday)
-**Active branch:** `feature/MERTM-batch-f1-line-status` (ahead of main by ~16 commits — ready to merge)
+**Last updated:** 2026-04-30 (Batch F1 SHIPPED to main locally — Tailscale push pending Tuesday)
+**Active branch:** `main` (Batch F1 merged via `2243348 merge: Batch F1 — paid-not-taken + awaiting line statuses`)
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active task:** Tuesday — merge `feature/MERTM-batch-f1-line-status` → main, then `./scripts/push-to-client.sh` to client Mac. Run Task 17 manual E2E on live data once pushed.
+**Active task:** Tuesday — `./scripts/push-to-client.sh` to client Mac. Run Task 17 manual E2E on live data once pushed.
 
 **Batch F1 — COMPLETE (all 18 tasks of the plan):**
 
