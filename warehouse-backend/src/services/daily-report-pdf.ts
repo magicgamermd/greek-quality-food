@@ -113,6 +113,10 @@ function formatDateBg(iso: string): string {
   return `${d}.${m}.${y}`;
 }
 
+function fmtEur(v: number): string {
+  return formatEurAmount(v) + " €";
+}
+
 export async function generateDailyReportPdf(
   data: DailyReportData,
 ): Promise<void> {
@@ -227,7 +231,7 @@ export async function generateDailyReportPdf(
           o.partner_name.length > 30
             ? o.partner_name.slice(0, 28) + "…"
             : o.partner_name,
-          formatEurAmount(o.total_amount),
+          fmtEur(o.total_amount),
           STATUS_LABEL_BG[o.status] ?? o.status,
           o.payment_method
             ? (PAYMENT_LABEL_BG[o.payment_method] ?? o.payment_method)
@@ -257,7 +261,7 @@ export async function generateDailyReportPdf(
       const totalSum = data.orders.reduce((s, o) => s + o.total_amount, 0);
       doc.font("MainBold").fontSize(9).fillColor("#0f172a");
       doc.text(
-        `Общо: ${totalCount} поръчки     ${formatEurAmount(totalSum)}`,
+        `Общо: ${totalCount} поръчки     ${fmtEur(totalSum)}`,
         L,
         doc.y,
         { width: pageW, align: "right" },
@@ -268,7 +272,7 @@ export async function generateDailyReportPdf(
       for (const s of data.ordersSummaryByStatus) {
         if (s.count === 0) continue;
         doc.text(
-          `   ${STATUS_LABEL_BG[s.status] ?? s.status}: ${s.count} бр.    ${formatEurAmount(s.sum)}`,
+          `   ${STATUS_LABEL_BG[s.status] ?? s.status}: ${s.count} бр.    ${fmtEur(s.sum)}`,
           L,
           doc.y,
         );
@@ -281,17 +285,17 @@ export async function generateDailyReportPdf(
     const inv = data.invoices;
     doc.fontSize(9).fillColor("#0f172a");
     doc.text(
-      `Активни:    ${inv.active.count}     ${formatEurAmount(inv.active.gross)}  (нето: ${formatEurAmount(inv.active.net)} + ДДС: ${formatEurAmount(inv.active.vat)})`,
+      `Активни:    ${inv.active.count}     ${fmtEur(inv.active.gross)}  (нето: ${fmtEur(inv.active.net)} + ДДС: ${fmtEur(inv.active.vat)})`,
       L,
       doc.y,
     );
     doc.text(
-      `Сторнирани: ${inv.credit_noted.count}     ${formatEurAmount(inv.credit_noted.sum)}`,
+      `Сторнирани: ${inv.credit_noted.count}     ${fmtEur(inv.credit_noted.sum)}`,
       L,
       doc.y,
     );
     doc.text(
-      `Анулирани:  ${inv.cancelled.count}     ${formatEurAmount(inv.cancelled.sum)}`,
+      `Анулирани:  ${inv.cancelled.count}     ${fmtEur(inv.cancelled.sum)}`,
       L,
       doc.y,
     );
@@ -302,7 +306,7 @@ export async function generateDailyReportPdf(
         .text("По метод на плащане (само активни):", L, doc.y);
       for (const m of inv.byPaymentMethod) {
         doc.text(
-          `   ${PAYMENT_LABEL_BG[m.method] ?? m.method}: ${m.count} фактури    ${formatEurAmount(m.sum)}`,
+          `   ${PAYMENT_LABEL_BG[m.method] ?? m.method}: ${m.count} фактури    ${fmtEur(m.sum)}`,
           L,
           doc.y,
         );
@@ -320,7 +324,7 @@ export async function generateDailyReportPdf(
     } else {
       for (const m of data.payments.byMethod) {
         doc.text(
-          `   ${PAYMENT_LABEL_BG[m.method] ?? m.method}: ${formatEurAmount(m.sum)}`,
+          `   ${PAYMENT_LABEL_BG[m.method] ?? m.method}: ${fmtEur(m.sum)}`,
           L,
           doc.y,
         );
@@ -328,7 +332,7 @@ export async function generateDailyReportPdf(
       doc.moveDown(0.2);
       doc
         .font("MainBold")
-        .text(`   Общо: ${formatEurAmount(data.payments.total)}`, L, doc.y);
+        .text(`   Общо: ${fmtEur(data.payments.total)}`, L, doc.y);
       doc.font("Main");
     }
     doc.moveDown(0.6);
@@ -349,7 +353,7 @@ export async function generateDailyReportPdf(
         doc.y,
       );
       doc.text(
-        `   Наложен платеж: ${codCount}  (сума: ${formatEurAmount(codSum)})`,
+        `   Наложен платеж: ${codCount}  (сума: ${fmtEur(codSum)})`,
         L,
         doc.y,
       );
@@ -385,7 +389,7 @@ export async function generateDailyReportPdf(
           s.partner_name.length > 28
             ? s.partner_name.slice(0, 26) + "…"
             : s.partner_name,
-          formatEurAmount(s.total_amount),
+          fmtEur(s.total_amount),
           s.type === "cod" ? "Наложен пл." : "Еконт",
           s.shipment_number,
         ];
@@ -405,7 +409,7 @@ export async function generateDailyReportPdf(
     // ── Раздел 5: Неплатени фактури ─────────────────────
     sectionHeader("НЕПЛАТЕНИ ФАКТУРИ (към края на деня)");
     doc.text(
-      `Общ остатък: ${formatEurAmount(data.outstanding.totalRemaining)}  (${data.outstanding.totalCount} фактури)`,
+      `Общ остатък: ${fmtEur(data.outstanding.totalRemaining)}  (${data.outstanding.totalCount} фактури)`,
       L,
       doc.y,
     );
@@ -446,9 +450,9 @@ export async function generateDailyReportPdf(
           r.partner_name.length > 24
             ? r.partner_name.slice(0, 22) + "…"
             : r.partner_name,
-          formatEurAmount(r.gross),
-          formatEurAmount(r.paid),
-          formatEurAmount(r.remaining),
+          fmtEur(r.gross),
+          fmtEur(r.paid),
+          fmtEur(r.remaining),
           String(r.days_overdue),
         ];
         cx = L;
@@ -472,7 +476,7 @@ export async function generateDailyReportPdf(
     } else {
       data.topProducts.forEach((p, idx) => {
         doc.text(
-          `${idx + 1}. ${p.name}${p.sku ? `  [${p.sku}]` : ""}    ${p.qty} бр.    ${formatEurAmount(p.total)}`,
+          `${idx + 1}. ${p.name}${p.sku ? `  [${p.sku}]` : ""}    ${p.qty} бр.    ${fmtEur(p.total)}`,
           L,
           doc.y,
           { width: pageW },
