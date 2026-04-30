@@ -5,10 +5,10 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-30 (Daily Report PR ready to merge)
-**Active branch:** `feature/MERTM-daily-report`
+**Last updated:** 2026-04-30 (Daily Report merged + live-validated)
+**Active branch:** `main`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active feature:** Daily Report (Дневен отчет) — **CODE COMPLETE**. New `GET /reports/daily-pdf` endpoint + 6-section A4 PDF service + Dashboard date-picker dialog with authed blob download. REPORTS_VIEW permission gate (admin + accountant); warehouse blocked. 7 unit/integration tests passing; offer-pdf currency bug fixed in same PR. Manual E2E (Task 8 in plan, 5-step script) deferred to user verification before merge.
+**Active feature:** Daily Report (Дневен отчет) — **MERGED + LIVE-VALIDATED**. `GET /reports/daily-pdf?date=YYYY-MM-DD` returns 200 + valid PDF against real Postgres for today/yesterday/older dates; bad date format returns 400. Two schema mismatches that mocked tests missed (`credit_note_id` and `payment_date`) were caught and hot-fixed in commit `7be88f9`.
 
 ---
 
@@ -73,7 +73,11 @@ Logs: `/tmp/mertm-{backend,frontend,ai}.log`
 - 2 unit tests (`daily-report-pdf.test.ts`): non-empty PDF for a populated day, valid PDF for an empty day. (Third test for Еконт-mixed path was added after spec review caught the missing case.)
 - Bonus bug fix: `services/offer-pdf.ts` was using `fmtBGN` (" лв.") — switched to `formatEurAmount` (€) via local `fmtEur` wrapper to match daily-report and codebase EUR migration.
 - BE+FE type-check clean; new tests passing (orders-quotation 7/7 still green after offer-pdf swap).
-- **Open item:** manual E2E (Task 8 in plan, 5-step script) deferred to post-merge user verification.
+- **Merged to main 2026-04-30** (commit `2689e1a`); live smoke against real Postgres surfaced two SQL/schema mismatches the mocked tests didn't catch — hot-fixed in commit `7be88f9`:
+  - `invoices.credit_note_id` doesn't exist in MERT-M (Greek Foods inheritance leak); MERT-M uses `document_type` + `related_invoice_id` pattern. Re-wrote 4 SQL queries with `LEFT JOIN invoices cn ON cn.related_invoice_id = i.id AND cn.document_type='credit_note'`.
+  - `payments.payment_date` doesn't exist; column is `paid_at`.
+- After hotfix: live `GET /reports/daily-pdf?date=...` returns 200 + valid PDF for today / yesterday / older dates; Zod still rejects bad-format dates with 400.
+- **Follow-up filed for separate task:** mocked-DB integration tests (`vi.mock("../db.js")`) never validate column names against real schema — consider a real-DB or schema-aware fixture pattern for SQL-heavy routes.
 
 **Batch E — Quotation (Оферта)** (2026-04-29, branch `feature/MERTM-batch-e-quotation` from main):
 
