@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -127,10 +127,16 @@ export function Settings() {
 
   const [companyForm, setCompanyForm] = useState<CompanySettings>(companyData);
 
-  // Sync form when data loads from API
+  // Hydrate the form ONCE from the first non-empty server payload. After
+  // that we never overwrite user-typed values — even if React Query
+  // background-refetches on window focus the inputs they're editing won't
+  // suddenly snap back to the stale server copy.
+  const hydratedRef = useRef(false);
   useEffect(() => {
+    if (hydratedRef.current) return;
     if (companyData && Object.keys(companyData).length > 0) {
       setCompanyForm(companyData);
+      hydratedRef.current = true;
     }
   }, [companyData]);
 
@@ -185,6 +191,18 @@ export function Settings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       showSuccess("Фирмени данни запазени");
+      // Re-hydrate from the saved-and-refetched server copy on next load.
+      hydratedRef.current = false;
+    },
+    onError: (err: any) => {
+      const detail =
+        err?.response?.data?.error ||
+        err?.message ||
+        "Неизвестна грешка при запазване";
+      setSuccessMessage("");
+      window.alert(`Грешка при запазване на фирмени данни:\n${detail}`);
+      // eslint-disable-next-line no-console
+      console.error("Settings save failed:", err);
     },
   });
 
