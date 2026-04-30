@@ -262,6 +262,9 @@ export interface OrderItem {
   name_en?: string;
   sku?: string;
   unit?: string;
+  // Batch F1 — per-line state. Backend defaults to 'normal' so older
+  // payloads stay backward-compatible.
+  line_status?: "normal" | "paid_not_taken" | "awaiting";
 }
 
 export interface Invoice {
