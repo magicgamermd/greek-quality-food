@@ -70,13 +70,16 @@ describe("incoming confirm inventory propagation", () => {
           },
         ]),
       )
-      // 2..6: per-item INSERT inventory + UPDATE products, then the
-      // final INSERT notifications.
-      .mockResolvedValueOnce(resultRows([]))
-      .mockResolvedValueOnce(resultRows([]))
-      .mockResolvedValueOnce(resultRows([]))
-      .mockResolvedValueOnce(resultRows([]))
-      .mockResolvedValueOnce(resultRows([]));
+      // Per-item: INSERT inventory + UPDATE products purchase_price +
+      // SELECT pendingLines (Batch F1 — no matching open lines here).
+      // After both items: final INSERT notifications (stock_in summary).
+      .mockResolvedValueOnce(resultRows([])) // 2: INSERT inventory item 1
+      .mockResolvedValueOnce(resultRows([])) // 3: UPDATE purchase_price item 1
+      .mockResolvedValueOnce(resultRows([])) // 4: SELECT pendingLines item 1
+      .mockResolvedValueOnce(resultRows([])) // 5: INSERT inventory item 2
+      .mockResolvedValueOnce(resultRows([])) // 6: UPDATE purchase_price item 2
+      .mockResolvedValueOnce(resultRows([])) // 7: SELECT pendingLines item 2
+      .mockResolvedValueOnce(resultRows([])); // 8: INSERT notifications stock_in
 
     mockTransaction.mockImplementation(async (callback: any) =>
       callback({ query: clientQuery }),
@@ -99,10 +102,12 @@ describe("incoming confirm inventory propagation", () => {
       //   1: SELECT * FROM incoming_items WHERE incoming_goods_id = $1
       //   2: INSERT INTO inventory (product 501, qty 5) — partial-index upsert
       //   3: UPDATE products SET purchase_price = 8.5 WHERE id = 501
-      //   4: INSERT INTO inventory (product 902, qty 2)
-      //   5: UPDATE products SET purchase_price = 12.2 WHERE id = 902
-      //   6: INSERT INTO notifications
-      expect(clientQuery).toHaveBeenCalledTimes(7);
+      //   4: SELECT pendingLines for product 501 (Batch F1) — empty here
+      //   5: INSERT INTO inventory (product 902, qty 2)
+      //   6: UPDATE products SET purchase_price = 12.2 WHERE id = 902
+      //   7: SELECT pendingLines for product 902 (Batch F1) — empty here
+      //   8: INSERT INTO notifications (stock_in summary)
+      expect(clientQuery).toHaveBeenCalledTimes(9);
 
       expect(String(clientQuery.mock.calls[0][0])).toContain(
         "UPDATE incoming_goods",
@@ -131,21 +136,37 @@ describe("incoming confirm inventory propagation", () => {
       );
       expect(clientQuery.mock.calls[3][1]).toEqual([8.5, 501]);
 
-      // Item 2 → product 902 — same pattern, no batch step.
+      // Batch F1 — pendingLines lookup for product 501 (no matching open
+      // order lines, so no notification is emitted).
       expect(String(clientQuery.mock.calls[4][0])).toContain(
+        "FROM order_items oi",
+      );
+      expect(String(clientQuery.mock.calls[4][0])).toContain(
+        "line_status IN ('paid_not_taken', 'awaiting')",
+      );
+      expect(clientQuery.mock.calls[4][1]).toEqual([501]);
+
+      // Item 2 → product 902 — same pattern, no batch step.
+      expect(String(clientQuery.mock.calls[5][0])).toContain(
         "INSERT INTO inventory",
       );
-      expect(clientQuery.mock.calls[4][1]).toEqual([902, 1, 2]);
-
-      expect(String(clientQuery.mock.calls[5][0])).toContain(
-        "UPDATE products SET purchase_price = $1",
-      );
-      expect(clientQuery.mock.calls[5][1]).toEqual([12.2, 902]);
+      expect(clientQuery.mock.calls[5][1]).toEqual([902, 1, 2]);
 
       expect(String(clientQuery.mock.calls[6][0])).toContain(
+        "UPDATE products SET purchase_price = $1",
+      );
+      expect(clientQuery.mock.calls[6][1]).toEqual([12.2, 902]);
+
+      // Batch F1 — pendingLines lookup for product 902.
+      expect(String(clientQuery.mock.calls[7][0])).toContain(
+        "FROM order_items oi",
+      );
+      expect(clientQuery.mock.calls[7][1]).toEqual([902]);
+
+      expect(String(clientQuery.mock.calls[8][0])).toContain(
         "INSERT INTO notifications",
       );
-      expect(clientQuery.mock.calls[6][1]).toEqual([
+      expect(clientQuery.mock.calls[8][1]).toEqual([
         "Incoming goods #88 confirmed. 2 items added to stock.",
       ]);
 

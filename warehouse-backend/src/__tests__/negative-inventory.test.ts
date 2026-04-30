@@ -46,8 +46,10 @@ describe("orders route — back-order / negative inventory", () => {
 
   it("fulfill allows inventory.quantity to go negative (UPDATE drops the >= guard)", async () => {
     // Order #42 has a single pending item (product 7, qty 3). Stock is 0.
-    // After the change, deductProductStock must UPDATE without the
-    // `quantity >= $1` guard so the row lands at -3.
+    // After Batch F1, normal lines refuse to go negative — paid_not_taken
+    // is the new opt-in for negative inventory (customer already paid,
+    // promised stock can run negative). The line_status='paid_not_taken'
+    // here keeps the test's intent (verify the >= guard is gone) intact.
     const clientQuery = vi
       .fn()
       // 1. SELECT * FROM orders WHERE id = $1 FOR UPDATE
@@ -70,11 +72,13 @@ describe("orders route — back-order / negative inventory", () => {
             product_id: 7,
             quantity: "3",
             unit_price: "10",
+            line_status: "paid_not_taken",
           },
         ]),
       )
       // 3. deductProductStock UPDATE inventory ... RETURNING quantity
       //    Current stock is 0 → new stock is -3. Row IS returned.
+      //    No pre-check SELECT — paid_not_taken passes allowNegative=true.
       .mockResolvedValueOnce(rows([{ quantity: "-3" }]))
       // 4. SELECT purchase_price FROM products WHERE id = $1
       .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
@@ -127,10 +131,12 @@ describe("orders route — back-order / negative inventory", () => {
             product_id: 8,
             quantity: "2",
             unit_price: "10",
+            line_status: "paid_not_taken",
           },
         ]),
       )
       // UPDATE inventory ... RETURNING quantity → 0 rows (no match)
+      // No pre-check SELECT — paid_not_taken passes allowNegative=true.
       .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
       // INSERT INTO inventory ... VALUES ($1, 1, $2, NULL)
       .mockResolvedValueOnce(rows([]))
@@ -182,6 +188,7 @@ describe("orders route — back-order / negative inventory", () => {
             product_id: 9,
             quantity: "10",
             unit_price: "10",
+            line_status: "paid_not_taken",
           },
         ]),
       )
