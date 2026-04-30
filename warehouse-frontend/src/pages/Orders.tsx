@@ -1018,10 +1018,17 @@ function OrderDetailModal({
               <div>
                 <div className="text-xs text-gray-500 mb-1">Партньор</div>
                 <div className="font-medium text-sm">
-                  {detail.partner?.name ??
-                    detail.partner_name ??
-                    `#${detail.partner_id}`}
+                  {partnerOverride
+                    ? partnerOverride.name
+                    : (detail.partner?.name ??
+                      detail.partner_name ??
+                      `#${detail.partner_id}`)}
                 </div>
+                {partnerOverride && partnerOverride.eik && (
+                  <div className="text-[11px] text-gray-500 mt-0.5">
+                    ЕИК: {partnerOverride.eik}
+                  </div>
+                )}
               </div>
               <div>
                 <div className="text-xs text-gray-500 mb-1">
