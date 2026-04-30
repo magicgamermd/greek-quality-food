@@ -1141,21 +1141,22 @@ function drawStockDispatchPartyBoxes(
   const valueWidth = textWidth - labelWidth;
   const rowGap = 2;
 
+  // Phone line intentionally dropped from both party blocks per МЕРТ-М
+  // preference. МОЛ is rendered ONLY when populated (no empty "МОЛ" label
+  // when the company / partner doesn't have one).
   const rowsForPartner = (party: PartnerInfo) => [
     { label: "", value: party.name || "—", bold: true },
     { label: "ЕИК", value: party.eik || "" },
     { label: "Град", value: party.city || "" },
     { label: "Адрес", value: normalizeAddress(party.address || "") },
-    { label: "Телефон", value: party.phone || "" },
-    { label: "МОЛ", value: party.mol || "" },
+    ...(party.mol ? [{ label: "МОЛ", value: party.mol }] : []),
   ];
   const rowsForCompany = (party: CompanyInfo) => [
     { label: "", value: party.company_name || "—", bold: true },
     { label: "ЕИК", value: party.eik || "" },
     { label: "Град", value: party.city || "" },
     { label: "Адрес", value: normalizeAddress(party.address || "") },
-    { label: "Телефон", value: party.phone || "" },
-    { label: "МОЛ", value: party.mol || "" },
+    ...(party.mol ? [{ label: "МОЛ", value: party.mol }] : []),
   ];
 
   const measureBoxHeight = (
@@ -1388,7 +1389,12 @@ export async function generateStockDispatchPdf(
       data.warehouse_name,
     );
 
-    const pricingMode: "net" | "gross" = data.pricing_mode ?? "net";
+    // МЕРТ-М: order_items.unit_price is GROSS (price already includes VAT).
+    // - pricing_mode="gross" (default for Стокова разписка): show price
+    //   AS-IS, single "Общо" line at the bottom (no VAT breakdown).
+    // - pricing_mode="net": divide gross price by (1+vat) to display net
+    //   base + VAT line + total breakdown.
+    const pricingMode: "net" | "gross" = data.pricing_mode ?? "gross";
     const vatMultiplier = 1 + data.vat_rate / 100;
     let subtotalEur = 0;
     const rows: string[][] = [];
@@ -1409,10 +1415,11 @@ export async function generateStockDispatchPdf(
           : inferredDiscount;
       subtotalEur += lineTotal;
 
+      // gross mode → display the stored price; net mode → strip VAT.
       const displayPrice =
-        pricingMode === "gross" ? price * vatMultiplier : price;
+        pricingMode === "gross" ? price : price / vatMultiplier;
       const displayLineTotal =
-        pricingMode === "gross" ? lineTotal * vatMultiplier : lineTotal;
+        pricingMode === "gross" ? lineTotal : lineTotal / vatMultiplier;
 
       rows.push([
         String(idx + 1),
@@ -1469,15 +1476,20 @@ export async function generateStockDispatchPdf(
       },
     });
 
-    const vatAmountEur = subtotalEur * (data.vat_rate / 100);
-    const totalGrossEur = subtotalEur + vatAmountEur;
+    // subtotalEur is the sum of GROSS line totals (price stored gross).
+    // For "gross" mode the total IS the gross sum (no breakdown).
+    // For "net" mode we extract the net base + VAT from the gross sum.
+    const totalGrossEur = subtotalEur;
+    const totalNetEur =
+      pricingMode === "gross" ? subtotalEur : subtotalEur / vatMultiplier;
+    const vatAmountEur = totalGrossEur - totalNetEur;
 
     ensurePageSpace(doc, 110, drawContinuationHeading);
     drawStockDispatchTotalsBlock(
       doc,
       leftCol,
       pageWidth,
-      subtotalEur,
+      totalNetEur,
       vatAmountEur,
       totalGrossEur,
       pricingMode,

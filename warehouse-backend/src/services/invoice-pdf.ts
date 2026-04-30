@@ -557,7 +557,9 @@ function buildInvoicePartyFields(
       ? [{ label: "ДДС номер:", value: company.vat_number }]
       : []),
     ...(supplierAddress ? [{ label: "Адрес:", value: supplierAddress }] : []),
-    ...(company.phone ? [{ label: "Тел:", value: company.phone }] : []),
+    // Телефон intentionally omitted from supplier block — МЕРТ-М prefers a
+    // cleaner header without a public phone line. Email + МОЛ stay
+    // conditional and only render when populated.
     ...(company.email ? [{ label: "Email:", value: company.email }] : []),
     ...(company.mol ? [{ label: "МОЛ:", value: company.mol }] : []),
   ];
@@ -877,11 +879,18 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         doc.font("Main").fontSize(7);
       };
 
+      // VAT-registered invoices show NET prices in the table (matching the
+      // "Данъчна основа" footer line). order_items prices are stored GROSS,
+      // so we divide them out here. For non-VAT invoices the price is shown
+      // as-is (no breakdown).
+      const vatDiv = showVat ? 1 + (data.vatRate ?? 20) / 100 : 1;
       for (let idx = 0; idx < data.items.length; idx += 1) {
         const item = data.items[idx];
         const qty = toNum(item.quantity);
-        const price = toNum(item.unit_price);
-        const total = toNum(item.total_price);
+        const grossPrice = toNum(item.unit_price);
+        const grossTotal = toNum(item.total_price);
+        const price = grossPrice / vatDiv;
+        const total = grossTotal / vatDiv;
         const description = item.name_bg || item.name_en;
         const unit = mapUnit(item.unit);
         // Форматираме отстъпката компактно: 0 → "—" (видимо различно от

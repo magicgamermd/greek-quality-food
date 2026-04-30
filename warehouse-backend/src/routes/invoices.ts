@@ -58,11 +58,13 @@ function resolveInvoicePdfPath(invoice: {
  * Resolve a partner override into a numeric partner_id.
  * - {partner_id} → returned as-is (existing partner picked from catalog).
  * - new-partner data → SELECT by EIK; reuse existing or INSERT new with
- *   partner_type='company' (the override flow is only used for individual →
- *   company invoicing).
+ *   partner_type='legal_entity' (matches the rest of the system; the
+ *   override flow is only used for individual → company invoicing).
  *
  * Runs inside the same transaction client as the surrounding invoice INSERT
- * so that a rollback unwinds the partner row too.
+ * so that a rollback unwinds the partner row too. Once committed, the new
+ * partner stays in the catalog permanently and shows up in the regular
+ * "Партньори" list / autocompletes.
  */
 async function resolveOverridePartner(
   client: { query: (sql: string, params: any[]) => Promise<{ rows: any[] }> },
@@ -82,8 +84,8 @@ async function resolveOverridePartner(
     rows: [created],
   } = await client.query(
     `INSERT INTO partners
-       (name, eik, vat_number, address, city, contact_person, phone, partner_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'company')
+       (name, eik, vat_number, address, city, contact_person, phone, email, partner_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'legal_entity')
      RETURNING id`,
     [
       override.name.trim(),
@@ -93,6 +95,7 @@ async function resolveOverridePartner(
       override.city ?? null,
       override.contact_person ?? null,
       override.phone ?? null,
+      override.email ?? null,
     ],
   );
   return created.id;
@@ -141,6 +144,7 @@ const createInvoiceSchema = z.object({
         city: z.string().trim().max(100).optional(),
         contact_person: z.string().trim().max(255).optional(),
         phone: z.string().trim().max(50).optional(),
+        email: z.string().trim().max(255).optional(),
       }),
     ])
     .optional(),
@@ -514,16 +518,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           clientDisplayName = null;
         }
 
-        // Calculate totals
-        const totalNet = items.reduce(
+        // Calculate totals — order_items.total_price is GROSS (price already
+        // includes VAT, since МЕРТ-М stores Microinvest gross prices and
+        // doesn't add VAT on top). For VAT-registered invoices we extract
+        // the base + VAT FROM the gross amount; for no-VAT invoices the
+        // gross IS the total with no breakdown.
+        const totalGross = items.reduce(
           (sum: number, i: any) => sum + parseFloat(i.total_price),
           0,
         );
         const effectiveVatRate = body.include_vat ? body.vat_rate : 0;
-        const totalVat = body.include_vat
-          ? totalNet * (body.vat_rate / 100)
-          : 0;
-        const totalGross = totalNet + totalVat;
+        const vatMul = 1 + body.vat_rate / 100;
+        const totalNet = body.include_vat ? totalGross / vatMul : totalGross;
+        const totalVat = body.include_vat ? totalGross - totalNet : 0;
 
         // Generate invoice number
         const {
@@ -758,6 +765,108 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       });
 
       return result;
+    },
+  );
+
+  // DELETE /invoices/:id — physically remove an invoice issued by mistake.
+  // Allowed only BEFORE the order is fulfilled (no goods shipped → no legal
+  // record needed). Once shipped, the only way out is /cancel (annul +
+  // credit note). Deletion frees the invoice number; generate_invoice_number()
+  // recomputes from MAX(invoice_number) so the next call reuses the slot.
+  app.delete(
+    "/:id",
+    { preHandler: invoiceCancelPreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+
+      const result = await transaction(async (client) => {
+        const {
+          rows: [invoice],
+        } = await client.query(
+          "SELECT * FROM invoices WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+        if (!invoice) {
+          throw Object.assign(new Error("Invoice not found"), {
+            statusCode: 404,
+          });
+        }
+        if (invoice.document_type !== "invoice") {
+          throw Object.assign(
+            new Error("Само изходящи фактури могат да се изтриват"),
+            { statusCode: 400 },
+          );
+        }
+        if (invoice.status === "cancelled") {
+          throw Object.assign(
+            new Error("Анулираните фактури не могат да се изтриват"),
+            { statusCode: 400 },
+          );
+        }
+
+        // Block delete if any payment exists (matching the cancel guard).
+        const {
+          rows: [{ total: paidTotal }],
+        } = await client.query(
+          "SELECT COALESCE(SUM(amount), 0)::numeric AS total FROM payments WHERE invoice_id = $1",
+          [id],
+        );
+        if (parseFloat(paidTotal) > 0.001) {
+          throw Object.assign(
+            new Error(
+              "Не може да изтриете фактура с регистрирани плащания. Първо ги премахнете.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        // Block delete if a credit note references this invoice.
+        const {
+          rows: [{ count: refCount }],
+        } = await client.query(
+          "SELECT COUNT(*)::int AS count FROM invoices WHERE related_invoice_id = $1",
+          [id],
+        );
+        if (refCount > 0) {
+          throw Object.assign(
+            new Error(
+              "Не може да изтриете фактура с издадено КИ. Анулирайте я вместо това.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        // Block if any order linked to this invoice is fulfilled — by then
+        // the invoice has legal force and may only be annulled.
+        const { rows: linkedOrders } = await client.query(
+          "SELECT id, status FROM orders WHERE invoice_id = $1",
+          [id],
+        );
+        const fulfilledOrder = linkedOrders.find(
+          (o: any) => o.status === "fulfilled" || o.status === "invoiced",
+        );
+        if (fulfilledOrder) {
+          throw Object.assign(
+            new Error(
+              "Поръчката вече е изпълнена — не може да изтриете фактурата. Използвайте 'Анулирай'.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        // FK orders.invoice_id ON DELETE SET NULL → order keeps existing,
+        // FK invoice_number_reservations ON DELETE CASCADE → resv row removed,
+        // generate_invoice_number() will recompute MAX from invoices and the
+        // next /invoices POST may reuse this slot.
+        await client.query("DELETE FROM invoices WHERE id = $1", [id]);
+
+        return {
+          deleted: true,
+          freed_invoice_number: invoice.invoice_number,
+        };
+      });
+
+      return reply.send(result);
     },
   );
 
