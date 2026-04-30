@@ -82,4 +82,46 @@ describe("generateDailyReportPdf", () => {
     expect(fs.existsSync(outputPath)).toBe(true);
     expect(fs.statSync(outputPath).size).toBeGreaterThan(500);
   });
+
+  it("renders the Еконт section when shipments are present (cod + standard mix)", async () => {
+    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+    const outputPath = path.join(TEST_OUTPUT_DIR, "econt.pdf");
+    await generateDailyReportPdf({
+      date: "2026-04-30",
+      generatedBy: "admin@mertm.bg",
+      company: { name: "BAKALIA GREEK DELI FOOD" },
+      orders: [],
+      ordersSummaryByStatus: [],
+      invoices: {
+        active: { count: 0, net: 0, vat: 0, gross: 0 },
+        credit_noted: { count: 0, sum: 0 },
+        cancelled: { count: 0, sum: 0 },
+        byPaymentMethod: [],
+      },
+      payments: { byMethod: [], total: 0 },
+      econtShipments: [
+        {
+          order_number: 102,
+          partner_name: "ВИКИ ВАТ ЕООД",
+          total_amount: 2863.24,
+          type: "cod",
+          cod_amount: 2863.24,
+          shipment_number: "1055146389563",
+        },
+        {
+          order_number: 103,
+          partner_name: "ЖОКЕР ЕНТ. ЕООД",
+          total_amount: 229.99,
+          type: "standard",
+          cod_amount: null,
+          shipment_number: "1055146425704",
+        },
+      ],
+      outstanding: { totalRemaining: 0, totalCount: 0, top10: [] },
+      topProducts: [],
+      outputPath,
+    });
+    expect(fs.existsSync(outputPath)).toBe(true);
+    expect(fs.statSync(outputPath).size).toBeGreaterThan(700);
+  });
 });

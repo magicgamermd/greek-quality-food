@@ -113,7 +113,7 @@ function formatDateBg(iso: string): string {
   return `${d}.${m}.${y}`;
 }
 
-function fmtEur(v: number): string {
+function fmtEur(v: number | string): string {
   return formatEurAmount(v) + " €";
 }
 
