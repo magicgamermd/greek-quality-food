@@ -1,4 +1,5 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { matchesSearch } from "@/lib/translit";
@@ -61,6 +62,40 @@ export function Combobox<T = unknown>({
   const [query, setQuery] = React.useState("");
   const [highlight, setHighlight] = React.useState(0);
   const boxRef = React.useRef<HTMLDivElement>(null);
+  // The portal-rendered dropdown lives outside boxRef, so the outside-click
+  // handler must also consider it "inside" — otherwise mousedown on an
+  // option closes the menu before the click event reaches the button.
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+  // Position of the input (for the portal-rendered dropdown). Recalculated
+  // on open / scroll / resize so the dropdown stays glued to the input even
+  // when the page underneath scrolls.
+  const [dropdownPos, setDropdownPos] = React.useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+
+  const updateDropdownPos = React.useCallback(() => {
+    if (!boxRef.current) return;
+    const rect = boxRef.current.getBoundingClientRect();
+    setDropdownPos({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+    });
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    updateDropdownPos();
+    const handler = () => updateDropdownPos();
+    window.addEventListener("scroll", handler, true);
+    window.addEventListener("resize", handler);
+    return () => {
+      window.removeEventListener("scroll", handler, true);
+      window.removeEventListener("resize", handler);
+    };
+  }, [open, updateDropdownPos]);
 
   const selectedItem = React.useMemo(
     () => items.find((i) => i.value === value) ?? null,
@@ -96,11 +131,14 @@ export function Combobox<T = unknown>({
     }
   }, [filtered.length, highlight]);
 
-  // Close on outside click
+  // Close on outside click — but treat the portalled dropdown as "inside"
   React.useEffect(() => {
     if (!open) return;
     const handleClick = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const inBox = boxRef.current?.contains(target);
+      const inDropdown = dropdownRef.current?.contains(target);
+      if (!inBox && !inDropdown) {
         setOpen(false);
       }
     };
@@ -202,76 +240,109 @@ export function Combobox<T = unknown>({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
       />
-      {open && (
-        <div
-          id={listboxId}
-          role="listbox"
-          className={cn(
-            "absolute z-30 mt-1 w-full border rounded-md shadow-lg max-h-72 overflow-y-auto",
-            isDark
-              ? "bg-[#12162a] border-[#243055]"
-              : "bg-white border-gray-200",
-          )}
-        >
-          {filtered.length === 0 ? (
-            <div
-              className={cn(
-                "px-4 py-3 text-sm",
-                isDark ? "text-[#9aa8d6]" : "text-gray-500",
-              )}
-              role="status"
-            >
-              {emptyMessage}
-            </div>
-          ) : (
-            filtered.map((item, idx) => {
-              const isHighlighted = idx === highlight;
-              const isSelected = item.value === value;
-              return (
-                <button
-                  key={item.value}
-                  id={getOptionId(idx)}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  ref={(el) => {
-                    if (el && isHighlighted) {
-                      el.scrollIntoView({ block: "nearest" });
-                    }
-                  }}
-                  className={cn(
-                    "w-full text-left px-4 py-2.5 text-sm",
-                    isDark
-                      ? isHighlighted
-                        ? "bg-[#4f7cff]/20"
-                        : "hover:bg-[#161c34]"
-                      : isHighlighted
-                        ? "bg-emerald-50"
-                        : "hover:bg-gray-50",
-                    isSelected && !isHighlighted && "font-medium",
-                  )}
-                  onMouseEnter={() => setHighlight(idx)}
-                  onClick={() => selectItem(item)}
-                >
-                  <div className={isDark ? "text-[#f3f6ff]" : "text-gray-900"}>
-                    <HighlightMatch text={item.label} query={query} />
-                  </div>
-                  {item.hint ? (
+      {open &&
+        dropdownPos &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            id={listboxId}
+            role="listbox"
+            // Fixed positioning + portal to <body> escapes any clipping
+            // dialog/scroll container above us. z-index sits above Radix
+            // Dialog overlay (z-50). pointerEvents:auto breaks inheritance
+            // when a modal Radix Dialog sets body{pointer-events:none} —
+            // without it, real mouse clicks pass *through* the dropdown to
+            // whatever sits underneath (often the dialog's Cancel button),
+            // closing the dialog without selecting an option.
+            style={{
+              position: "fixed",
+              top: dropdownPos.top,
+              left: dropdownPos.left,
+              width: dropdownPos.width,
+              zIndex: 100,
+              pointerEvents: "auto",
+            }}
+            // Prevent Radix Dialog's outside-click handler from closing the
+            // dialog when user clicks inside the portalled dropdown — Radix
+            // treats portal content as "outside" by default.
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={cn(
+              "border rounded-md shadow-lg max-h-72 overflow-y-auto",
+              isDark
+                ? "bg-[#12162a] border-[#243055]"
+                : "bg-white border-gray-200",
+            )}
+          >
+            {filtered.length === 0 ? (
+              <div
+                className={cn(
+                  "px-4 py-3 text-sm",
+                  isDark ? "text-[#9aa8d6]" : "text-gray-500",
+                )}
+                role="status"
+              >
+                {emptyMessage}
+              </div>
+            ) : (
+              filtered.map((item, idx) => {
+                const isHighlighted = idx === highlight;
+                const isSelected = item.value === value;
+                return (
+                  <button
+                    key={item.value}
+                    id={getOptionId(idx)}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    ref={(el) => {
+                      if (el && isHighlighted) {
+                        el.scrollIntoView({ block: "nearest" });
+                      }
+                    }}
+                    className={cn(
+                      "w-full text-left px-4 py-2.5 text-sm",
+                      isDark
+                        ? isHighlighted
+                          ? "bg-[#4f7cff]/20"
+                          : "hover:bg-[#161c34]"
+                        : isHighlighted
+                          ? "bg-emerald-50"
+                          : "hover:bg-gray-50",
+                      isSelected && !isHighlighted && "font-medium",
+                    )}
+                    onMouseEnter={() => setHighlight(idx)}
+                    // onMouseDown (not onClick) — fires synchronously before
+                    // any focus-loss / outside-click handler could close the
+                    // dropdown. preventDefault avoids stealing focus from
+                    // the input so blur doesn't reset state mid-click.
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      selectItem(item);
+                    }}
+                  >
                     <div
-                      className={cn(
-                        "text-xs mt-0.5",
-                        isDark ? "text-[#9aa8d6]" : "text-gray-500",
-                      )}
+                      className={isDark ? "text-[#f3f6ff]" : "text-gray-900"}
                     >
-                      <HighlightMatch text={item.hint} query={query} />
+                      <HighlightMatch text={item.label} query={query} />
                     </div>
-                  ) : null}
-                </button>
-              );
-            })
-          )}
-        </div>
-      )}
+                    {item.hint ? (
+                      <div
+                        className={cn(
+                          "text-xs mt-0.5",
+                          isDark ? "text-[#9aa8d6]" : "text-gray-500",
+                        )}
+                      >
+                        <HighlightMatch text={item.hint} query={query} />
+                      </div>
+                    ) : null}
+                  </button>
+                );
+              })
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
