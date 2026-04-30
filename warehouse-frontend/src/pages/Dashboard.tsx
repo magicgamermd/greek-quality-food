@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -7,16 +8,28 @@ import {
   CreditCard,
   Package,
   ArrowRight,
+  Printer,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatUnit, formatDate } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import type { DashboardKPIs, Order, StockLevel } from "@/types";
 import { Can } from "@/components/Can";
 import { PERMISSIONS } from "@/lib/permissions";
+import { toast } from "@/lib/toast";
 
 const kpiCards = [
   {
@@ -57,9 +70,45 @@ const kpiCards = [
   },
 ];
 
+const todayLocal = (): string => new Date().toLocaleDateString("sv-SE");
+
 export function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
+
+  const [dailyReportOpen, setDailyReportOpen] = useState(false);
+  const [reportDate, setReportDate] = useState<string>(todayLocal());
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const downloadDailyReport = async () => {
+    if (isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const res = await api.get(`/reports/daily-pdf?date=${reportDate}`, {
+        responseType: "blob",
+      });
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setDailyReportOpen(false);
+    } catch (err: any) {
+      console.error("Error downloading daily report:", err);
+      let msg = "Грешка при сваляне на отчета";
+      try {
+        if (err?.response?.data instanceof Blob) {
+          const text = await err.response.data.text();
+          const json = JSON.parse(text);
+          if (json.error) msg = json.error;
+        } else if (err?.response?.data?.error) {
+          msg = err.response.data.error;
+        }
+      } catch {}
+      toast.error(msg);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   // Role-based KPI visibility
   const visibleKpiCards = kpiCards.filter(({ key }) => {
@@ -159,11 +208,23 @@ export function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Табло</h1>
-        <p className="text-gray-500 text-sm mt-1">
-          Преглед на текущото състояние на склада
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Табло</h1>
+          <p className="text-gray-500 text-sm mt-1">
+            Преглед на текущото състояние на склада
+          </p>
+        </div>
+        <Can permission={PERMISSIONS.REPORTS_VIEW}>
+          <Button
+            variant="outline"
+            onClick={() => setDailyReportOpen(true)}
+            title="Дневен отчет (PDF)"
+          >
+            <Printer className="h-4 w-4" />
+            Дневен отчет
+          </Button>
+        </Can>
       </div>
 
       {/* KPI Cards */}
@@ -335,6 +396,36 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={dailyReportOpen} onOpenChange={setDailyReportOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Дневен отчет</DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-1.5">
+            <Label className="text-xs">За дата</Label>
+            <Input
+              type="date"
+              value={reportDate}
+              onChange={(e) => setReportDate(e.target.value)}
+              max={todayLocal()}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDailyReportOpen(false)}>
+              Отказ
+            </Button>
+            <Button
+              onClick={() => void downloadDailyReport()}
+              disabled={isDownloading}
+              className="bg-[#f97316] hover:bg-[#ea580c]"
+            >
+              <Printer className="h-4 w-4" />
+              {isDownloading ? "Сваляне…" : "Свали PDF"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

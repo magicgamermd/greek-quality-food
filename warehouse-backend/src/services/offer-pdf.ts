@@ -11,6 +11,7 @@
 import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
+import { formatEurAmount } from "../utils/currency.js";
 
 function getFontPath(filename: string): string {
   const candidates = [
@@ -74,20 +75,15 @@ function toNum(v: number | string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function fmtBGN(v: number): string {
-  return (
-    v
-      .toFixed(2)
-      .replace(/\B(?=(\d{3})+(?!\d))/g, " ")
-      .replace(".", ",") + " лв."
-  );
-}
-
 function formatDateBg(iso: string): string {
   // yyyy-mm-dd → dd.mm.yyyy
   if (!/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso;
   const [y, m, d] = iso.slice(0, 10).split("-");
   return `${d}.${m}.${y}`;
+}
+
+function fmtEur(v: number | string): string {
+  return formatEurAmount(v) + " €";
 }
 
 export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
@@ -206,11 +202,11 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
           minimumFractionDigits: 0,
           maximumFractionDigits: 3,
         }),
-        fmtBGN(toNum(it.unit_price)),
+        fmtEur(toNum(it.unit_price)),
         toNum(it.discount_percent) > 0
           ? toNum(it.discount_percent).toFixed(0) + "%"
           : "—",
-        fmtBGN(toNum(it.total_price)),
+        fmtEur(toNum(it.total_price)),
       ];
       cx = L;
       cells.forEach((val, i) => {
@@ -249,15 +245,15 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
       });
       doc.y = y + 14;
     };
-    totalLine("Сума без ДДС:", fmtBGN(data.totalNet));
-    totalLine("ДДС 20%:", fmtBGN(data.totalVat));
+    totalLine("Сума без ДДС:", fmtEur(data.totalNet));
+    totalLine("ДДС 20%:", fmtEur(data.totalVat));
     doc
       .moveTo(totalsX + labelW - 60, doc.y - 2)
       .lineTo(totalsX + labelW + valueW + 5, doc.y - 2)
       .lineWidth(0.5)
       .strokeColor("#94a3b8")
       .stroke();
-    totalLine("Обща сума:", fmtBGN(data.totalGross), true);
+    totalLine("Обща сума:", fmtEur(data.totalGross), true);
 
     // ── Footer note ────────────────────────────────────────
     doc.moveDown(2);
