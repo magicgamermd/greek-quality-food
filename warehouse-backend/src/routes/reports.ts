@@ -93,31 +93,53 @@ async function assembleDailyReportData(
     [date],
   );
 
-  // 3) Invoices by status (active / credit-noted / cancelled)
+  // 3) Invoices by status (active / credit-noted / cancelled).
+  // Schema note: invoices.credit_note_id does NOT exist. Credit notes are
+  // separate invoice rows (document_type='credit_note') that point at the
+  // parent invoice via related_invoice_id. So an invoice is "credit-noted"
+  // when there exists a credit_note row whose related_invoice_id = i.id.
   const { rows: invStatusRows } = await query(
-    `SELECT
-        COUNT(*) FILTER (WHERE status = 'active' AND credit_note_id IS NULL)::int AS active_count,
-        COALESCE(SUM(total_net) FILTER (WHERE status = 'active' AND credit_note_id IS NULL), 0)::numeric AS active_net,
-        COALESCE(SUM(total_vat) FILTER (WHERE status = 'active' AND credit_note_id IS NULL), 0)::numeric AS active_vat,
-        COALESCE(SUM(total_gross) FILTER (WHERE status = 'active' AND credit_note_id IS NULL), 0)::numeric AS active_gross,
-        COUNT(*) FILTER (WHERE credit_note_id IS NOT NULL)::int AS credit_noted_count,
-        COALESCE(SUM(total_gross) FILTER (WHERE credit_note_id IS NOT NULL), 0)::numeric AS credit_noted_sum,
+    `WITH classified AS (
+        SELECT i.status,
+               i.total_net,
+               i.total_vat,
+               i.total_gross,
+               (cn.id IS NOT NULL) AS is_credit_noted
+          FROM invoices i
+          LEFT JOIN invoices cn
+            ON cn.related_invoice_id = i.id
+           AND cn.document_type = 'credit_note'
+         WHERE DATE(i.invoice_date) = $1
+           AND i.document_type = 'invoice'
+     )
+     SELECT
+        COUNT(*) FILTER (WHERE status = 'active' AND NOT is_credit_noted)::int AS active_count,
+        COALESCE(SUM(total_net)   FILTER (WHERE status = 'active' AND NOT is_credit_noted), 0)::numeric AS active_net,
+        COALESCE(SUM(total_vat)   FILTER (WHERE status = 'active' AND NOT is_credit_noted), 0)::numeric AS active_vat,
+        COALESCE(SUM(total_gross) FILTER (WHERE status = 'active' AND NOT is_credit_noted), 0)::numeric AS active_gross,
+        COUNT(*) FILTER (WHERE is_credit_noted)::int AS credit_noted_count,
+        COALESCE(SUM(total_gross) FILTER (WHERE is_credit_noted), 0)::numeric AS credit_noted_sum,
         COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_count,
         COALESCE(SUM(total_gross) FILTER (WHERE status = 'cancelled'), 0)::numeric AS cancelled_sum
-       FROM invoices
-      WHERE DATE(invoice_date) = $1`,
+       FROM classified`,
     [date],
   );
   const invStats = invStatusRows[0] ?? {};
 
-  // 4) Active invoices for the day, grouped by payment_method
+  // 4) Active (not credit-noted, not cancelled) invoices for the day, grouped by payment_method.
   const { rows: invByMethodRows } = await query(
-    `SELECT COALESCE(payment_method, 'unset') AS method,
+    `SELECT COALESCE(i.payment_method, 'unset') AS method,
             COUNT(*)::int AS count,
-            COALESCE(SUM(total_gross), 0)::numeric AS sum
-       FROM invoices
-      WHERE DATE(invoice_date) = $1 AND status = 'active' AND credit_note_id IS NULL
-      GROUP BY payment_method`,
+            COALESCE(SUM(i.total_gross), 0)::numeric AS sum
+       FROM invoices i
+       LEFT JOIN invoices cn
+         ON cn.related_invoice_id = i.id
+        AND cn.document_type = 'credit_note'
+      WHERE DATE(i.invoice_date) = $1
+        AND i.document_type = 'invoice'
+        AND i.status = 'active'
+        AND cn.id IS NULL
+      GROUP BY i.payment_method`,
     [date],
   );
 
@@ -127,7 +149,7 @@ async function assembleDailyReportData(
             COUNT(*)::int AS count,
             COALESCE(SUM(amount), 0)::numeric AS sum
        FROM payments
-      WHERE DATE(payment_date) = $1
+      WHERE DATE(paid_at) = $1
       GROUP BY payment_method`,
     [date],
   );
@@ -136,7 +158,9 @@ async function assembleDailyReportData(
     0,
   );
 
-  // 6) Outstanding invoices snapshot at end of $date — totals
+  // 6) Outstanding invoices snapshot at end of $date — totals.
+  // Excludes: credit notes themselves, cancelled invoices, and invoices that
+  // have been credit-noted (i.e. a credit_note row points at them).
   const { rows: outstandingTotalRows } = await query(
     `SELECT COUNT(*)::int AS count,
             COALESCE(SUM(remaining), 0)::numeric AS total
@@ -144,10 +168,14 @@ async function assembleDailyReportData(
          SELECT i.id,
                 i.total_gross - COALESCE(SUM(p.amount), 0) AS remaining
            FROM invoices i
-           LEFT JOIN payments p ON p.invoice_id = i.id AND DATE(p.payment_date) <= $1
+           LEFT JOIN payments p ON p.invoice_id = i.id AND DATE(p.paid_at) <= $1
+           LEFT JOIN invoices cn
+             ON cn.related_invoice_id = i.id
+            AND cn.document_type = 'credit_note'
           WHERE DATE(i.invoice_date) <= $1
+            AND i.document_type = 'invoice'
             AND i.status = 'active'
-            AND i.credit_note_id IS NULL
+            AND cn.id IS NULL
           GROUP BY i.id
          HAVING i.total_gross - COALESCE(SUM(p.amount), 0) > 0.01
        ) AS t`,
@@ -155,7 +183,7 @@ async function assembleDailyReportData(
   );
   const outstandingTotal = outstandingTotalRows[0] ?? { count: 0, total: 0 };
 
-  // 6b) Top 10 oldest unpaid invoices
+  // 6b) Top 10 oldest unpaid invoices (same exclusions as 6).
   const { rows: outstandingTopRows } = await query(
     `SELECT i.invoice_number,
             TO_CHAR(i.invoice_date, 'YYYY-MM-DD') AS invoice_date,
@@ -165,11 +193,15 @@ async function assembleDailyReportData(
             (i.total_gross - COALESCE(SUM(pmt.amount), 0))::numeric AS remaining,
             ($1::date - i.invoice_date::date)::int AS days_overdue
        FROM invoices i
-       LEFT JOIN payments pmt ON pmt.invoice_id = i.id AND DATE(pmt.payment_date) <= $1
+       LEFT JOIN payments pmt ON pmt.invoice_id = i.id AND DATE(pmt.paid_at) <= $1
        LEFT JOIN partners p ON p.id = i.partner_id
+       LEFT JOIN invoices cn
+         ON cn.related_invoice_id = i.id
+        AND cn.document_type = 'credit_note'
       WHERE DATE(i.invoice_date) <= $1
+        AND i.document_type = 'invoice'
         AND i.status = 'active'
-        AND i.credit_note_id IS NULL
+        AND cn.id IS NULL
       GROUP BY i.id, p.name
      HAVING i.total_gross - COALESCE(SUM(pmt.amount), 0) > 0.01
       ORDER BY i.invoice_date ASC
