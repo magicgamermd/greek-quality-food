@@ -1841,6 +1841,102 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /orders/:id/items/:itemId/handover — Batch F1
+  // Flip a paid_not_taken line to normal (customer has now picked up the
+  // already-deducted goods). No stock change — the deduction happened at
+  // fulfill time with allowNegative=true. Idempotent guard rejects the
+  // call if the line is in any other status.
+  app.post(
+    "/:id/items/:itemId/handover",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, itemId } = request.params as {
+        id: string;
+        itemId: string;
+      };
+      return await transaction(async (client) => {
+        const {
+          rows: [item],
+        } = await client.query(
+          `SELECT id, order_id, line_status FROM order_items
+           WHERE id = $1 AND order_id = $2 FOR UPDATE`,
+          [itemId, id],
+        );
+        if (!item) {
+          throw Object.assign(new Error("Order item not found"), {
+            statusCode: 404,
+          });
+        }
+        if (item.line_status !== "paid_not_taken") {
+          throw Object.assign(
+            new Error("Only paid_not_taken lines can be handed over."),
+            { statusCode: 400 },
+          );
+        }
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE order_items SET line_status = 'normal'
+           WHERE id = $1 RETURNING *`,
+          [itemId],
+        );
+        return updated;
+      });
+    },
+  );
+
+  // POST /orders/:id/items/:itemId/confirm-from-awaiting — Batch F1
+  // Promote an awaiting (pre-order) line to normal AND deduct stock now.
+  // Refuses 409 when stock is insufficient — the caller (cashier) is
+  // expected to confirm the goods have arrived (typically via the
+  // pending_order_ready notification).
+  app.post(
+    "/:id/items/:itemId/confirm-from-awaiting",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, itemId } = request.params as {
+        id: string;
+        itemId: string;
+      };
+      return await transaction(async (client) => {
+        const {
+          rows: [item],
+        } = await client.query(
+          `SELECT * FROM order_items
+           WHERE id = $1 AND order_id = $2 FOR UPDATE`,
+          [itemId, id],
+        );
+        if (!item) {
+          throw Object.assign(new Error("Order item not found"), {
+            statusCode: 404,
+          });
+        }
+        if (item.line_status !== "awaiting") {
+          throw Object.assign(
+            new Error("Only awaiting lines can be confirmed."),
+            { statusCode: 400 },
+          );
+        }
+        const costUnitPrice = await deductProductStock(
+          client,
+          item.product_id,
+          parseFloat(item.quantity),
+          { allowNegative: false },
+        );
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE order_items
+             SET line_status = 'normal',
+                 cost_unit_price = $1
+           WHERE id = $2 RETURNING *`,
+          [costUnitPrice, itemId],
+        );
+        return updated;
+      });
+    },
+  );
+
   // POST /orders/:id/quote — pending → quoted. Cashier prints an offer
   // (OF-XXX) and waits for the customer; quoted orders never deduct stock.
   app.post(
