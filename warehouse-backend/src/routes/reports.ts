@@ -62,7 +62,146 @@ export default async function reportsRoutes(app: FastifyInstance) {
         .send(stream);
     },
   );
+
+  // GET /reports/range-summary?from=YYYY-MM-DD&to=YYYY-MM-DD
+  // Aggregated totals over a date range — orders, invoices, payments,
+  // top products, top partners. Used for weekly/monthly summaries
+  // exposed via the MCP server / Telegram bot.
+  app.get(
+    "/range-summary",
+    { preHandler: reportsViewPreHandler },
+    async (request, reply) => {
+      const parsed = rangeQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return reply
+          .status(400)
+          .send({ error: parsed.error.errors[0]?.message ?? "Bad range" });
+      }
+      const { from, to } = parsed.data;
+      if (from > to) {
+        return reply.status(400).send({ error: "from must be <= to" });
+      }
+      return assembleRangeSummary(from, to);
+    },
+  );
 }
+
+const rangeQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD"),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD"),
+});
+
+async function assembleRangeSummary(from: string, to: string) {
+  const { rows: orderTotals } = await query(
+    `SELECT
+        COUNT(*) FILTER (WHERE status NOT IN ('cancelled','quoted'))::int AS active_count,
+        COALESCE(SUM(total_amount) FILTER (WHERE status NOT IN ('cancelled','quoted')), 0)::numeric AS active_sum,
+        COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_count,
+        COUNT(*) FILTER (WHERE status = 'quoted')::int AS quoted_count
+       FROM orders
+      WHERE DATE(order_date) BETWEEN $1 AND $2`,
+    [from, to],
+  );
+
+  const { rows: invoiceTotals } = await query(
+    `SELECT
+        COUNT(*) FILTER (WHERE i.status='active' AND cn.id IS NULL)::int AS active_count,
+        COALESCE(SUM(i.total_net)   FILTER (WHERE i.status='active' AND cn.id IS NULL), 0)::numeric AS active_net,
+        COALESCE(SUM(i.total_vat)   FILTER (WHERE i.status='active' AND cn.id IS NULL), 0)::numeric AS active_vat,
+        COALESCE(SUM(i.total_gross) FILTER (WHERE i.status='active' AND cn.id IS NULL), 0)::numeric AS active_gross
+       FROM invoices i
+       LEFT JOIN invoices cn
+         ON cn.related_invoice_id = i.id
+        AND cn.document_type = 'credit_note'
+      WHERE DATE(i.invoice_date) BETWEEN $1 AND $2
+        AND i.document_type = 'invoice'`,
+    [from, to],
+  );
+
+  const { rows: paymentByMethod } = await query(
+    `SELECT payment_method AS method,
+            COUNT(*)::int AS count,
+            COALESCE(SUM(amount), 0)::numeric AS sum
+       FROM payments
+      WHERE DATE(paid_at) BETWEEN $1 AND $2
+      GROUP BY payment_method
+      ORDER BY sum DESC`,
+    [from, to],
+  );
+
+  const { rows: topProducts } = await query(
+    `SELECT
+        oi.name_bg_snapshot AS name,
+        oi.sku_snapshot AS sku,
+        SUM(oi.quantity)::numeric AS qty,
+        SUM(oi.total_price)::numeric AS total
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+      WHERE DATE(o.order_date) BETWEEN $1 AND $2
+        AND o.status NOT IN ('cancelled','quoted')
+      GROUP BY oi.name_bg_snapshot, oi.sku_snapshot
+      ORDER BY qty DESC
+      LIMIT 10`,
+    [from, to],
+  );
+
+  const { rows: topPartners } = await query(
+    `SELECT p.name AS partner_name,
+            COUNT(*)::int AS order_count,
+            COALESCE(SUM(o.total_amount), 0)::numeric AS total
+       FROM orders o
+       LEFT JOIN partners p ON p.id = o.partner_id
+      WHERE DATE(o.order_date) BETWEEN $1 AND $2
+        AND o.status NOT IN ('cancelled','quoted')
+      GROUP BY p.name
+      ORDER BY total DESC
+      LIMIT 10`,
+    [from, to],
+  );
+
+  const orders = orderTotals[0] ?? {};
+  const invoices = invoiceTotals[0] ?? {};
+  const paymentTotal = paymentByMethod.reduce(
+    (s: number, r: any) => s + parseFloat(r.sum ?? 0),
+    0,
+  );
+
+  return {
+    range: { from, to },
+    orders: {
+      active_count: orders.active_count ?? 0,
+      active_sum: parseFloat(orders.active_sum ?? 0),
+      cancelled_count: orders.cancelled_count ?? 0,
+      quoted_count: orders.quoted_count ?? 0,
+    },
+    invoices: {
+      active_count: invoices.active_count ?? 0,
+      active_net: parseFloat(invoices.active_net ?? 0),
+      active_vat: parseFloat(invoices.active_vat ?? 0),
+      active_gross: parseFloat(invoices.active_gross ?? 0),
+    },
+    payments: {
+      total: paymentTotal,
+      by_method: paymentByMethod.map((r: any) => ({
+        method: r.method,
+        count: r.count,
+        sum: parseFloat(r.sum ?? 0),
+      })),
+    },
+    top_products: topProducts.map((r: any) => ({
+      name: r.name ?? "—",
+      sku: r.sku ?? null,
+      qty: parseFloat(r.qty ?? 0),
+      total: parseFloat(r.total ?? 0),
+    })),
+    top_partners: topPartners.map((r: any) => ({
+      partner_name: r.partner_name ?? "—",
+      order_count: r.order_count,
+      total: parseFloat(r.total ?? 0),
+    })),
+  };
+}
+
 async function assembleDailyReportData(
   date: string,
   request: FastifyRequest,
