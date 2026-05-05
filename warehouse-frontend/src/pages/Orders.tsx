@@ -2246,9 +2246,33 @@ function OrderDetailModal({
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => handleDocDownload(detail.id, "offer")}
+                  onClick={() => {
+                    // The "Оферта" button on the documents row is the
+                    // single entry-point for quote mode. If the order is
+                    // still warehouse-neutral (pending / confirmed /
+                    // processing), POST /quote flips its status to
+                    // `quoted` AND opens the PDF — that's what the
+                    // backend response handler does. For statuses that
+                    // can't be downgraded (fulfilled, invoiced,
+                    // cancelled) we fall back to a pure PDF download so
+                    // the cashier can still hand the customer an
+                    // informational offer summary.
+                    const QUOTABLE = ["pending", "confirmed", "processing"];
+                    if (QUOTABLE.includes(detail.status)) {
+                      quoteMutation.mutate(detail.id);
+                    } else {
+                      void handleDocDownload(detail.id, "offer");
+                    }
+                  }}
+                  disabled={quoteMutation.isPending}
                   className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                  title="Оферта (информационна — без задължение)"
+                  title={
+                    ["pending", "confirmed", "processing"].includes(
+                      detail.status,
+                    )
+                      ? "Прехвърли поръчката в режим 'Оферта' и принтирай"
+                      : "Оферта (информационна — без задължение)"
+                  }
                 >
                   <FileText className="h-4 w-4" />
                   Оферта

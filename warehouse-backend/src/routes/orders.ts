@@ -1979,8 +1979,19 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /orders/:id/quote — pending → quoted. Cashier prints an offer
-  // (OF-XXX) and waits for the customer; quoted orders never deduct stock.
+  // POST /orders/:id/quote — move an order into quote mode.
+  //
+  // Allowed source statuses: pending, confirmed, processing — all of
+  // which are still "warehouse-neutral" (no `inventory` row has been
+  // touched yet). Fulfilled / invoiced / cancelled are rejected because
+  // they would require a stock-restore (fulfilled) or have a paper
+  // document attached (invoiced) that the customer is presumably not
+  // about to renegotiate.
+  //
+  // Cashier prints an offer (OF-XXX) and waits for the customer;
+  // quoted orders never deduct stock — that's the whole point of
+  // moving them here from confirmed/processing if the customer wants
+  // a written quote first.
   app.post(
     "/:id/quote",
     { preHandler: ordersManagePreHandler },
@@ -1998,10 +2009,11 @@ export default async function orderRoutes(app: FastifyInstance) {
             statusCode: 404,
           });
         }
-        if (order.status !== "pending") {
+        const QUOTABLE = new Set(["pending", "confirmed", "processing"]);
+        if (!QUOTABLE.has(order.status)) {
           throw Object.assign(
             new Error(
-              "Само поръчки със статус 'Чакаща' могат да се прехвърлят в оферта.",
+              "В режим 'Оферта' могат да се прехвърлят само поръчки преди изпълнение (Чакаща / Потвърдена / В обработка).",
             ),
             { statusCode: 400 },
           );
