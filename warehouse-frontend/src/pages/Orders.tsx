@@ -4810,6 +4810,12 @@ function CreateOrderModal({
           onRepeatOrder={(his) => addHistoryItems(his)}
         />
       )}
+      {/* The split-action props (onReduceToAvailable / onSplitToPaidNotTaken /
+          onSplitToAwaiting) used to surface "Намали до наличност / Платена
+          невзета / На изчакване" buttons inside this confirm dialog. Now
+          superseded by the per-row tag dropdown in CreateOrderModal — the
+          cashier picks the line state on the row itself, so the dialog only
+          needs to confirm "yes, push the normal lines into negative". */}
       <OversellConfirmDialog
         open={!!pendingOversell}
         items={pendingOversell?.items ?? []}
@@ -4819,11 +4825,6 @@ function CreateOrderModal({
           setPendingOversell(null);
           proceed?.();
         }}
-        onReduceToAvailable={reduceOversellToAvailable}
-        onSplitToPaidNotTaken={(over) =>
-          splitOversellTo(over, "paid_not_taken")
-        }
-        onSplitToAwaiting={(over) => splitOversellTo(over, "awaiting")}
       />
     </Dialog>
   );
