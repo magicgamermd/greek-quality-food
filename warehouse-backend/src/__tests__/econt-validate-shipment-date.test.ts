@@ -1,9 +1,11 @@
-// Batch — Econt calendar validation
+// Econt calendar validation
 // POST /econt/validate-shipment-date wraps Econt's createLabel API in
-// `mode: "validate"` and reflects success/failure back as
-// {valid:bool, reason?:string}. The 24h in-memory cache lets the
-// frontend calendar re-open without hitting Econt for the same
-// route+date.
+// `mode:"validate"`. Office delivery short-circuits to {valid:true}
+// (Econt accepts every date for any office). Address delivery sends a
+// complete payload — senderAgent + shipmentDescription, receiverAgent
+// matching receiverClient — and classifies Econt errors:
+// date-specific rejections become {valid:false}, config errors soft-
+// fail to {valid:true}. 24h in-memory cache by route+date.
 
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,7 +55,24 @@ describe("POST /econt/validate-shipment-date", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("returns {valid:true} when Econt accepts the date", async () => {
+  it("office mode short-circuits to valid without calling Econt", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/econt/validate-shipment-date",
+      payload: {
+        receiverCity: "Пловдив",
+        receiverOfficeCode: "4001",
+        weight: 5,
+        date: "2026-05-09", // a Saturday — would block in static rules
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ valid: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("address mode: returns {valid:true} when Econt accepts the date", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ label: {} }),
@@ -65,7 +84,8 @@ describe("POST /econt/validate-shipment-date", () => {
       url: "/econt/validate-shipment-date",
       payload: {
         receiverCity: "Пловдив",
-        receiverOfficeCode: "4001",
+        receiverStreet: "ул. Тестова",
+        receiverNum: "1",
         weight: 5,
         date: "2026-05-08",
       },
@@ -74,14 +94,20 @@ describe("POST /econt/validate-shipment-date", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ valid: true });
 
-    const call = fetchMock.mock.calls[0];
-    const sent = JSON.parse(call[1].body);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sent.mode).toBe("validate");
     expect(sent.label.sendDate).toBe("2026-05-08");
-    expect(sent.label.receiverOfficeCode).toBe("4001");
+    expect(sent.label.receiverAddress).toMatchObject({
+      street: "ул. Тестова",
+      num: "1",
+    });
+    // The fix: complete payload Econt requires for validate mode.
+    expect(sent.label.senderAgent).toBeDefined();
+    expect(sent.label.receiverAgent).toBeDefined();
+    expect(sent.label.shipmentDescription).toBeTruthy();
   });
 
-  it("returns {valid:false, reason} when Econt rejects the date", async () => {
+  it("address mode: returns {valid:false, reason} on date-specific Econt rejection", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,
       text: async () =>
@@ -98,11 +124,11 @@ describe("POST /econt/validate-shipment-date", () => {
       method: "POST",
       url: "/econt/validate-shipment-date",
       payload: {
-        receiverCity: "Пловдив",
+        receiverCity: "София",
         receiverStreet: "ул. Тестова",
         receiverNum: "1",
         weight: 5,
-        date: "2026-05-09", // a Saturday
+        date: "2026-05-08",
       },
     });
 
@@ -112,7 +138,43 @@ describe("POST /econt/validate-shipment-date", () => {
     expect(body.reason).toContain("Моля, изберете ден");
   });
 
-  it("caches the same route+date for 24h (second call doesn't hit Econt)", async () => {
+  it("address mode: soft-fails to {valid:true} on a non-date Econt rejection", async () => {
+    // E.g. sender misconfig — Econt's wording doesn't mention the date.
+    // We treat this as 'Econt validation never got to date check' and
+    // let the user pick the day; the actual create-shipment call will
+    // surface the same error properly.
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      text: async () =>
+        JSON.stringify({
+          message: "Error",
+          innerErrors: [
+            {
+              message:
+                "За юридическо лице, задължително се попълва упълномощено лице.",
+            },
+          ],
+        }),
+    });
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/econt/validate-shipment-date",
+      payload: {
+        receiverCity: "София",
+        receiverStreet: "ул. Тестова",
+        receiverNum: "1",
+        weight: 5,
+        date: "2026-05-09",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ valid: true });
+  });
+
+  it("caches address-mode result for 24h (second call doesn't hit Econt)", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ label: {} }),
@@ -121,7 +183,8 @@ describe("POST /econt/validate-shipment-date", () => {
     const app = await buildApp();
     const payload = {
       receiverCity: "Варна",
-      receiverOfficeCode: "9001",
+      receiverStreet: "ул. Морска",
+      receiverNum: "5",
       weight: 3,
       date: "2026-05-12",
     };
@@ -133,7 +196,6 @@ describe("POST /econt/validate-shipment-date", () => {
     });
     expect(r1.json()).toEqual({ valid: true });
 
-    // Second call — fetch should NOT have been invoked again.
     const r2 = await app.inject({
       method: "POST",
       url: "/econt/validate-shipment-date",
@@ -142,32 +204,5 @@ describe("POST /econt/validate-shipment-date", () => {
     expect(r2.json()).toEqual({ valid: true });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("address-mode payload omits receiverOfficeCode", async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ label: {} }),
-    });
-
-    const app = await buildApp();
-    await app.inject({
-      method: "POST",
-      url: "/econt/validate-shipment-date",
-      payload: {
-        receiverCity: "София",
-        receiverStreet: "ул. Александър Македонски",
-        receiverNum: "11",
-        weight: 10,
-        date: "2026-05-08",
-      },
-    });
-
-    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.label.receiverOfficeCode).toBeUndefined();
-    expect(sent.label.receiverAddress).toMatchObject({
-      street: "ул. Александър Македонски",
-      num: "11",
-    });
   });
 });

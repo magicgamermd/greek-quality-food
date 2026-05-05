@@ -323,9 +323,15 @@ export default async function econtRoutes(app: FastifyInstance) {
 
   // POST /econt/validate-shipment-date — does Econt accept this sendDate
   // for the given route + weight? Wraps the createLabel API in
-  // mode:"validate" and either echoes a 200 {valid:true} or surfaces
-  // Econt's error message in {valid:false, reason}. Cached in-memory
-  // for 24h by (city|office|street/num, date) to spare the API quota.
+  // mode:"validate". Office delivery: Econt accepts every date, so we
+  // short-circuit. Address delivery: Econt's validate-mode requires a
+  // complete payload (senderAgent + shipmentDescription, plus the same
+  // receiverAgent dance create-shipment uses) before it'll even
+  // consider date validity. Errors that don't mention the date — sender
+  // misconfiguration, missing fields — are treated as soft-fail
+  // ({valid:true}) so a config issue can't silently disable the whole
+  // calendar. Date-specific rejections ("Моля, изберете ден за доставка")
+  // surface as {valid:false, reason}. Cached in-memory for 24h.
   app.post(
     "/validate-shipment-date",
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -356,8 +362,15 @@ export default async function econtRoutes(app: FastifyInstance) {
           .send({ error: "receiverCity, weight and date are required" });
       }
 
+      // Office delivery — empirically Econt accepts every date for any
+      // valid office. Skip the API call entirely; the create-shipment
+      // path will catch the rare per-office cutoff itself.
+      if (receiverOfficeCode) {
+        return reply.send({ valid: true });
+      }
+
       const sendDate = normalizeIsoDate(date);
-      const cacheKey = `${receiverCity}|${receiverOfficeCode ?? `${receiverStreet ?? ""}/${receiverNum ?? ""}`}|${sendDate}`;
+      const cacheKey = `${receiverCity}|${receiverStreet ?? ""}/${receiverNum ?? ""}|${sendDate}`;
       const cached = validateDateCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
         return reply.send(cached.value);
@@ -366,24 +379,33 @@ export default async function econtRoutes(app: FastifyInstance) {
       const shipmentType =
         weight > 500 ? "pallet" : weight > 50 ? "cargo" : "pack";
 
-      const label: any = {
-        ...(await resolveSender()),
-        receiverClient: { name: "Валидация", phones: ["0000000000"] },
-        shipmentType,
-        weight,
-        packCount: 1,
-        sendDate,
+      const sender = await resolveSender();
+      // senderAgent is required when senderClient looks like a juridical
+      // entity. Reuse the same name+phone from senderClient — the actual
+      // Econt account holder IS the authorized person in MERT-M's setup.
+      const senderAgent = {
+        name: sender.senderClient.name,
+        phones: sender.senderClient.phones,
       };
 
-      if (receiverOfficeCode) {
-        label.receiverOfficeCode = receiverOfficeCode;
-      } else {
-        label.receiverAddress = {
+      const receiverName = "Валидация Еконт";
+      const receiverPhone = "0888000000";
+      const label: any = {
+        ...sender,
+        senderAgent,
+        receiverClient: { name: receiverName, phones: [receiverPhone] },
+        receiverAgent: { name: receiverName, phones: [receiverPhone] },
+        receiverAddress: {
           city: { name: receiverCity, postCode: receiverPostCode || "" },
           street: receiverStreet || "Тест",
           num: receiverNum || "1",
-        };
-      }
+        },
+        shipmentType,
+        weight,
+        packCount: 1,
+        shipmentDescription: "Валидация на дата",
+        sendDate,
+      };
 
       let response: { valid: boolean; reason?: string };
       try {
@@ -394,9 +416,25 @@ export default async function econtRoutes(app: FastifyInstance) {
         response = { valid: true };
       } catch (err: any) {
         // econtPost throws with statusCode 400 + message "Еконт: <…>".
-        // Treat any rejection as an invalid date with the surfaced reason.
-        const msg = (err?.message ?? "").replace(/^Еконт:\s*/, "");
-        response = { valid: false, reason: msg || "Невалидна дата" };
+        // Distinguish DATE-rejections from CONFIG-rejections: if the
+        // reason mentions "ден за доставка" (or a similar date phrase),
+        // the date is the problem and we mark it unselectable. Any other
+        // wording — sender misconfig, missing fields — is treated as
+        // "Econt validation didn't get to the date check" and we soft-
+        // fail to {valid:true} so the user can still pick the day.
+        const raw = (err?.message ?? "").replace(/^Еконт:\s*/, "");
+        const isDateError =
+          /ден за доставка|дата|деня/i.test(raw) || /sendDate/i.test(raw);
+        if (isDateError) {
+          response = { valid: false, reason: raw || "Невалидна дата" };
+        } else {
+          if (process.env.ECONT_DEBUG === "1") {
+            console.log(
+              `[econt/validate-shipment-date] soft-fail (config issue): ${raw}`,
+            );
+          }
+          response = { valid: true };
+        }
       }
 
       validateDateCache.set(cacheKey, {
