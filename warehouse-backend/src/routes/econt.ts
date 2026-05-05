@@ -295,6 +295,14 @@ export default async function econtRoutes(app: FastifyInstance) {
 
       const priceBGN = result.label?.totalPrice ?? result.totalPrice ?? 0;
       const priceEUR = Math.round((priceBGN / 1.95583) * 100) / 100;
+      // Diagnostic log gated by env var. Set ECONT_DEBUG=1 to surface what
+      // the API actually returned for office vs address mode comparison.
+      if (process.env.ECONT_DEBUG === "1") {
+        const mode = receiverOfficeCode ? "office" : "address";
+        console.log(
+          `[econt/calculate] mode=${mode} city=${receiverCity} weight=${weight} → priceBGN=${priceBGN} (totalPrice=${result.label?.totalPrice ?? "—"}, top-level=${result.totalPrice ?? "—"})`,
+        );
+      }
       return reply.send({
         price: priceEUR,
         priceBGN,
