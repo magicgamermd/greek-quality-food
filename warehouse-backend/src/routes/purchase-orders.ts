@@ -38,7 +38,9 @@ const itemSchema = z.object({
 
 const createSchema = z.object({
   supplier_id: z.number().int().positive(),
+  status: z.enum(["note", "draft"]).optional().default("note"),
   notes: z.string().nullish(),
+  label: z.string().max(120).nullish(),
   expected_delivery_date: z.string().nullish(),
   items: z.array(itemSchema).min(1),
 });
@@ -195,12 +197,14 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
           rows: [created],
         } = await client.query(
           `INSERT INTO purchase_orders
-              (supplier_id, notes, expected_delivery_date, created_by)
-           VALUES ($1, $2, $3, $4)
+              (supplier_id, status, notes, label, expected_delivery_date, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING *`,
           [
             body.supplier_id,
+            body.status,
             body.notes ?? null,
+            body.label ?? null,
             body.expected_delivery_date ?? null,
             userId,
           ],

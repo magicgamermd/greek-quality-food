@@ -106,6 +106,7 @@ describe("Purchase Orders — CRUD", () => {
       url: "/purchase-orders",
       payload: {
         supplier_id: 2,
+        status: "draft", // ← explicit draft for this legacy test
         items: [
           { product_id: 10, quantity: 5 },
           { product_id: 11, quantity: 3 },
@@ -412,5 +413,85 @@ describe("Purchase Orders — CRUD", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toBe("application/pdf");
     expect(res.headers["content-disposition"]).toMatch(/ZA-00012\.pdf/);
+  });
+
+  it("POST / defaults to status='note' when not provided", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi.fn().mockResolvedValueOnce(rows([{ id: 7 }])),
+      };
+      return cb(client as any);
+    });
+    mockQuery
+      .mockResolvedValueOnce(
+        rows([{ id: 7, status: "note", supplier_name: "S" }]),
+      )
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/purchase-orders",
+      payload: {
+        supplier_id: 2,
+        items: [{ product_id: 10, quantity: 5 }],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().status).toBe("note");
+  });
+
+  it("POST / accepts an explicit status='draft' for backwards compat", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi.fn().mockResolvedValueOnce(rows([{ id: 8 }])),
+      };
+      return cb(client as any);
+    });
+    mockQuery
+      .mockResolvedValueOnce(
+        rows([{ id: 8, status: "draft", supplier_name: "S" }]),
+      )
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/purchase-orders",
+      payload: {
+        supplier_id: 2,
+        status: "draft",
+        items: [{ product_id: 10, quantity: 5 }],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("POST / accepts a label for notes", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi
+          .fn()
+          .mockResolvedValueOnce(rows([{ id: 9, label: "Кухня в Хемус" }])),
+      };
+      return cb(client as any);
+    });
+    mockQuery
+      .mockResolvedValueOnce(
+        rows([
+          { id: 9, status: "note", label: "Кухня в Хемус", supplier_name: "S" },
+        ]),
+      )
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/purchase-orders",
+      payload: {
+        supplier_id: 2,
+        label: "Кухня в Хемус",
+        items: [{ product_id: 10, quantity: 5 }],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().label).toBe("Кухня в Хемус");
   });
 });
