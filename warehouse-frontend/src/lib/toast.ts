@@ -1,6 +1,11 @@
 import { toast as sonnerToast } from "sonner";
 
-type ToastOpts = { description?: string; duration?: number };
+type ToastAction = { label: string; onClick: () => void };
+type ToastOpts = {
+  description?: string;
+  duration?: number;
+  action?: ToastAction;
+};
 
 const normalize = (opt?: string | ToastOpts): ToastOpts | undefined => {
   if (opt == null) return undefined;
