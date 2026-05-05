@@ -5760,7 +5760,12 @@ export function Orders() {
                   kind: "invoice-fixed",
                   invoice_id: paymentOrder.invoice_id,
                   invoice_number: paymentOrder.invoice_number ?? undefined,
+                  // Prefer the invoice partner override (Batch D —
+                  // 'Издай на фирма' on an individual order) so the
+                  // modal shows the actual invoice recipient instead
+                  // of the order's original cash-customer row.
                   partner_name:
+                    (paymentOrder as any).invoice_partner_name ??
                     paymentOrder.partner?.name ??
                     paymentOrder.partner_name ??
                     undefined,
