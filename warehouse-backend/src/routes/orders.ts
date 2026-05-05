@@ -602,6 +602,10 @@ export default async function orderRoutes(app: FastifyInstance) {
       paramIdx++;
     }
 
+    // Batch D — list rows expose `invoice_partner_*` so the table can
+    // show "ЖОКЕР ЕНТЪРТЕЙМЪНТ ЕООД" instead of "Физическо лице" when an
+    // override is in effect. Source: orders.invoice_partner_id (migration
+    // 068) — survives invoice deletion and applies pre-invoice as well.
     const sql = `
       SELECT o.*,
              p.name AS partner_name,
@@ -615,12 +619,17 @@ export default async function orderRoutes(app: FastifyInstance) {
              ${COMMERCIAL_DOC_NUMBER_SQL} AS commercial_document_number,
              ${ORDER_OBJECT_NAME_SQL} AS object_name,
              ${ORDER_OBJECT_CODE_SQL} AS object_code,
-             (o.invoice_id IS NOT NULL) AS invoiced
+             (o.invoice_id IS NOT NULL) AS invoiced,
+             ipo.id   AS invoice_partner_id,
+             ipo.name AS invoice_partner_name,
+             ipo.eik  AS invoice_partner_eik
       FROM orders o
       JOIN partners p ON p.id = o.partner_id
       LEFT JOIN invoices inv ON inv.id = o.invoice_id
       LEFT JOIN invoices cn ON cn.related_invoice_id = inv.id
           AND cn.document_type = 'credit_note'
+      LEFT JOIN partners ipo ON ipo.id = o.invoice_partner_id
+                             AND ipo.id <> o.partner_id
       LEFT JOIN partner_order_objects po ON po.id = o.partner_object_id
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS item_count
@@ -704,6 +713,9 @@ export default async function orderRoutes(app: FastifyInstance) {
     await requireAuth(request, reply);
     const { id } = request.params as { id: string };
 
+    // Batch D — drawer header reads `invoice_partner_*` (sourced from
+    // orders.invoice_partner_id, migration 068). When set, the override
+    // company supersedes the original individual partner everywhere.
     const {
       rows: [order],
     } = await query(
@@ -721,12 +733,17 @@ export default async function orderRoutes(app: FastifyInstance) {
               ${ORDER_OBJECT_NAME_SQL} AS object_name,
               ${ORDER_OBJECT_CODE_SQL} AS object_code,
               (o.invoice_id IS NOT NULL) AS invoiced,
-              approver.name AS below_cost_approved_by_name
+              approver.name AS below_cost_approved_by_name,
+              ipo.id   AS invoice_partner_id,
+              ipo.name AS invoice_partner_name,
+              ipo.eik  AS invoice_partner_eik
        FROM orders o
        JOIN partners p ON p.id = o.partner_id
        LEFT JOIN invoices inv ON inv.id = o.invoice_id
        LEFT JOIN invoices cn ON cn.related_invoice_id = inv.id
            AND cn.document_type = 'credit_note'
+       LEFT JOIN partners ipo ON ipo.id = o.invoice_partner_id
+                              AND ipo.id <> o.partner_id
        LEFT JOIN partner_order_objects po ON po.id = o.partner_object_id
        LEFT JOIN users approver ON approver.id = o.below_cost_approved_by
        WHERE o.id = $1`,
@@ -2036,6 +2053,159 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
+  // ════════════════════════════════════════════════════════════════════
+  // PUT /orders/:id/invoice-partner — set/clear "Издай на фирма" override
+  // ════════════════════════════════════════════════════════════════════
+  // Persists the override receiver on the order itself so every transaction
+  // document (Стокова разписка, Оферта, ППП, Търговски документ) and the
+  // drawer header reflect it immediately — without waiting for the invoice
+  // to be created. Body is either:
+  //   { partner_id: number }                 → pick existing company partner
+  //   { name, eik, ... }                     → upsert by EIK, then point to it
+  //   {} or { partner_id: null } or null     → clear the override
+  // Allowed only when the underlying order partner is an individual; trying
+  // to override a legal-entity order is meaningless and rejected with 400.
+  const setInvoicePartnerSchema = z
+    .union([
+      z.object({ partner_id: z.number().int().positive() }),
+      z.object({
+        name: z.string().trim().min(1).max(255),
+        eik: z.string().trim().min(1).max(50),
+        vat_number: z.string().trim().max(50).optional(),
+        address: z.string().trim().max(500).optional(),
+        city: z.string().trim().max(100).optional(),
+        contact_person: z.string().trim().max(255).optional(),
+        phone: z.string().trim().max(50).optional(),
+        email: z.string().trim().max(255).optional(),
+      }),
+      z.object({ partner_id: z.null() }),
+      z.object({}).strict(),
+    ])
+    .nullable();
+
+  app.put(
+    "/:id/invoice-partner",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const body = setInvoicePartnerSchema.parse(request.body ?? null);
+
+      return await transaction(async (client) => {
+        const {
+          rows: [row],
+        } = await client.query(
+          `SELECT o.id, o.partner_id, p.partner_type
+             FROM orders o
+             JOIN partners p ON p.id = o.partner_id
+            WHERE o.id = $1
+            FOR UPDATE`,
+          [id],
+        );
+        if (!row) {
+          throw Object.assign(new Error("Order not found"), {
+            statusCode: 404,
+          });
+        }
+
+        // Treat null / {} / { partner_id: null } as "clear the override".
+        const isClear =
+          body == null ||
+          (typeof body === "object" &&
+            !("name" in body) &&
+            (("partner_id" in body && body.partner_id == null) ||
+              !("partner_id" in body)));
+
+        if (isClear) {
+          await client.query(
+            "UPDATE orders SET invoice_partner_id = NULL, updated_at = NOW() WHERE id = $1",
+            [id],
+          );
+          return { ok: true, invoice_partner_id: null };
+        }
+
+        if (row.partner_type !== "individual") {
+          throw Object.assign(
+            new Error(
+              "Override към фирма е разрешен само за поръчки на физически лица.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        // Resolve the override target — pick existing partner_id, or upsert
+        // the supplied new-partner data by EIK (same rules as invoice flow).
+        let invoicePartnerId: number;
+        if ("partner_id" in body && body.partner_id) {
+          const {
+            rows: [existing],
+          } = await client.query(
+            "SELECT id FROM partners WHERE id = $1 LIMIT 1",
+            [body.partner_id],
+          );
+          if (!existing) {
+            throw Object.assign(new Error("Partner not found"), {
+              statusCode: 404,
+            });
+          }
+          invoicePartnerId = existing.id;
+        } else if ("name" in body && "eik" in body) {
+          const eik = body.eik.trim();
+          const {
+            rows: [match],
+          } = await client.query(
+            "SELECT id FROM partners WHERE eik = $1 LIMIT 1",
+            [eik],
+          );
+          if (match) {
+            invoicePartnerId = match.id;
+          } else {
+            const {
+              rows: [created],
+            } = await client.query(
+              `INSERT INTO partners
+                 (name, eik, vat_number, address, city,
+                  contact_person, phone, email, partner_type)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'legal_entity')
+               RETURNING id`,
+              [
+                body.name.trim(),
+                eik,
+                body.vat_number ?? null,
+                body.address ?? null,
+                body.city ?? null,
+                body.contact_person ?? null,
+                body.phone ?? null,
+                body.email ?? null,
+              ],
+            );
+            invoicePartnerId = created.id;
+          }
+        } else {
+          throw Object.assign(new Error("Invalid invoice-partner payload"), {
+            statusCode: 400,
+          });
+        }
+
+        // Rejecting "set override = original partner" keeps the column
+        // semantics clean: "NOT NULL means an override is in effect".
+        if (invoicePartnerId === row.partner_id) {
+          throw Object.assign(
+            new Error(
+              "Override партньорът съвпада с оригиналния — без промяна.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        await client.query(
+          "UPDATE orders SET invoice_partner_id = $1, updated_at = NOW() WHERE id = $2",
+          [invoicePartnerId, id],
+        );
+        return { ok: true, invoice_partner_id: invoicePartnerId };
+      });
+    },
+  );
+
   // DELETE /orders/:id — cancel an order (soft delete) with stock return for fulfilled orders
   app.delete(
     "/:id",
@@ -2532,14 +2702,12 @@ export default async function orderRoutes(app: FastifyInstance) {
     orderId: number,
     db: DbExecutor = { query },
   ) {
-    // Batch D — when an active invoice was issued with `partner_override`,
-    // its receiver (a company) supersedes the original order partner (an
-    // individual) on every transaction document: Стокова разписка, Оферта,
-    // Приемо-предавателен протокол — and the order drawer header. The JOIN
-    // is skipped when the invoice was cancelled or its receiver matches the
-    // original partner (no override took place); deletion clears
-    // orders.invoice_id via FK ON DELETE SET NULL, so that case yields NULL
-    // here too.
+    // Batch D — `orders.invoice_partner_id` (migration 068) holds the
+    // override receiver and is the source of truth for transaction
+    // documents (Стокова разписка, Оферта, ППП, Търговски документ) and
+    // the drawer header. It's set the moment the cashier picks "Издай на
+    // фирма" and is cleared by ×; FK ON DELETE SET NULL means a deleted
+    // override partner cleanly degrades to "no override".
     const {
       rows: [order],
     } = await db.query(
@@ -2559,10 +2727,8 @@ export default async function orderRoutes(app: FastifyInstance) {
               ip.contact_person AS invoice_partner_mol
        FROM orders o
        JOIN partners p ON p.id = o.partner_id
-       LEFT JOIN invoices inv ON inv.id = o.invoice_id
-                              AND inv.status <> 'cancelled'
-                              AND inv.partner_id <> o.partner_id
-       LEFT JOIN partners ip ON ip.id = inv.partner_id
+       LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
+                             AND ip.id <> o.partner_id
        WHERE o.id = $1`,
       [orderId],
     );

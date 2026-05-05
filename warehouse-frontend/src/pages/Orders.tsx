@@ -601,6 +601,32 @@ function OrderDetailModal({
     setPendingFulfillOversell(null);
   }, [order?.id]);
 
+  // Hydrate the override chip from the server-persisted value on
+  // orders.invoice_partner_id, so reopening a drawer that already has an
+  // override applied still shows the yellow "Фактура на: …" pill (and the
+  // header amber hint). The local `partnerOverride` state is otherwise
+  // reset on order id change above.
+  useEffect(() => {
+    if (!detail) return;
+    const persisted: any = detail;
+    if (
+      !partnerOverride &&
+      persisted.invoice_partner_id &&
+      persisted.invoice_partner_name
+    ) {
+      setPartnerOverride({
+        partner_id: persisted.invoice_partner_id,
+        name: persisted.invoice_partner_name,
+        eik: persisted.invoice_partner_eik ?? "",
+      });
+    }
+    // We intentionally only react to the persisted ID — once the user
+    // clears the override locally we don't want this effect to immediately
+    // re-hydrate from a stale React Query cache; the mutation invalidates
+    // the cache and a fresh fetch (with NULL) overrides this branch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [(detail as any)?.invoice_partner_id]);
+
   // Reset the partner-override sub-dialog form whenever it opens, so a
   // closed-and-reopened dialog never shows stale picks.
   useEffect(() => {
@@ -917,6 +943,33 @@ function OrderDetailModal({
           err?.response?.data?.message ??
           "Грешка при потвърждение на поръчката",
       );
+    },
+  });
+
+  // Batch D — persist the "Издай на фирма" override on the order itself
+  // (PUT /orders/:id/invoice-partner). Auto-saved the moment the cashier
+  // picks an override, so every transaction document (Стокова разписка,
+  // Оферта, ППП, Търговски документ) and the drawer header reflect it
+  // immediately — without waiting for the invoice to be created. Pass
+  // `null` to clear.
+  const setInvoicePartnerMutation = useMutation({
+    mutationFn: ({
+      orderId,
+      payload,
+    }: {
+      orderId: number;
+      payload: any | null;
+    }) => api.put(`/orders/${orderId}/invoice-partner`, payload ?? {}),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+    },
+    onError: (err: any) => {
+      const detail =
+        err?.response?.data?.error ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "Грешка при запис на override партньора";
+      toast.error(detail);
     },
   });
 
@@ -1940,10 +1993,21 @@ function OrderDetailModal({
                         </span>
                         <button
                           type="button"
-                          onClick={() => setPartnerOverride(null)}
+                          onClick={() => {
+                            setPartnerOverride(null);
+                            // Clear the persisted override so PDFs revert to
+                            // the original individual partner immediately.
+                            if (order) {
+                              setInvoicePartnerMutation.mutate({
+                                orderId: order.id,
+                                payload: null,
+                              });
+                            }
+                          }}
                           className="ml-1 text-amber-600 hover:text-amber-900"
                           title="Премахни"
                           aria-label="Премахни override-а"
+                          disabled={setInvoicePartnerMutation.isPending}
                         >
                           ×
                         </button>
@@ -2705,6 +2769,8 @@ function OrderDetailModal({
             </Button>
             <Button
               onClick={() => {
+                if (!order) return;
+                let payload: any = null;
                 if (overrideMode === "existing") {
                   const picked = overridePartners.find(
                     (p) => p.id === overrideExistingId,
@@ -2715,10 +2781,22 @@ function OrderDetailModal({
                     name: picked.name,
                     eik: picked.eik,
                   });
+                  payload = { partner_id: picked.id };
                 } else {
                   if (!newPartner.name.trim() || !newPartner.eik.trim()) return;
                   setPartnerOverride({ ...newPartner });
+                  // Strip empty optionals so the server doesn't get blank strings.
+                  payload = Object.fromEntries(
+                    Object.entries(newPartner).filter(
+                      ([, v]) => typeof v === "string" && v.trim().length > 0,
+                    ),
+                  );
                 }
+                // Persist on the order so every document picks it up.
+                setInvoicePartnerMutation.mutate({
+                  orderId: order.id,
+                  payload,
+                });
                 setPartnerOverrideOpen(false);
               }}
             >

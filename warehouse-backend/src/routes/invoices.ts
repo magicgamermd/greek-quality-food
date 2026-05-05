@@ -496,10 +496,32 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             ? (body.client_display_name ?? null)
             : null;
 
-        // Batch D — partner override (only for individual orders).
-        // The order's partner_id is left alone; the invoice points to the
-        // resolved (existing or freshly upserted) company partner.
-        if (body.partner_override) {
+        // Batch D — partner override.
+        //
+        // Two paths to the override receiver, in priority order:
+        //   1. `orders.invoice_partner_id` (migration 068) — auto-saved
+        //      the moment the cashier picked "Издай на фирма" via
+        //      PUT /orders/:id/invoice-partner, so it already applies to
+        //      every transaction document and survives invoice deletion.
+        //   2. `body.partner_override` (legacy) — kept for backward
+        //      compatibility with older clients that send the override
+        //      inline at invoice creation time. Persisted onto the order
+        //      so subsequent docs see it too.
+        //
+        // Either way the order's `partner_id` is left alone; the invoice
+        // points to the resolved company partner.
+        if (order.invoice_partner_id) {
+          if (partner?.partner_type !== "individual") {
+            throw Object.assign(
+              new Error(
+                "Invoice partner override is allowed only for individual orders",
+              ),
+              { statusCode: 400 },
+            );
+          }
+          invoicePartnerId = order.invoice_partner_id;
+          clientDisplayName = null;
+        } else if (body.partner_override) {
           if (partner?.partner_type !== "individual") {
             throw Object.assign(
               new Error(
@@ -512,9 +534,12 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             client,
             body.partner_override,
           );
-          // Override and client_display_name are mutually exclusive — once we
-          // have a real company partner, the "free-text individual name" no
-          // longer makes sense.
+          // Mirror the legacy override onto the order so downstream
+          // documents stay consistent if it lands here first.
+          await client.query(
+            "UPDATE orders SET invoice_partner_id = $1 WHERE id = $2",
+            [invoicePartnerId, body.order_id],
+          );
           clientDisplayName = null;
         }
 
