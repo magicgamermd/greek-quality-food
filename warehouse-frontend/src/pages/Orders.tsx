@@ -38,6 +38,7 @@ import {
   History,
   Building2,
   CreditCard,
+  Tag,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -3715,6 +3716,57 @@ function CreateOrderModal({
     setStockWarnings([]);
   };
 
+  // Set the per-line status (normal / paid_not_taken / awaiting) from the
+  // row's tag dropdown. Two cases:
+  //   1. quantity > available stock and current is 'normal' → split the
+  //      row into a normal line carrying the available qty and a new
+  //      line carrying the overage with the chosen status.
+  //   2. otherwise (enough stock OR row is already split) → flip the
+  //      whole row to the chosen status. Useful when the customer paid
+  //      for everything but won't pick up today, even though we have it
+  //      in stock — surfaces in the "Платени невзети" view without
+  //      decrementing inventory off-track.
+  const setLineStatus = (
+    rowKey: string,
+    target: "normal" | "paid_not_taken" | "awaiting",
+  ) => {
+    setItems((prev) => {
+      const idx = prev.findIndex((r) => r.row_key === rowKey);
+      if (idx < 0) return prev;
+      const orig = prev[idx];
+      if (target === "normal" || orig.line_status !== "normal") {
+        return prev.map((r) =>
+          r.row_key === rowKey ? { ...r, line_status: target } : r,
+        );
+      }
+      const available = getEffectiveStock(orig);
+      const requested = Number(orig.quantity);
+      const isOverage = available >= 0 && requested > available;
+      if (!isOverage) {
+        return prev.map((r) =>
+          r.row_key === rowKey ? { ...r, line_status: target } : r,
+        );
+      }
+      const overage = requested - available;
+      const taken: OrderItemRow = { ...orig, quantity: String(available) };
+      const pending: OrderItemRow = makeOrderItemRow({
+        product_id: orig.product_id,
+        product_name: orig.product_name,
+        quantity: String(overage),
+        unit_price: orig.unit_price,
+        discount_percent: orig.discount_percent,
+        unit: orig.unit,
+        stock: orig.stock,
+        cost_price: orig.cost_price,
+        weight_kg: orig.weight_kg,
+        original_weight_kg: orig.original_weight_kg,
+        line_status: target,
+      });
+      return [...prev.slice(0, idx), taken, pending, ...prev.slice(idx + 1)];
+    });
+    setStockWarnings([]);
+  };
+
   const addHistoryItems = useCallback(
     (newItems: PartnerHistoryItem[]) => {
       if (newItems.length === 0) return;
@@ -3790,9 +3842,15 @@ function CreateOrderModal({
     const line = Number(i.quantity) * Number(i.unit_price) * (1 - disc / 100);
     return sum + Math.round(line * 100) / 100;
   }, 0);
+  // Only 'normal' lines guard against overstock — paid_not_taken and
+  // awaiting lines are explicitly allowed to exceed available stock
+  // (paid_not_taken lets stock go negative for promised goods; awaiting
+  // is a pre-order with no stock effect at all).
   const hasStockIssues = validItems.some(
     (i) =>
-      getEffectiveStock(i) >= 0 && Number(i.quantity) > getEffectiveStock(i),
+      i.line_status === "normal" &&
+      getEffectiveStock(i) >= 0 &&
+      Number(i.quantity) > getEffectiveStock(i),
   );
   // Soft guard: any row where the post-discount unit price is under the
   // snapshotted cost. Сравняваме cost с effective price (not list), защото
@@ -4240,7 +4298,10 @@ function CreateOrderModal({
                     const discount = Number(item.discount_percent) || 0;
                     const lineTotal = qty * price * (1 - discount / 100);
                     const availableStock = getEffectiveStock(item);
+                    // Only flag overstock on normal lines; paid-not-taken
+                    // and awaiting lines opt out of the red warning bg.
                     const overStock =
+                      item.line_status === "normal" &&
                       item.product_id &&
                       availableStock >= 0 &&
                       qty > availableStock;
@@ -4258,11 +4319,15 @@ function CreateOrderModal({
                       <TableRow
                         key={item.row_key}
                         className={
-                          overStock
-                            ? "bg-red-50"
-                            : belowCost
-                              ? "bg-amber-50"
-                              : ""
+                          item.line_status === "paid_not_taken"
+                            ? "bg-amber-50"
+                            : item.line_status === "awaiting"
+                              ? "bg-gray-50"
+                              : overStock
+                                ? "bg-red-50"
+                                : belowCost
+                                  ? "bg-amber-50"
+                                  : ""
                         }
                       >
                         <TableCell>
@@ -4270,8 +4335,18 @@ function CreateOrderModal({
                             <div className="flex items-center gap-2">
                               <Package className="h-4 w-4 text-gray-400 shrink-0" />
                               <div className="min-w-0">
-                                <div className="text-sm font-medium truncate">
-                                  {item.product_name}
+                                <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
+                                  <span>{item.product_name}</span>
+                                  {item.line_status === "paid_not_taken" && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
+                                      💰 Платена невзета
+                                    </span>
+                                  )}
+                                  {item.line_status === "awaiting" && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
+                                      ⏳ На изчакване
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-xs text-gray-400">
                                   {item.unit}
@@ -4434,13 +4509,84 @@ function CreateOrderModal({
                           {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
                         </TableCell>
                         <TableCell>
-                          <button
-                            type="button"
-                            onClick={() => removeItem(i)}
-                            className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          <div className="flex items-center gap-1">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  disabled={!item.product_id}
+                                  className={`p-1 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                                    item.line_status === "paid_not_taken"
+                                      ? "text-amber-600 hover:bg-amber-100"
+                                      : item.line_status === "awaiting"
+                                        ? "text-gray-600 hover:bg-gray-100"
+                                        : "text-gray-300 hover:text-gray-600 hover:bg-gray-50"
+                                  }`}
+                                  title="Маркирай реда като платена невзета или на изчакване"
+                                >
+                                  {item.line_status === "paid_not_taken" ? (
+                                    <span className="text-base leading-none">
+                                      💰
+                                    </span>
+                                  ) : item.line_status === "awaiting" ? (
+                                    <span className="text-base leading-none">
+                                      ⏳
+                                    </span>
+                                  ) : (
+                                    <Tag className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    setLineStatus(item.row_key, "normal")
+                                  }
+                                  className={
+                                    item.line_status === "normal"
+                                      ? "font-medium"
+                                      : ""
+                                  }
+                                >
+                                  📦 Нормална
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    setLineStatus(
+                                      item.row_key,
+                                      "paid_not_taken",
+                                    )
+                                  }
+                                  className={
+                                    item.line_status === "paid_not_taken"
+                                      ? "font-medium text-amber-700"
+                                      : ""
+                                  }
+                                >
+                                  💰 Платена невзета
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    setLineStatus(item.row_key, "awaiting")
+                                  }
+                                  className={
+                                    item.line_status === "awaiting"
+                                      ? "font-medium text-gray-700"
+                                      : ""
+                                  }
+                                >
+                                  ⏳ На изчакване
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <button
+                              type="button"
+                              onClick={() => removeItem(i)}
+                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
