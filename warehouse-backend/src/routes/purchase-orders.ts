@@ -146,9 +146,10 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
       const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
       const { rows } = await query(
-        `SELECT po.id, po.supplier_id, po.status, po.notes,
+        `SELECT po.id, po.supplier_id, po.status, po.notes, po.label,
                 po.expected_delivery_date, po.sent_at, po.received_at,
-                po.incoming_goods_id, po.created_at, po.updated_at,
+                po.incoming_goods_id, po.merged_from_count,
+                po.created_at, po.updated_at,
                 s.name AS supplier_name,
                 (SELECT COUNT(*) FROM purchase_order_items
                   WHERE purchase_order_id = po.id) AS item_count,
@@ -178,7 +179,8 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST / — create draft
+  // POST / — create note by default (status='note'); pass status='draft'
+  // for the legacy direct-draft flow.
   app.post(
     "/",
     { preHandler: guard },
