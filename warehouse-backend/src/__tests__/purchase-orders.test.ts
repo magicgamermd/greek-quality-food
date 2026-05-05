@@ -377,6 +377,19 @@ describe("Purchase Orders — CRUD", () => {
     expect(sql).not.toMatch(/created_at\s*>=/);
   });
 
+  it("GET /?search=hendi adds ILIKE on supplier name + product name + sku", async () => {
+    mockQuery.mockResolvedValueOnce(rows([]));
+    await app.inject({
+      method: "GET",
+      url: "/purchase-orders?search=hendi",
+    });
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toMatch(/ILIKE/);
+    // Search should match supplier name OR an item product
+    expect(sql).toMatch(/s\.name\s+ILIKE/);
+    expect(sql).toMatch(/EXISTS/); // subquery on items
+  });
+
   it("GET /:id/pdf returns application/pdf", async () => {
     mockQuery
       .mockResolvedValueOnce(

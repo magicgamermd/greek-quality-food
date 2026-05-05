@@ -102,7 +102,7 @@ async function loadOrderWithItems(id: number) {
 }
 
 export default async function purchaseOrderRoutes(app: FastifyInstance) {
-  // GET / — list with optional status / supplier filters.
+  // GET / — list with optional status / supplier / period / search filters.
   app.get(
     "/",
     { preHandler: guard },
@@ -127,6 +127,19 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
         const cutoff = computePeriodCutoff(period);
         params.push(cutoff);
         where.push(`po.created_at >= $${params.length}`);
+      }
+      if (search && search.trim().length > 0) {
+        const term = `%${search.trim()}%`;
+        params.push(term);
+        const idx = params.length;
+        where.push(
+          `(s.name ILIKE $${idx} OR EXISTS (
+              SELECT 1 FROM purchase_order_items poi
+              JOIN products p ON p.id = poi.product_id
+              WHERE poi.purchase_order_id = po.id
+                AND (p.name_bg ILIKE $${idx} OR p.name_en ILIKE $${idx} OR p.sku ILIKE $${idx})
+           ))`,
+        );
       }
       const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
