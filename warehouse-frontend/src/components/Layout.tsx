@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Package,
@@ -19,8 +19,6 @@ import {
   ChevronRight,
   Settings,
   CheckCheck,
-  AlertTriangle,
-  DollarSign,
   Boxes,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -28,6 +26,11 @@ import { usePermissions } from "@/contexts/PermissionContext";
 import { PERMISSIONS, type Permission } from "@/lib/permissions";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import {
+  useNotificationsPolling,
+  type NotificationItem,
+} from "@/hooks/useNotificationsPolling";
+import { groupForType } from "@/lib/notificationTypes";
 
 const allNavItems: Array<{
   to: string;
@@ -104,30 +107,6 @@ const allNavItems: Array<{
   },
 ];
 
-const notifTypeIcons: Record<string, React.ElementType> = {
-  low_stock: AlertTriangle,
-  payment: DollarSign,
-  order_created: ShoppingCart,
-  order_fulfilled: ShoppingCart,
-  order_cancelled: ShoppingCart,
-};
-
-const notifTypeBg: Record<string, string> = {
-  low_stock: "bg-red-50 text-red-600",
-  payment: "bg-green-50 text-green-600",
-  order_created: "bg-blue-50 text-blue-600",
-};
-
-interface Notification {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  severity?: string;
-  read: boolean;
-  created_at: string;
-}
-
 const routeNames: Record<string, string> = {
   "/": "Табло",
   "/products": "Продукти",
@@ -171,16 +150,20 @@ export function Layout() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const { data: notifData } = useQuery<{ data: Notification[]; count: number }>(
-    {
-      queryKey: ["notifications-count"],
-      queryFn: () => api.get("/notifications").then((r) => r.data),
-      refetchInterval: 60_000,
-    },
-  );
+  const navigateFromPayload = (payload: any, _type: string) => {
+    setNotifOpen(false);
+    if (payload?.order_id) {
+      navigate(`/orders?highlight=${payload.order_id}`);
+    } else if (payload?.product_id) {
+      navigate(`/products?highlight=${payload.product_id}`);
+    }
+  };
 
-  const notifications = notifData?.data ?? [];
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const { data: notificationsResp } = useNotificationsPolling({
+    onClickPayload: navigateFromPayload,
+  });
+  const notifications: NotificationItem[] = notificationsResp?.data ?? [];
+  const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -193,20 +176,32 @@ export function Layout() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [notifOpen]);
 
+  const markReadMutation = useMutation({
+    mutationFn: (id: string) => api.put(`/notifications/${id}/read`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+
   const markAllReadMutation = useMutation({
     mutationFn: () =>
       api.post("/notifications/read-all", {
-        ids: notifications.filter((n) => !n.read).map((n) => n.id),
+        ids: notifications.filter((n) => !n.is_read).map((n) => n.id),
       }),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["notifications-count"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
   });
 
   const dismissMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/notifications/${id}`),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["notifications-count"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
   });
+
+  const grouped = useMemo(() => {
+    const out: Record<string, NotificationItem[]> = {};
+    for (const n of notifications) {
+      const g = groupForType(n.type);
+      (out[g] ??= []).push(n);
+    }
+    return out;
+  }, [notifications]);
 
   const handleLogout = () => {
     logout();
@@ -369,56 +364,74 @@ export function Layout() {
                       disabled={markAllReadMutation.isPending}
                     >
                       <CheckCheck className="h-3.5 w-3.5" />
-                      Маркирай като прочетени
+                      Маркирай всички
                     </button>
                   )}
                 </div>
 
-                {/* List */}
+                {/* Grouped list */}
                 <div className="flex-1 overflow-y-auto">
                   {notifications.length === 0 ? (
                     <div className="px-4 py-8 text-center text-gray-400 text-sm">
-                      Няма известия
+                      Нямаш нови известия
                     </div>
                   ) : (
-                    <div className="divide-y divide-gray-50">
-                      {notifications.map((n) => {
-                        const IconComp =
-                          notifTypeIcons[n.type] || AlertTriangle;
-                        const bgClass =
-                          notifTypeBg[n.type] || "bg-gray-50 text-gray-600";
-                        return (
+                    Object.entries(grouped).map(([group, items]) => (
+                      <div key={group}>
+                        <div className="px-3 py-1 text-[11px] uppercase tracking-wide font-semibold text-gray-500 bg-gray-50 sticky top-0">
+                          {group}
+                        </div>
+                        {items.map((n) => (
                           <div
                             key={n.id}
-                            className={`flex items-start gap-3 px-4 py-3 ${!n.read ? "bg-blue-50/30" : ""}`}
+                            className={`flex items-start gap-2 border-b last:border-b-0 ${
+                              n.is_read ? "opacity-60" : ""
+                            }`}
                           >
-                            <div
-                              className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${bgClass}`}
+                            <button
+                              onClick={() => {
+                                if (!n.is_read) markReadMutation.mutate(n.id);
+                                navigateFromPayload(n.payload, n.type);
+                              }}
+                              className="flex-1 text-left px-3 py-2 hover:bg-gray-50 min-w-0"
                             >
-                              <IconComp className="h-4 w-4" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-900">
-                                {n.title}
-                              </p>
-                              <p className="text-xs text-gray-500 mt-0.5 truncate">
-                                {n.message}
-                              </p>
-                            </div>
+                              <div className="flex items-start gap-2">
+                                <span
+                                  className={`mt-1 text-xs shrink-0 ${
+                                    n.is_read
+                                      ? "text-gray-400"
+                                      : "text-[#f97316]"
+                                  }`}
+                                  aria-hidden="true"
+                                >
+                                  {n.is_read ? "✓" : "•"}
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm text-gray-900 truncate">
+                                    {n.message}
+                                  </div>
+                                  <div className="text-xs text-gray-400 mt-0.5">
+                                    {new Date(n.created_at).toLocaleString(
+                                      "bg-BG",
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 dismissMutation.mutate(n.id);
                               }}
-                              className="text-gray-300 hover:text-gray-500 transition-colors shrink-0"
+                              className="text-gray-300 hover:text-gray-500 transition-colors shrink-0 px-2 py-2"
                               title="Премахни"
                             >
                               <X className="h-3.5 w-3.5" />
                             </button>
                           </div>
-                        );
-                      })}
-                    </div>
+                        ))}
+                      </div>
+                    ))
                   )}
                 </div>
               </div>
