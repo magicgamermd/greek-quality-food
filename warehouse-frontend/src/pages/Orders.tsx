@@ -3837,11 +3837,21 @@ function CreateOrderModal({
   // Round each line to 2 decimals BEFORE summing, so the displayed total
   // matches what the backend persists per-row → no 1-cent drift between
   // the modal and the PDF / order detail.
-  const orderTotal = validItems.reduce((sum, i) => {
+  // Mirror the backend's total convention (orders.ts insertItems): awaiting
+  // lines DO NOT count toward the order total. They're tracked on the
+  // parent for visibility but the goods haven't arrived yet, so the
+  // cashier doesn't see them in the "to invoice / to charge" bucket.
+  const computeLineTotal = (i: OrderItemRow) => {
     const disc = Number(i.discount_percent) || 0;
     const line = Number(i.quantity) * Number(i.unit_price) * (1 - disc / 100);
-    return sum + Math.round(line * 100) / 100;
-  }, 0);
+    return Math.round(line * 100) / 100;
+  };
+  const orderTotal = validItems
+    .filter((i) => i.line_status !== "awaiting")
+    .reduce((sum, i) => sum + computeLineTotal(i), 0);
+  const awaitingTotal = validItems
+    .filter((i) => i.line_status === "awaiting")
+    .reduce((sum, i) => sum + computeLineTotal(i), 0);
   // Only 'normal' lines guard against overstock — paid_not_taken and
   // awaiting lines are explicitly allowed to exceed available stock
   // (paid_not_taken lets stock go negative for promised goods; awaiting
@@ -4667,6 +4677,20 @@ function CreateOrderModal({
               Общо: {formatCurrency(orderTotal)}
             </span>
           </div>
+          {awaitingTotal > 0 && (
+            // Awaiting items live on the parent for visibility but their
+            // value never lands on the invoice or the cashier's "to
+            // collect" total — it'll be charged on a separate
+            // transaction once the goods arrive (the spawned child
+            // order). Show it as a discreet sub-line so the cashier
+            // knows what's promised but not yet pay-able.
+            <div className="flex items-center justify-end gap-2 mb-2 text-xs text-gray-500">
+              <span>⏳ На изчакване (отделна сделка):</span>
+              <span className="font-medium text-gray-700">
+                {formatCurrency(awaitingTotal)}
+              </span>
+            </div>
+          )}
 
           {hasStockIssues && !confirmOverstock && (
             <div className="flex items-start gap-2 p-2 bg-orange-50 border border-orange-200 rounded text-sm text-orange-700 mb-2">
