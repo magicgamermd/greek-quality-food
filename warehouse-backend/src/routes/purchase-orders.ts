@@ -480,15 +480,22 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
             }
           }
 
-          // Concat notes from all source orders.
-          const notesParts = orders
-            .map((o: any) => {
-              if (!o.notes) return "";
-              const tag = o.label ? `[${o.label}]` : `[Бележка #${o.id}]`;
-              return `${tag} ${o.notes}`;
-            })
-            .filter(Boolean);
-          const mergedNotes = notesParts.join("\n");
+          // Concat notes from all source orders. For a single-source convert
+          // the user's plain notes pass through verbatim — only multi-source
+          // merges need the [label]/[Бележка #N] tag for disambiguation.
+          let mergedNotes: string;
+          if (orders.length === 1) {
+            mergedNotes = orders[0].notes ?? "";
+          } else {
+            const notesParts = orders
+              .map((o: any) => {
+                if (!o.notes) return "";
+                const tag = o.label ? `[${o.label}]` : `[Бележка #${o.id}]`;
+                return `${tag} ${o.notes}`;
+              })
+              .filter(Boolean);
+            mergedNotes = notesParts.join("\n");
+          }
 
           // Earliest expected_delivery_date wins (most urgent).
           const expectedDates = orders
