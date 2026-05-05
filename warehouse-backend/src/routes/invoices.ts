@@ -130,6 +130,16 @@ const createInvoiceSchema = z.object({
     .max(2000)
     .optional()
     .transform((v) => (v && v.length > 0 ? v : null)),
+  // Optional override for invoice_date — e.g. when something was sold on
+  // Saturday but the cashier wants the paperwork dated Friday so the
+  // weekly accounting flow stays clean. Sequential invoice number is NOT
+  // affected; only invoice_date changes. Frontend gates this behind a
+  // hidden "−/+" keyboard chord so the field doesn't surface during the
+  // normal flow. Format: ISO YYYY-MM-DD.
+  invoice_date_override: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   // Batch D — Issue invoice in the name of a different (company) partner when
   // the order's partner is an individual. Either pick an existing partner by
   // id, or supply full new-partner data — server upserts by EIK.
@@ -578,10 +588,11 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             total_net, total_vat, total_gross, include_vat,
             client_display_name, payment_method,
             vat_exemption_reason, invoice_note)
-         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
           [
             invoiceNumber,
+            body.invoice_date_override ?? null,
             invoicePartnerId,
             totalNet,
             totalVat,

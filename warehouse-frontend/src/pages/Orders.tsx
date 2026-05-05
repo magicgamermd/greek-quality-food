@@ -520,6 +520,14 @@ function OrderDetailModal({
   // VAT toggle for invoice/documents
   const [invoiceNote, setInvoiceNote] = useState("");
   const [vatExemptionReason, setVatExemptionReason] = useState("");
+  // Hidden invoice-date override — surfaces only when the cashier
+  // presses a "−" then "+" chord while the order detail dialog is
+  // focused. Use case: Saturday sale that needs to be backdated to
+  // Friday so the weekly accounting paperwork stays in line. Empty
+  // string = field hidden (default flow); non-empty = the date the
+  // cashier picked. Cleared automatically on successful invoice
+  // generation so the field disappears for the next order.
+  const [invoiceDateOverride, setInvoiceDateOverride] = useState("");
   // Popover-style dialog for the optional invoice note + VAT-exemption
   // legal-basis fields. Replaces the inline inputs that were pushing the
   // "Генерирай фактура" button around.
@@ -598,6 +606,7 @@ function OrderDetailModal({
     setClientDisplayName("");
     setInvoiceNote("");
     setVatExemptionReason("");
+    setInvoiceDateOverride("");
     setPaymentMethod("cash");
     setPaymentMenuOpen(false);
     setPartnerOverride(null);
@@ -720,6 +729,47 @@ function OrderDetailModal({
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [paymentMenuOpen]);
+
+  // Hidden chord — press "−" then "+" within 1.5s while the order detail
+  // dialog is focused (and not while typing in an input) to surface the
+  // invoice-date override field next to "Генерирай фактура". Closing /
+  // reopening the dialog resets it. Once the cashier picks a date and
+  // generates the invoice, the field disappears automatically.
+  useEffect(() => {
+    if (!order) return;
+    let minusAt = 0;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === "-") {
+        minusAt = Date.now();
+        return;
+      }
+      if (e.key === "+" || (e.key === "=" && e.shiftKey)) {
+        if (minusAt && Date.now() - minusAt < 1500) {
+          minusAt = 0;
+          // Default to the order's existing date so the user only needs to
+          // tweak day/month rather than retype the whole thing.
+          const defaultDate =
+            (detail?.order_date ?? "").slice(0, 10) ||
+            new Date().toISOString().slice(0, 10);
+          setInvoiceDateOverride((prev) => prev || defaultDate);
+        }
+      } else if (e.key !== "-") {
+        // Any other key cancels the chord window.
+        minusAt = 0;
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [order, detail?.order_date]);
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
@@ -880,6 +930,9 @@ function OrderDetailModal({
         vat_exemption_reason: !includeVat
           ? vatExemptionReason.trim() || undefined
           : undefined,
+        // Hidden "−/+" chord — backdate the invoice to a chosen date
+        // without touching the sequential invoice number.
+        invoice_date_override: invoiceDateOverride || undefined,
       };
       if (partnerOverride) {
         payload.partner_override =
@@ -903,6 +956,9 @@ function OrderDetailModal({
       const newInvoiceId = res.data?.id ?? null;
       setGeneratedInvoiceId(newInvoiceId);
       setPartnerOverride(null);
+      // Hidden invoice-date override is per-order — once the invoice
+      // is out, hide the field so the next order starts clean.
+      setInvoiceDateOverride("");
       invalidateAllOrderRelated();
       // Auto-open PDF for printing immediately after generation
       if (newInvoiceId) {
@@ -1956,6 +2012,32 @@ function OrderDetailModal({
                               : "Издай на фирма"}
                           </Button>
                         </>
+                      )}
+                      {invoiceDateOverride && (
+                        // Hidden chord (− then +) flipped this on. Surfaces a
+                        // tiny date input so the cashier can backdate the
+                        // invoice without leaving the order modal. Cleared
+                        // on close or after a successful generate.
+                        <div className="flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                          <span>📅</span>
+                          <input
+                            type="date"
+                            value={invoiceDateOverride}
+                            onChange={(e) =>
+                              setInvoiceDateOverride(e.target.value)
+                            }
+                            className="bg-transparent outline-none text-amber-900"
+                            title="Дата на фактурата (само за тази поръчка)"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setInvoiceDateOverride("")}
+                            className="text-amber-700 hover:text-amber-900"
+                            title="Откажи смяна на дата"
+                          >
+                            ×
+                          </button>
+                        </div>
                       )}
                       <Button
                         onClick={() => invoiceMutation.mutate(detail.id)}
