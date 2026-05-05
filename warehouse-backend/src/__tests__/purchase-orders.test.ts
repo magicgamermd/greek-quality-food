@@ -334,14 +334,132 @@ describe("Purchase Orders — CRUD", () => {
       payload: { ids: [1, 2] },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/Чернова/);
+    expect(res.json().error).toMatch(/бележки и чернови/);
   });
 
-  it("POST /merge rejects fewer than 2 ids", async () => {
+  it("POST /merge rejects empty ids", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/purchase-orders/merge",
-      payload: { ids: [1] },
+      payload: { ids: [] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("POST /merge accepts a single note and converts it to a draft order", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi
+          .fn()
+          // SELECT FOR UPDATE — 1 note
+          .mockResolvedValueOnce(
+            rows([
+              {
+                id: 7,
+                supplier_id: 2,
+                status: "note",
+                notes: null,
+                label: "Кухня",
+                expected_delivery_date: null,
+                created_at: "2026-05-01T10:00:00Z",
+              },
+            ]),
+          )
+          // SELECT items from sources (none — single source is the master)
+          .mockResolvedValueOnce(rows([]))
+          // SELECT master items
+          .mockResolvedValueOnce(
+            rows([{ id: 100, product_id: 10, quantity: "5" }]),
+          )
+          // UPDATE master row → status='draft', merged_from_count=1
+          .mockResolvedValueOnce(rows([])),
+      };
+      return cb(client as any);
+    });
+    mockQuery
+      .mockResolvedValueOnce(
+        rows([{ id: 7, supplier_id: 2, status: "draft", supplier_name: "S" }]),
+      )
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/purchase-orders/merge",
+      payload: { ids: [7] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().id).toBe(7);
+  });
+
+  it("POST /merge accepts notes (not just drafts) for multi-source", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi
+          .fn()
+          .mockResolvedValueOnce(
+            rows([
+              {
+                id: 7,
+                supplier_id: 2,
+                status: "note",
+                notes: null,
+                label: null,
+                expected_delivery_date: null,
+                created_at: "2026-05-01T10:00:00Z",
+              },
+              {
+                id: 9,
+                supplier_id: 2,
+                status: "note",
+                notes: null,
+                label: null,
+                expected_delivery_date: null,
+                created_at: "2026-05-02T10:00:00Z",
+              },
+            ]),
+          )
+          .mockResolvedValueOnce(
+            rows([{ product_id: 11, quantity: "2", notes: null }]),
+          )
+          .mockResolvedValueOnce(
+            rows([{ id: 100, product_id: 10, quantity: "5" }]),
+          )
+          .mockResolvedValueOnce(rows([])) // INSERT new (product 11)
+          .mockResolvedValueOnce(rows([])) // UPDATE master (status=draft, merged_from_count=2)
+          .mockResolvedValueOnce(rows([])), // DELETE source
+      };
+      return cb(client as any);
+    });
+    mockQuery
+      .mockResolvedValueOnce(
+        rows([{ id: 7, status: "draft", supplier_name: "S" }]),
+      )
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/purchase-orders/merge",
+      payload: { ids: [7, 9] },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("POST /merge rejects if any source is not a note or draft", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi.fn().mockResolvedValueOnce(
+          rows([
+            { id: 1, supplier_id: 2, status: "note", created_at: new Date() },
+            { id: 2, supplier_id: 2, status: "sent", created_at: new Date() },
+          ]),
+        ),
+      };
+      return cb(client as any);
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/purchase-orders/merge",
+      payload: { ids: [1, 2] },
     });
     expect(res.statusCode).toBe(400);
   });

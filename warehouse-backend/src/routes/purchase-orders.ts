@@ -54,7 +54,7 @@ const updateSchema = z.object({
 });
 
 const mergeSchema = z.object({
-  ids: z.array(z.number().int().positive()).min(2),
+  ids: z.array(z.number().int().positive()).min(1),
 });
 
 const jwtVerify = async (request: FastifyRequest) => {
@@ -391,8 +391,8 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
       try {
         const masterId = await transaction(async (client) => {
           const { rows: orders } = await client.query(
-            `SELECT id, supplier_id, status, notes, expected_delivery_date,
-                    created_at
+            `SELECT id, supplier_id, status, notes, label,
+                    expected_delivery_date, created_at
              FROM purchase_orders WHERE id = ANY($1) FOR UPDATE`,
             [ids],
           );
@@ -402,10 +402,12 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
               { statusCode: 404 },
             );
           }
-          const nonDraft = orders.find((o: any) => o.status !== "draft");
-          if (nonDraft) {
+          const invalid = orders.find(
+            (o: any) => o.status !== "draft" && o.status !== "note",
+          );
+          if (invalid) {
             throw Object.assign(
-              new Error("Само заявки в статус 'Чернова' могат да се обединят"),
+              new Error("Само бележки и чернови могат да се обединяват"),
               { statusCode: 400 },
             );
           }
@@ -480,9 +482,11 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
 
           // Concat notes from all source orders.
           const notesParts = orders
-            .map((o: any) =>
-              o.notes ? `[ZA-${String(o.id).padStart(5, "0")}] ${o.notes}` : "",
-            )
+            .map((o: any) => {
+              if (!o.notes) return "";
+              const tag = o.label ? `[${o.label}]` : `[Бележка #${o.id}]`;
+              return `${tag} ${o.notes}`;
+            })
             .filter(Boolean);
           const mergedNotes = notesParts.join("\n");
 
@@ -495,15 +499,24 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
 
           await client.query(
             `UPDATE purchase_orders
-             SET notes = $1, expected_delivery_date = $2, updated_at = NOW()
-             WHERE id = $3`,
-            [mergedNotes || null, expected, master.id],
+             SET status = 'draft',
+                 notes = $1,
+                 expected_delivery_date = $2,
+                 merged_from_count = $3,
+                 updated_at = NOW()
+             WHERE id = $4`,
+            [mergedNotes || null, expected, ids.length, master.id],
           );
 
           // Delete source orders (CASCADE drops their items).
-          await client.query("DELETE FROM purchase_orders WHERE id = ANY($1)", [
-            sourceIds,
-          ]);
+          // Skip when single-source (sourceIds is empty — no-op anyway but
+          // avoids an unnecessary round-trip and simplifies test mocking).
+          if (sourceIds.length > 0) {
+            await client.query(
+              "DELETE FROM purchase_orders WHERE id = ANY($1)",
+              [sourceIds],
+            );
+          }
 
           return master.id;
         });
