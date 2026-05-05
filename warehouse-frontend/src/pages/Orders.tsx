@@ -531,9 +531,12 @@ function OrderDetailModal({
   const [protocolSellerRep, setProtocolSellerRep] = useState("");
   const [protocolBuyerRep, setProtocolBuyerRep] = useState("");
   const [includeVat, setIncludeVat] = useState(true);
-  // Payment basis printed on the invoice ("Начин на плащане:").
+  // Payment basis printed on the invoice ("Начин на плащане:"). Defaults
+  // to cash because the bulk of МЕРТ-М's orders are retail walk-ins; the
+  // cashier flips to "Банков превод" / "Наложен платеж" only for the
+  // minority B2B and Econt-COD cases.
   const [paymentMethod, setPaymentMethod] =
-    useState<InvoicePaymentMethod>("bank");
+    useState<InvoicePaymentMethod>("cash");
   // Open/close state for the post-invoice payment-method dropdown.
   const [paymentMenuOpen, setPaymentMenuOpen] = useState(false);
   const paymentMenuRef = useRef<HTMLDivElement | null>(null);
@@ -594,7 +597,7 @@ function OrderDetailModal({
     setClientDisplayName("");
     setInvoiceNote("");
     setVatExemptionReason("");
-    setPaymentMethod("bank");
+    setPaymentMethod("cash");
     setPaymentMenuOpen(false);
     setPartnerOverride(null);
     setPartnerOverrideOpen(false);
