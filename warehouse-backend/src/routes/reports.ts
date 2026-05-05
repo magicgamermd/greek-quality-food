@@ -211,14 +211,18 @@ async function assembleDailyReportData(
   );
   const companyName = companyRows[0]?.company_name ?? "BAKALIA GREEK DELI FOOD";
 
-  // 1) Orders for the day with partner name + payment method via invoice
+  // 1) Orders for the day with partner name + payment method via invoice.
+  // partner_name uses the invoice_partner override when set (Batch D —
+  // 'Издай на фирма' on an individual order), so the report reflects
+  // the invoice recipient, not the original cash-customer row.
   const { rows: orderRows } = await query(
-    `SELECT o.id, o.order_number, p.name AS partner_name,
+    `SELECT o.id, o.order_number, COALESCE(ip.name, p.name) AS partner_name,
             o.total_amount, o.status,
             i.payment_method, i.invoice_number, i.status AS invoice_status,
             o.econt_shipment_number, o.econt_cod_amount
        FROM orders o
        LEFT JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
        LEFT JOIN invoices i ON i.id = o.invoice_id
       WHERE DATE(o.order_date) = $1
       ORDER BY o.order_number ASC`,
@@ -304,13 +308,17 @@ async function assembleDailyReportData(
   // how much money has actually landed against the order's invoice.
   // Two payment-link paths because both the legacy `payments.invoice_id`
   // and the newer `payments.order_id` are in use.
+  // Partner display: invoice_partner override (Batch D) wins over the
+  // order's own partner. If an individual order ('Физическо лице')
+  // got reissued to a company via 'Издай на фирма', the override
+  // company name is what the cashier expects to see in the report.
   const { rows: orderPaymentRows } = await query(
     `SELECT o.id,
             o.order_number,
             o.order_date,
             o.total_amount::numeric AS total_amount,
             o.status,
-            p.name AS partner_name,
+            COALESCE(ip.name, p.name) AS partner_name,
             i.payment_method,
             i.invoice_number,
             i.status AS invoice_status,
@@ -319,12 +327,13 @@ async function assembleDailyReportData(
             MAX(pmt.paid_at) AS last_paid_at
        FROM orders o
        LEFT JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
        LEFT JOIN invoices i ON i.id = o.invoice_id
        LEFT JOIN payments pmt ON (pmt.invoice_id = i.id OR pmt.order_id = o.id)
                               AND DATE(pmt.paid_at) <= $1
       WHERE DATE(o.order_date) = $1
       GROUP BY o.id, o.order_number, o.order_date, o.total_amount, o.status,
-               p.name, i.payment_method, i.invoice_number, i.status
+               ip.name, p.name, i.payment_method, i.invoice_number, i.status
       ORDER BY o.order_number ASC`,
     [date],
   );
@@ -343,12 +352,13 @@ async function assembleDailyReportData(
   const { rows: expectedCodRows } = await query(
     `SELECT o.id,
             o.order_number,
-            p.name AS partner_name,
+            COALESCE(ip.name, p.name) AS partner_name,
             o.econt_shipment_number AS shipment_number,
             o.econt_cod_amount::numeric AS cod_amount,
             COALESCE(o.econt_shipment_date, o.created_at::date) AS shipped_at
        FROM orders o
        LEFT JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
        LEFT JOIN invoices i ON i.id = o.invoice_id
       WHERE o.econt_shipment_number IS NOT NULL
         AND o.econt_cod_amount IS NOT NULL
