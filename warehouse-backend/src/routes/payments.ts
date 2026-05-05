@@ -8,7 +8,11 @@ const createPaymentSchema = z
     invoice_id: z.number().int().optional(),
     order_id: z.number().int().optional(),
     amount: z.number().positive(),
-    payment_method: z.enum(["cash", "bank", "card"]).default("bank"),
+    // 'cod' is required for orders shipped via Econt with наложен платеж —
+    // the cashier records the payment with method=cod once the courier
+    // confirms collection (orders.ts already aggregates SUM(amount) WHERE
+    // payment_method='cod' into paid_cod_amount, so it must be writable).
+    payment_method: z.enum(["cash", "bank", "card", "cod"]).default("bank"),
     bank_reference: z.string().optional(),
     paid_at: z.string().optional(), // ISO date
     matched_by_agent: z.boolean().default(false),
