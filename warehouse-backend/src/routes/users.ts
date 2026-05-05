@@ -12,15 +12,22 @@ import {
 } from "../lib/permissions.js";
 import type { UserRole, Permission } from "../lib/permissions.js";
 
+// Role enum mirrors the DB CHECK constraint added in migration 053
+// (ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN
+// ('admin','warehouse','accountant','sales'))). Without 'sales' here
+// the API silently rejected the form value the Settings page already
+// offered as an option, so "Добави" appeared to do nothing.
+const VALID_ROLES = ["admin", "warehouse", "accountant", "sales"] as const;
+
 const createUserSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(6),
-  role: z.enum(["admin", "warehouse", "accountant"]).default("accountant"),
+  role: z.enum(VALID_ROLES).default("accountant"),
 });
 
 const updateRoleSchema = z.object({
-  role: z.enum(["admin", "warehouse", "accountant"]),
+  role: z.enum(VALID_ROLES),
 });
 
 const jwtVerify = async (request: FastifyRequest) => {

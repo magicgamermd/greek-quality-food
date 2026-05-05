@@ -159,6 +159,18 @@ export function Settings() {
     },
   });
 
+  // Surface API failures (validation, duplicate email, missing
+  // permission) so "Добави" doesn't appear silently broken when the
+  // backend rejects the payload.
+  const showApiError = (err: any, fallback: string) => {
+    const detail =
+      err?.response?.data?.error ||
+      err?.response?.data?.message ||
+      err?.message ||
+      fallback;
+    showError(typeof detail === "string" ? detail : fallback);
+  };
+
   const addUserMutation = useMutation({
     mutationFn: () => api.post("/users", userForm),
     onSuccess: () => {
@@ -167,6 +179,8 @@ export function Settings() {
       setShowAddUser(false);
       showSuccess("Потребител добавен");
     },
+    onError: (err: any) =>
+      showApiError(err, "Грешка при добавяне на потребител"),
   });
 
   const deleteUserMutation = useMutation({
@@ -175,6 +189,8 @@ export function Settings() {
       qc.invalidateQueries({ queryKey: ["users"] });
       showSuccess("Потребител изтрит");
     },
+    onError: (err: any) =>
+      showApiError(err, "Грешка при изтриване на потребител"),
   });
 
   const changeRoleMutation = useMutation({
@@ -184,6 +200,7 @@ export function Settings() {
       qc.invalidateQueries({ queryKey: ["users"] });
       showSuccess("Роля променена");
     },
+    onError: (err: any) => showApiError(err, "Грешка при смяна на ролята"),
   });
 
   const saveCompanyMutation = useMutation({
@@ -209,6 +226,13 @@ export function Settings() {
   const showSuccess = (msg: string) => {
     setSuccessMessage(msg);
     setTimeout(() => setSuccessMessage(""), 3000);
+  };
+
+  // Mirror showSuccess but route to the toast lib for inline mutation
+  // failures — we want the user to see "duplicate email", "permission
+  // denied", etc. instead of a silent no-op when "Добави" is clicked.
+  const showError = (msg: string) => {
+    toast.error(msg);
   };
 
   const handleCompanyFormChange = (field: string, value: string) => {
