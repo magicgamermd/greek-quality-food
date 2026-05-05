@@ -1207,11 +1207,6 @@ function OrderDetailModal({
     (sum, i) => sum + (i.total_price ?? i.quantity * i.unit_price),
     0,
   );
-  const objectLabel = detail.object_name
-    ? detail.object_code
-      ? `${detail.object_code} · ${detail.object_name}`
-      : detail.object_name
-    : detail.object_code || "—";
   const invoiceLabel = detail.invoice_number
     ? detail.invoice_number
     : detail.invoice_id
@@ -1315,18 +1310,11 @@ function OrderDetailModal({
                 <div className="text-xs text-gray-500 mb-1">Източник</div>
                 <Badge variant="secondary">{detail.source}</Badge>
               </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">
-                  Номер на заявка
-                </div>
-                <div className="text-sm">{detail.request_number || "—"}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">
-                  Обект / магазин
-                </div>
-                <div className="text-sm">{objectLabel}</div>
-              </div>
+              {/* "Номер на заявка" + "Обект / магазин" intentionally
+                  removed from the drawer header — МЕРТ-М doesn't issue
+                  per-store requests, so both fields rendered "—" on
+                  every order and just added visual noise. The data is
+                  still kept on the order object for export/debug. */}
               <div>
                 <div className="text-xs text-gray-500 mb-1">Фактура</div>
                 <div className="text-sm">{invoiceLabel}</div>
