@@ -5616,17 +5616,26 @@ export function Orders() {
                             String(order.total_amount ?? 0),
                           );
                           const paid = parseFloat(String(o.paid_amount ?? 0));
-                          const isPaid = paid >= total - 0.01 && total > 0;
-                          const isPartial = paid > 0 && paid < total - 0.01;
+                          const paidCod = parseFloat(
+                            String(o.paid_cod_amount ?? 0),
+                          );
+                          const codAmount = parseFloat(
+                            String(o.econt_cod_amount ?? 0),
+                          );
                           const isCod = o.has_cod_shipment === true;
 
-                          if (isPaid) {
-                            return <Badge variant="success">Платена</Badge>;
-                          }
-                          if (isPartial) {
-                            return <Badge variant="warning">Частично</Badge>;
-                          }
+                          // For COD shipments the order is 'Платена' only
+                          // when the courier-collected COD has actually been
+                          // recorded (payment_method='cod'). Other-method
+                          // prepayments don't tip the badge — until Еконт
+                          // delivers and the cashier marks the COD payment,
+                          // the order stays in 'Налож. платеж'.
                           if (isCod) {
+                            const codCovered =
+                              paidCod >= (codAmount || total) - 0.01;
+                            if (codCovered) {
+                              return <Badge variant="success">Платена</Badge>;
+                            }
                             return (
                               <Badge
                                 variant="warning"
@@ -5635,6 +5644,16 @@ export function Orders() {
                                 Налож. платеж
                               </Badge>
                             );
+                          }
+
+                          const isPaid = paid >= total - 0.01 && total > 0;
+                          const isPartial = paid > 0 && paid < total - 0.01;
+
+                          if (isPaid) {
+                            return <Badge variant="success">Платена</Badge>;
+                          }
+                          if (isPartial) {
+                            return <Badge variant="warning">Частично</Badge>;
                           }
                           return <Badge variant="destructive">Неплатена</Badge>;
                         })()}

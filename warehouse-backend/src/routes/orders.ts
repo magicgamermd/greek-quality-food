@@ -624,6 +624,7 @@ export default async function orderRoutes(app: FastifyInstance) {
              ipo.name AS invoice_partner_name,
              ipo.eik  AS invoice_partner_eik,
              COALESCE(pay.paid_amount, 0)::numeric AS paid_amount,
+             COALESCE(pay.paid_cod_amount, 0)::numeric AS paid_cod_amount,
              (o.econt_shipment_number IS NOT NULL
               AND o.econt_cod_amount IS NOT NULL
               AND o.econt_cod_amount > 0) AS has_cod_shipment
@@ -641,7 +642,13 @@ export default async function orderRoutes(app: FastifyInstance) {
         WHERE oi.order_id = o.id
       ) ic ON TRUE
       LEFT JOIN LATERAL (
-        SELECT COALESCE(SUM(pmt.amount), 0)::numeric AS paid_amount
+        -- paid_amount: every payment regardless of method.
+        -- paid_cod_amount: only COD-method (наложен платеж). Used by
+        -- the FE badge: an Econt-COD shipment isn't 'Платена' until
+        -- the courier-collected COD is recorded — stray cash/bank
+        -- prepayments don't tip the badge to green on their own.
+        SELECT COALESCE(SUM(pmt.amount), 0)::numeric AS paid_amount,
+               COALESCE(SUM(CASE WHEN pmt.payment_method = 'cod' THEN pmt.amount ELSE 0 END), 0)::numeric AS paid_cod_amount
         FROM payments pmt
         WHERE pmt.order_id = o.id
            OR (o.invoice_id IS NOT NULL AND pmt.invoice_id = o.invoice_id)
