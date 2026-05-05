@@ -25,6 +25,10 @@ type Context =
       invoice_number?: string;
       partner_name?: string;
       total: number;
+      // Optional source order — when this invoice was created from an
+      // order, supplying the order lets us auto-default the payment
+      // method to 'cod' if the order is an Econt-COD shipment.
+      order?: Order;
     }
   | { kind: "order-fixed"; order: Order };
 
@@ -46,6 +50,17 @@ const getInvoiceRemaining = (inv: Invoice): number => {
 // inside total_net / total_vat / total_gross.
 const getOrderTotalToCollect = (order: Order): number =>
   Number(order.total_amount);
+
+// Default payment method for an order: when the order is configured
+// for Econt delivery with a COD amount (waybill already created OR
+// just COD intent set), the money will arrive via Econt's COD
+// service, so the user is recording a 'наложен платеж' collection.
+// Otherwise default to cash.
+const getDefaultMethodForOrder = (order: Order): "cod" | "cash" | "bank" => {
+  const codAmount = Number(order.econt_cod_amount ?? 0);
+  if (order.econt_shipment_number || codAmount > 0) return "cod";
+  return "cash";
+};
 
 export function RecordPaymentModal({ open, onClose, context }: Props) {
   const qc = useQueryClient();
@@ -99,10 +114,27 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
       const gross = Number(fixedInvoice.total_gross);
       const paid = Number(fixedInvoice.paid_amount ?? 0);
       const remaining = Math.max(0, gross - paid);
+      // Default order: Econt-COD on the source order wins (the courier
+      // is collecting), then the invoice's stored payment_method, then
+      // bank as a last resort.
+      const sourceOrder = context.order;
+      const orderCodAmount = Number(sourceOrder?.econt_cod_amount ?? 0);
+      const econtCod =
+        sourceOrder && (sourceOrder.econt_shipment_number || orderCodAmount > 0)
+          ? "cod"
+          : null;
+      const invoiceMethod = fixedInvoice.payment_method;
+      const defaultMethod =
+        econtCod ??
+        (invoiceMethod === "cod" ||
+        invoiceMethod === "cash" ||
+        invoiceMethod === "bank"
+          ? invoiceMethod
+          : "bank");
       setForm({
         invoice_id: String(context.invoice_id),
         amount: remaining.toFixed(2),
-        payment_method: "bank",
+        payment_method: defaultMethod,
         bank_reference: "",
         paid_at: today,
       });
@@ -114,7 +146,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
       setForm({
         invoice_id: "",
         amount: remaining.toFixed(2),
-        payment_method: "bank",
+        payment_method: getDefaultMethodForOrder(context.order),
         bank_reference: "",
         paid_at: today,
       });
@@ -346,10 +378,31 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
               value={form.payment_method}
               onChange={(e) => set("payment_method", e.target.value)}
             >
-              <option value="bank">Банков превод</option>
               <option value="cash">В брой</option>
+              <option value="bank">Банков превод</option>
+              <option value="cod">Наложен платеж</option>
               <option value="card">Карта</option>
             </Select>
+            {form.payment_method === "cod" &&
+              (() => {
+                const ord =
+                  context.kind === "order-fixed"
+                    ? context.order
+                    : context.kind === "invoice-fixed"
+                      ? context.order
+                      : undefined;
+                if (!ord) return null;
+                const hasWaybill = !!ord.econt_shipment_number;
+                const hasCodIntent = Number(ord.econt_cod_amount ?? 0) > 0;
+                if (!hasWaybill && !hasCodIntent) return null;
+                return (
+                  <p className="text-[11px] text-emerald-700">
+                    {hasWaybill
+                      ? "Поръчката има Еконт товарителница — парите идват чрез наложен платеж."
+                      : "Поръчката е с Еконт наложен платеж — отбелязва се при получаване от куриера."}
+                  </p>
+                );
+              })()}
           </div>
           {form.payment_method === "bank" && (
             <div className="space-y-1.5">
