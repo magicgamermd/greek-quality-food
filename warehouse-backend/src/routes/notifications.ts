@@ -6,14 +6,16 @@ async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
 }
 
 export default async function notificationRoutes(app: FastifyInstance) {
-  // GET /notifications — aggregated alerts with read status
+  // GET /notifications — unified feed: computed alerts + persistent rows,
+  // each item carries per-user is_read / read_at via notification_reads.
   app.get("/", async (request: FastifyRequest, reply: FastifyReply) => {
     await requireAuth(request, reply);
     const user = (request as any).user;
+    const userId = user.sub || user.id;
 
     const notifications: any[] = [];
 
-    // Low stock alerts
+    // ─── Computed: Low stock alerts ───
     const { rows: lowStock } = await query(`
       SELECT p.id, p.name_bg, p.sku, COALESCE(SUM(i.quantity),0)::numeric AS qty, p.low_stock_threshold
       FROM products p
@@ -28,17 +30,16 @@ export default async function notificationRoutes(app: FastifyInstance) {
       notifications.push({
         id: `low-${r.id}`,
         type: "low_stock",
-        title: "Ниска наличност",
         message: `${r.name_bg} — само ${parseFloat(r.qty)} бр`,
         severity: "warning",
+        payload: { product_id: r.id, sku: r.sku },
         created_at: new Date().toISOString(),
       });
     }
 
-    // Expiring soon (30 days)
+    // ─── Computed: Expiring batches (legacy — MERT-M has no batches but keep) ───
     const { rows: expiring } = await query(`
-      SELECT b.id, b.batch_number, b.expiry_date, p.name_bg,
-             (b.expiry_date - CURRENT_DATE) AS days_left
+      SELECT b.id, b.expiry_date, p.name_bg, (b.expiry_date - CURRENT_DATE) AS days_left
       FROM batches b
       JOIN products p ON p.id = b.product_id
       JOIN inventory i ON i.batch_id = b.id
@@ -50,30 +51,54 @@ export default async function notificationRoutes(app: FastifyInstance) {
       notifications.push({
         id: `exp-${r.id}`,
         type: "expiring",
-        title: "Изтичащ срок",
         message: `${r.name_bg} — изтича след ${r.days_left} дни`,
         severity: r.days_left <= 7 ? "critical" : "warning",
+        payload: { batch_id: r.id },
         created_at: new Date().toISOString(),
       });
     }
 
-    // Get read/dismissed status for this user
+    // ─── Persistent: rows from the notifications table ───
+    // Last 50 — newest first.
+    const { rows: persistent } = await query(`
+      SELECT id, type, message, payload, created_at
+        FROM notifications
+       ORDER BY created_at DESC
+       LIMIT 50
+    `);
+    for (const r of persistent) {
+      notifications.push({
+        id: `db-${r.id}`,
+        type: r.type,
+        message: r.message,
+        severity: "info",
+        payload: r.payload,
+        created_at:
+          r.created_at instanceof Date
+            ? r.created_at.toISOString()
+            : r.created_at,
+      });
+    }
+
+    // ─── Per-user read/dismissed status ───
     const { rows: reads } = await query(
-      `SELECT notification_id, dismissed FROM notification_reads WHERE user_id = $1`,
-      [user.sub || user.id],
+      `SELECT notification_id, dismissed, read_at
+         FROM notification_reads WHERE user_id = $1`,
+      [userId],
     );
     const readMap = new Map(reads.map((r: any) => [r.notification_id, r]));
 
-    // Filter out dismissed and mark read
     const result = notifications
-      .filter((n) => {
+      .filter((n) => !readMap.get(n.id)?.dismissed)
+      .map((n) => {
         const entry = readMap.get(n.id);
-        return !entry?.dismissed;
+        return {
+          ...n,
+          is_read: !!entry?.read_at,
+          read_at: entry?.read_at ?? null,
+        };
       })
-      .map((n) => ({
-        ...n,
-        read: !!readMap.get(n.id),
-      }));
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
     return { data: result, count: result.length };
   });
