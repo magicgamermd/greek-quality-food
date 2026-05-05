@@ -5,10 +5,22 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-04-30 (Batch F1 SHIPPED to main locally — Tailscale push pending Tuesday)
-**Active branch:** `main` (Batch F1 merged via `2243348 merge: Batch F1 — paid-not-taken + awaiting line statuses`)
+**Last updated:** 2026-05-05 (Batch I — Notifications UX upgrade SHIPPED on branch `feature/MERTM-batch-i-notifications-ux`, awaiting merge to main)
+**Active branch:** `feature/MERTM-batch-i-notifications-ux` (Batch F1 already on main via `2243348`)
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active task:** Tuesday — `./scripts/push-to-client.sh` to client Mac. Run Task 17 manual E2E on live data once pushed.
+**Active task:** Merge Batch I → main, then `./scripts/push-to-client.sh`. Manual 8-step E2E (Task 9 of plan) deferred to post-merge user verification on real data.
+
+**Batch I — COMPLETE (all 10 tasks of the plan):**
+
+- Migration 067 — drops vestigial `notifications.read` global column (per-user read state lives in `notification_reads`)
+- Backend: GET /notifications rewritten — unified feed merging computed alerts (low_stock, expiring) with persistent `notifications` rows; ID prefixes (`low-`, `exp-`, `db-`) avoid collision; per-user `is_read`/`read_at`/`dismissed` from `notification_reads`; new `payload` field carried through. New endpoint GET /notifications/unread-count for fast bell-badge polling.
+- Tests: `notifications-per-user-read.test.ts` (3 tests — A's read state doesn't leak to B; PUT /:id/read scoped to caller; DELETE /:id sets dismissed for caller only). **329/335 BE tests pass — same 6 pre-existing failures as Batch F1 baseline.**
+- Frontend: new `lib/notificationTypes.ts` (TOAST_WORTHY allowlist + group helpers — Поръчки / Склад / Общи); new `hooks/useNotificationsPolling.ts` (30s `refetchInterval` + toast on new TOAST_WORTHY items, primed on first mount to avoid initial spam, "Виж" action button when navigation context provided); `lib/toast.ts` extended to forward sonner's native `action` option.
+- Layout.tsx bell dropdown rewritten: groups by category, `•` (unread) / `✓` (read) indicators, click to mark-read + navigate via payload (`order_id` → `/orders?highlight=`, `product_id` → `/products?highlight=`), "Маркирай всички" button; per-row dismiss × preserved.
+- Systematic action toasts on Orders / Invoices / Partners / Products mutations (Bulgarian-language success + error fallback chain `err?.response?.data?.error ?? .message ?? "…"`); Settings + 4 Invoices mutations skipped to preserve their existing in-page banner UX.
+- BE+FE type-check clean (only pre-existing `negative-inventory.test.ts(321)` overload error from Batch F1).
+- **Open item:** Task 9 manual E2E (8-step script: bell badge / groups / mark-all / click navigation / per-user isolation across two browsers / 30s polling toast / action toasts on Orders+Invoices+Payments / error toast on rejected fulfill) deferred to post-merge user verification.
+- **Deferred to Batch I.2** (per plan "Future work"): banner alerts, per-type user prefs, Web Notifications API, full /notifications page, group collapse/expand, SSE realtime.
 
 **Batch F1 — COMPLETE (all 18 tasks of the plan):**
 
