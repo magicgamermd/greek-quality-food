@@ -622,13 +622,18 @@ export default async function econtRoutes(app: FastifyInstance) {
         /* ignore */
       }
 
-      // Recalculate COD from current order items (with VAT)
+      // Recalculate COD from current order items. `order_items.total_price`
+      // is already GROSS (Microinvest convention — selling_price stored
+      // with VAT included; orders.total_amount mirrors SUM(total_price)).
+      // The previous version named this `totalNet` and multiplied by 1.2,
+      // which inflated COD by 20% on every label regeneration — caught
+      // when the daily report's "Очакван наложен платеж" total didn't
+      // match the order's gross amount (e.g. 536.86 → 644.23).
       const { rows: items } = await query(
         "SELECT SUM(total_price) as total FROM order_items WHERE order_id = $1",
         [body.order_id],
       );
-      const totalNet = parseFloat(items[0]?.total || "0");
-      const totalWithVat = totalNet * 1.2;
+      const totalGross = parseFloat(items[0]?.total || "0");
 
       // Recalculate total weight from items (quantity × weight_kg)
       const {
@@ -675,10 +680,10 @@ export default async function econtRoutes(app: FastifyInstance) {
       // Only add COD if the order originally had COD requested. If the user
       // chose "no COD", we preserve that even when items change.
       const hadCod = parseFloat(order.econt_cod_amount ?? 0) > 0;
-      const newCodAmount = hadCod ? totalWithVat : 0;
-      if (hadCod && totalWithVat > 0) {
+      const newCodAmount = hadCod ? totalGross : 0;
+      if (hadCod && totalGross > 0) {
         label.services = {
-          cdAmount: Math.round(totalWithVat * 1.95583 * 100) / 100,
+          cdAmount: Math.round(totalGross * 1.95583 * 100) / 100,
           cdType: "get",
           cdCurrency: "BGN",
         };
