@@ -3009,6 +3009,55 @@ function EditOrderItemsModal({
     });
   };
 
+  // Per-row status setter, mirrors CreateOrderModal so the cashier can
+  // flip a line to 'paid_not_taken' / 'awaiting' / 'normal' on an
+  // already-created order. The split-on-overage rule applies only to
+  // paid_not_taken with stock > 0; awaiting always flips the whole row
+  // since the entire qty is waiting on stock arrival.
+  const setLineStatus = (
+    rowKey: string,
+    target: "normal" | "paid_not_taken" | "awaiting",
+  ) => {
+    setItems((prev) => {
+      const idx = prev.findIndex((r) => r.row_key === rowKey);
+      if (idx < 0) return prev;
+      const orig = prev[idx];
+      if (
+        target === "normal" ||
+        target === "awaiting" ||
+        orig.line_status !== "normal"
+      ) {
+        return prev.map((r) =>
+          r.row_key === rowKey ? { ...r, line_status: target } : r,
+        );
+      }
+      const available = getEffectiveStock(orig);
+      const requested = Number(orig.quantity);
+      const isOverage = available > 0 && requested > available;
+      if (!isOverage) {
+        return prev.map((r) =>
+          r.row_key === rowKey ? { ...r, line_status: target } : r,
+        );
+      }
+      const overage = requested - available;
+      const taken: OrderItemRow = { ...orig, quantity: String(available) };
+      const pending: OrderItemRow = makeOrderItemRow({
+        product_id: orig.product_id,
+        product_name: orig.product_name,
+        quantity: String(overage),
+        unit_price: orig.unit_price,
+        discount_percent: orig.discount_percent,
+        unit: orig.unit,
+        stock: orig.stock,
+        cost_price: orig.cost_price,
+        weight_kg: orig.weight_kg,
+        original_weight_kg: orig.original_weight_kg,
+        line_status: target,
+      });
+      return [...prev.slice(0, idx), taken, pending, ...prev.slice(idx + 1)];
+    });
+  };
+
   // Reduce-to-available — the simple "no, just sell what we have" path.
   const reduceToAvailable = (rowKey: string) => {
     setItems((prev) =>
@@ -3322,13 +3371,84 @@ function EditOrderItemsModal({
                           {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
                         </TableCell>
                         <TableCell>
-                          <button
-                            type="button"
-                            onClick={() => removeItem(i)}
-                            className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          <div className="flex items-center gap-1">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  disabled={!item.product_id}
+                                  className={`p-1 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                                    item.line_status === "paid_not_taken"
+                                      ? "text-amber-600 hover:bg-amber-100"
+                                      : item.line_status === "awaiting"
+                                        ? "text-gray-600 hover:bg-gray-100"
+                                        : "text-gray-300 hover:text-gray-600 hover:bg-gray-50"
+                                  }`}
+                                  title="Маркирай реда като платена невзета или на изчакване"
+                                >
+                                  {item.line_status === "paid_not_taken" ? (
+                                    <span className="text-base leading-none">
+                                      💰
+                                    </span>
+                                  ) : item.line_status === "awaiting" ? (
+                                    <span className="text-base leading-none">
+                                      ⏳
+                                    </span>
+                                  ) : (
+                                    <Tag className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    setLineStatus(item.row_key, "normal")
+                                  }
+                                  className={
+                                    item.line_status === "normal"
+                                      ? "font-medium"
+                                      : ""
+                                  }
+                                >
+                                  📦 Нормална
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    setLineStatus(
+                                      item.row_key,
+                                      "paid_not_taken",
+                                    )
+                                  }
+                                  className={
+                                    item.line_status === "paid_not_taken"
+                                      ? "font-medium text-amber-700"
+                                      : ""
+                                  }
+                                >
+                                  💰 Платена невзета
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    setLineStatus(item.row_key, "awaiting")
+                                  }
+                                  className={
+                                    item.line_status === "awaiting"
+                                      ? "font-medium text-gray-700"
+                                      : ""
+                                  }
+                                >
+                                  ⏳ На изчакване
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <button
+                              type="button"
+                              onClick={() => removeItem(i)}
+                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
