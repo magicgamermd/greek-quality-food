@@ -5,12 +5,24 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-05-05 (Batch I — Notifications UX upgrade SHIPPED on branch `feature/MERTM-batch-i-notifications-ux`, awaiting merge to main)
-**Active branch:** `feature/MERTM-batch-i-notifications-ux` (Batch F1 already on main via `2243348`)
+**Last updated:** 2026-05-05 (Econt calendar validation + price-bug diagnostic merged on main; Batch I also on main)
+**Active branch:** `main`
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active task:** Merge Batch I → main, then `./scripts/push-to-client.sh`. Manual 8-step E2E (Task 9 of plan) deferred to post-merge user verification on real data.
+**Active task:** Push to client (`./scripts/push-to-client.sh`) + collect Econt `[econt/calculate]` debug logs to confirm whether the same-price-for-office-vs-address report is an Econt API quirk or a state-leak in our payload.
 
-**Batch I — COMPLETE (all 10 tasks of the plan):**
+**Econt calendar validation + price-bug diagnostic — COMPLETE (merged 2026-05-05 via `65c2f37`):**
+
+- Backend: new endpoint `POST /econt/validate-shipment-date` — wraps Econt's `LabelService.createLabel.json` in `mode:"validate"` and reflects accept / reject as `{valid, reason?}`. 24h in-memory cache by `(receiverCity|officeCode|street/num, date)` keyed.
+- Backend: `/calculate` gains a debug log gated by `ECONT_DEBUG=1` env var — prints `mode=office|address city=… weight=… → priceBGN=…` so we can compare what Econt actually returns for both delivery types. Set `ECONT_DEBUG=1` in `warehouse-backend/.env`, restart, then test in UI and `tail -f /tmp/mertm-backend.log | grep "\[econt/calculate\]"` to confirm whether the user-reported "same price" issue is an Econt quirk or a payload bug.
+- Frontend: new `lib/bgCalendar.ts` — 2026/2027 БГ official holidays + `isWorkingDay` / `isPast` / `nonWorkingReason` helpers.
+- Frontend: new `components/ui/WorkingDayPicker.tsx` — popover-style calendar that greys out past dates, weekends, БГ holidays, and (when `econtRoute` provided) Econt-rejected dates with the reason in a tooltip. Pre-validates the visible month's working days in parallel through the new endpoint; cached server-side so re-opens are free.
+- Frontend: `EcontShippingPicker.tsx` swaps native `<input type="date">` for `WorkingDayPicker` in address-mode delivery. Tomorrow stays the default; the picker won't allow clicking a Saturday or a known holiday.
+- Tests: `econt-validate-shipment-date.test.ts` (5 tests — accept, reject with Econt reason, missing-fields 400, address-mode payload, 24h cache hit). All 5 pass.
+- 333/340 BE tests pass — 7 failures = 6 pre-existing (Batch F1 baseline) + 1 new from parallel `feature/MERTM-orders-quotation` work that landed on main in the same window. None of the 7 are from this branch.
+- BE+FE type-check clean (pre-existing `negative-inventory.test.ts(321)` overload only).
+- **Open item:** Live verification of the price-bug diagnostic — user must `ECONT_DEBUG=1` and capture two `[econt/calculate]` log lines (office mode + address mode) for the same city/weight to confirm whether Econt API returns identical prices.
+
+**Batch I — Notifications UX upgrade — COMPLETE (merged 2026-05-05 via `5c0c5bc`):**
 
 - Migration 067 — drops vestigial `notifications.read` global column (per-user read state lives in `notification_reads`)
 - Backend: GET /notifications rewritten — unified feed merging computed alerts (low_stock, expiring) with persistent `notifications` rows; ID prefixes (`low-`, `exp-`, `db-`) avoid collision; per-user `is_read`/`read_at`/`dismissed` from `notification_reads`; new `payload` field carried through. New endpoint GET /notifications/unread-count for fast bell-badge polling.
