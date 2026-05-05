@@ -13,20 +13,31 @@ const ECONT_BASE = "http://ee.econt.com/services";
  * (Econt's `sendDate` field format). Returns tomorrow's date when input
  * is missing / unparseable so address shipments never error out on a
  * forgotten field.
+ *
+ * Format using LOCAL components — never `toISOString().slice(0,10)`. The
+ * `pg` driver returns DATE columns as JS Date objects pinned to local
+ * midnight; round-tripping through UTC drops the date by one in any
+ * positive offset (Europe/Sofia +03 → 2026-05-07 local midnight =
+ * 2026-05-06T21:00Z = "2026-05-06" after slice). Same trap for raw
+ * "YYYY-MM-DD" strings, which `new Date()` parses as UTC midnight; we
+ * short-circuit those by matching the prefix directly.
  */
 function normalizeIsoDate(input: unknown): string {
-  let d: Date | null = null;
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
   if (input instanceof Date && !isNaN(input.getTime())) {
-    d = input;
-  } else if (typeof input === "string" && input.trim()) {
+    return fmt(input);
+  }
+  if (typeof input === "string" && input.trim()) {
+    const ymd = input.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
     const parsed = new Date(input);
-    if (!isNaN(parsed.getTime())) d = parsed;
+    if (!isNaN(parsed.getTime())) return fmt(parsed);
   }
-  if (!d) {
-    d = new Date();
-    d.setDate(d.getDate() + 1);
-  }
-  return d.toISOString().slice(0, 10);
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return fmt(tomorrow);
 }
 
 // In-memory cache for nomenclature (refreshed on restart)

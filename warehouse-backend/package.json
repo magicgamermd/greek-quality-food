@@ -4,7 +4,7 @@
   "description": "MERT-M Warehouse Management System — Backend API",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "nodemon --watch src --ext ts,js,json --exec tsx src/index.ts",
     "build": "tsc && rm -rf dist/fonts && cp -r src/fonts dist/fonts",
     "start": "node dist/index.js",
     "migrate": "tsx src/migrate.ts",
@@ -48,6 +48,7 @@
     "@typescript-eslint/eslint-plugin": "^8.24.0",
     "@typescript-eslint/parser": "^8.24.0",
     "eslint": "^9.20.0",
+    "nodemon": "^3.1.14",
     "prettier": "^3.5.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
