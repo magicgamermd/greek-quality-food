@@ -1144,17 +1144,21 @@ function drawStockDispatchPartyBoxes(
   // Phone line intentionally dropped from both party blocks per МЕРТ-М
   // preference. МОЛ is rendered ONLY when populated (no empty "МОЛ" label
   // when the company / partner doesn't have one).
+  // "Град" was dropped per cashier feedback — the city is already part of
+  // the address line and the redundant row was eating vertical space.
+  // Replaced by "ДДС №" so the recipient block carries the VAT id needed
+  // on a Стокова разписка that doubles as a tax-relevant document.
   const rowsForPartner = (party: PartnerInfo) => [
     { label: "", value: party.name || "—", bold: true },
     { label: "ЕИК", value: party.eik || "" },
-    { label: "Град", value: party.city || "" },
+    ...(party.vat_number ? [{ label: "ДДС №", value: party.vat_number }] : []),
     { label: "Адрес", value: normalizeAddress(party.address || "") },
     ...(party.mol ? [{ label: "МОЛ", value: party.mol }] : []),
   ];
   const rowsForCompany = (party: CompanyInfo) => [
     { label: "", value: party.company_name || "—", bold: true },
     { label: "ЕИК", value: party.eik || "" },
-    { label: "Град", value: party.city || "" },
+    ...(party.vat_number ? [{ label: "ДДС №", value: party.vat_number }] : []),
     { label: "Адрес", value: normalizeAddress(party.address || "") },
     ...(party.mol ? [{ label: "МОЛ", value: party.mol }] : []),
   ];
