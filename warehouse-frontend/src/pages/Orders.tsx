@@ -3734,14 +3734,28 @@ function CreateOrderModal({
       const idx = prev.findIndex((r) => r.row_key === rowKey);
       if (idx < 0) return prev;
       const orig = prev[idx];
-      if (target === "normal" || orig.line_status !== "normal") {
+      // Always flip the whole row when:
+      //   - going to 'normal' (clear status),
+      //   - going to 'awaiting' (the entire qty is waiting on stock —
+      //     splitting "available + overage" makes no sense for awaiting,
+      //     was creating a confusing zombie 0-qty 'normal' row),
+      //   - the row already has a non-normal status (don't re-split).
+      if (
+        target === "normal" ||
+        target === "awaiting" ||
+        orig.line_status !== "normal"
+      ) {
         return prev.map((r) =>
           r.row_key === rowKey ? { ...r, line_status: target } : r,
         );
       }
+      // From here, target='paid_not_taken' on a 'normal' row. Split only
+      // when there's actual stock to leave behind as 'normal' — at
+      // stock=0 a split would produce a useless 0-qty 'normal' row plus
+      // a paid_not_taken row, so just flip the whole line in that case.
       const available = getEffectiveStock(orig);
       const requested = Number(orig.quantity);
-      const isOverage = available >= 0 && requested > available;
+      const isOverage = available > 0 && requested > available;
       if (!isOverage) {
         return prev.map((r) =>
           r.row_key === rowKey ? { ...r, line_status: target } : r,
