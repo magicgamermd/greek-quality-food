@@ -4898,7 +4898,9 @@ export function Orders() {
       else if (statusFilter) parts.push(`status=${statusFilter}`);
       if (belowCostOnly) parts.push("below_cost_only=true");
       if (hasPaidNotTaken) parts.push("has_paid_not_taken=true");
-      if (hasAwaiting) parts.push("has_awaiting=true");
+      // Awaiting child orders (migration 072) live as status='awaiting_stock';
+      // they're hidden from the main list and surface only via this filter.
+      if (hasAwaiting) parts.push("awaiting_only=true");
       if (hasCod) parts.push("has_cod=true");
       if (debouncedArticle)
         parts.push(`article=${encodeURIComponent(debouncedArticle)}`);
@@ -5084,6 +5086,27 @@ export function Orders() {
         err?.response?.data?.error ??
           err?.response?.data?.message ??
           "Грешка при обновяване на статуса",
+      );
+    },
+  });
+
+  // Migration 072 — flip an awaiting child order back to active when the
+  // promised stock arrives. Backend bumps order_date to today so the row
+  // jumps into the day's "Поръчки" view ready for invoicing.
+  const markArrivedMutation = useMutation({
+    // Empty body — pass `{}` so axios still sends the request with the
+    // application/json content-type that Fastify expects (otherwise it
+    // 400s with "Body cannot be empty when content-type is set...").
+    mutationFn: (id: number) => api.post(`/orders/${id}/mark-arrived`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      toast.success("Поръчката е прехвърлена в днешните поръчки");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при прехвърляне на поръчката",
       );
     },
   });
@@ -5912,6 +5935,26 @@ export function Orders() {
                                 </div>
                               )}
                             </div>
+                          )}
+
+                          {/* Mark-arrived — awaiting child order whose
+                              stock has come in. Flips status → confirmed
+                              and order_date → today so the row joins the
+                              day's orders for the second customer visit. */}
+                          {order.status === "awaiting_stock" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                markArrivedMutation.mutate(order.id);
+                              }}
+                              disabled={markArrivedMutation.isPending}
+                              title="Стоката пристигна — прехвърли в днешните поръчки"
+                              className="border-emerald-400 text-emerald-700 hover:bg-emerald-50"
+                            >
+                              📦 Пристигна
+                            </Button>
                           )}
 
                           {/* Invoice — fulfilled without invoice */}

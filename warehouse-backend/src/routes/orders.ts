@@ -456,6 +456,11 @@ export default async function orderRoutes(app: FastifyInstance) {
       // the cashier can paste a tracking number from the email and
       // jump straight to the matching order.
       shipment_number,
+      // Awaiting-stock children (migration 072) are hidden from the
+      // main orders list by default — they live in a dedicated "На
+      // изчакване" view. Pass awaiting_only=true to flip the filter
+      // and see ONLY them.
+      awaiting_only,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -465,9 +470,18 @@ export default async function orderRoutes(app: FastifyInstance) {
     const params: any[] = [];
     let paramIdx = 1;
 
-    if (status) {
+    // Awaiting-stock filter (migration 072 — child orders for line_status
+    // 'awaiting'). Default: hide them from the main list. Explicit
+    // awaiting_only=true: show ONLY them. An explicit `status` query
+    // param wins over the default hide so admin tooling can still inspect
+    // these rows directly.
+    if (awaiting_only === "true") {
+      where += ` AND o.status = 'awaiting_stock'`;
+    } else if (status) {
       where += ` AND o.status = $${paramIdx++}`;
       params.push(status);
+    } else {
+      where += ` AND o.status != 'awaiting_stock'`;
     }
     if (partner_id) {
       const parsedPartnerId = parseInt(partner_id);
@@ -902,9 +916,16 @@ export default async function orderRoutes(app: FastifyInstance) {
             );
           }
 
+          // Awaiting items (line_status='awaiting') don't deduct stock —
+          // they're a pre-order placeholder until the goods arrive — so
+          // exclude them from the oversell check. Otherwise we'd warn
+          // "stock will go negative" for items that never touch stock.
+          const stockableItems = body.items.filter(
+            (i) => i.line_status !== "awaiting",
+          );
           const validationResult = await validateRequestedStock(
             client,
-            body.items,
+            stockableItems,
             productMap,
           );
           oversell_items = validationResult.oversell_items;
@@ -974,7 +995,99 @@ export default async function orderRoutes(app: FastifyInstance) {
             belowCostDetails = belowCost;
           }
 
-          // Create order with sequential order_number
+          // Split items by awaiting status. The awaiting bucket gets
+          // promoted to a separate child order with status='awaiting_stock'
+          // and parent_order_id pointing back to the main order — see
+          // migration 072. Two cases drive this split:
+          //   - mixed (non-awaiting + awaiting) → main order carries the
+          //     normal/paid_not_taken lines as today; child carries the
+          //     awaiting ones (line_status flipped to 'normal' inside it
+          //     since the child itself signals awaiting via order.status).
+          //   - only awaiting → no parent; the order itself is the
+          //     awaiting bucket, status='awaiting_stock'.
+          const awaitingItems = body.items.filter(
+            (i) => i.line_status === "awaiting",
+          );
+          const nonAwaitingItems = body.items.filter(
+            (i) => i.line_status !== "awaiting",
+          );
+          const onlyAwaiting =
+            nonAwaitingItems.length === 0 && awaitingItems.length > 0;
+
+          // mainItems are what the primary order's order_items table will
+          // hold. In the only-awaiting case, the awaiting items become the
+          // primary order's items with line_status='normal' (the order's
+          // status='awaiting_stock' carries the "waiting" semantic at the
+          // order level instead of per-line).
+          const mainItems = onlyAwaiting
+            ? awaitingItems.map((i) => ({
+                ...i,
+                line_status: "normal" as const,
+              }))
+            : nonAwaitingItems;
+          const mainStatus = onlyAwaiting ? "awaiting_stock" : body.status;
+
+          // Insert helper — used twice: once for the main order and once
+          // for the awaiting child (mixed case). Snapshots product fields
+          // onto each line, returns total + inserted rows.
+          const insertItems = async (
+            targetOrderId: number,
+            sourceItems: typeof body.items,
+          ) => {
+            let total = 0;
+            const inserted: any[] = [];
+            for (const item of sourceItems) {
+              const prod = productMap.get(item.product_id) as any;
+              if (!prod) {
+                throw Object.assign(
+                  new Error(`Product ${item.product_id} not found`),
+                  { statusCode: 400 },
+                );
+              }
+              const unitPrice =
+                item.unit_price ??
+                priceMap.get(item.product_id) ??
+                (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+                0;
+              const discountPct = item.discount_percent ?? 0;
+              const totalPrice = Number(
+                (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(
+                  2,
+                ),
+              );
+              total += totalPrice;
+              const {
+                rows: [orderItem],
+              } = await client.query(
+                `INSERT INTO order_items
+                   (order_id, product_id, quantity, unit_price, discount_percent, total_price,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                [
+                  targetOrderId,
+                  item.product_id,
+                  item.quantity,
+                  unitPrice,
+                  discountPct,
+                  totalPrice,
+                  prod.name_bg,
+                  prod.name_en,
+                  prod.sku,
+                  item.line_status ?? "normal",
+                ],
+              );
+              inserted.push(orderItem);
+            }
+            await client.query(
+              "UPDATE orders SET total_amount = $1 WHERE id = $2",
+              [total, targetOrderId],
+            );
+            return { total, items: inserted };
+          };
+
+          // Create the primary order. Econt fields ride here regardless —
+          // in the only-awaiting case the cashier may still want to record
+          // a future Econt destination for when the goods arrive.
           const {
             rows: [order],
           } = await client.query(
@@ -1023,78 +1136,69 @@ export default async function orderRoutes(app: FastifyInstance) {
               belowCostDetails != null
                 ? JSON.stringify(belowCostDetails)
                 : null,
-              body.status,
+              mainStatus,
             ],
           );
 
-          let totalAmount = 0;
-          const items = [];
+          const mainResult = await insertItems(order.id, mainItems);
+          const totalAmount = mainResult.total;
+          const items = mainResult.items;
 
-          for (const item of body.items) {
-            // Price resolution chain: explicit > partner price list > product selling_price > 0
-            const prod = productMap.get(item.product_id) as any;
-            const unitPrice =
-              item.unit_price ??
-              priceMap.get(item.product_id) ??
-              (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
-              0;
-            // total_price е post-discount (qty × цена × (1 − отст/100)), закръглено
-            // до 2 знака защото колоната е numeric(12,2) — така СУМ-ите в фактурата
-            // не се разминават с визуалните стойности по редовете.
-            const discountPct = item.discount_percent ?? 0;
-            const totalPrice = Number(
-              (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(2),
-            );
-            totalAmount += totalPrice;
-
-            if (!prod) {
-              throw Object.assign(
-                new Error(`Product ${item.product_id} not found`),
-                { statusCode: 400 },
-              );
-            }
-
+          // Mixed case — spawn a child order to carry the awaiting lines.
+          // Inherits partner + object info from the parent (so the child
+          // shows up under the same customer in any list/filter), but no
+          // Econt fields (the awaiting goods will get their own shipment
+          // record when they arrive and convert to active).
+          let awaitingChild: any = null;
+          if (!onlyAwaiting && awaitingItems.length > 0) {
             const {
-              rows: [orderItem],
+              rows: [child],
             } = await client.query(
-              `INSERT INTO order_items
-                 (order_id, product_id, quantity, unit_price, discount_percent, total_price,
-                  name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+              `INSERT INTO orders (
+                 partner_id, partner_object_id, object_name, object_code,
+                 status, parent_order_id, source, order_number
+               )
+               VALUES ($1, $2, $3, $4, 'awaiting_stock', $5, $6,
+                       nextval('order_number_seq'))
+               RETURNING *`,
               [
+                body.partner_id,
+                objectSelection.partnerObjectId,
+                objectSelection.objectName,
+                objectSelection.objectCode,
                 order.id,
-                item.product_id,
-                item.quantity,
-                unitPrice,
-                discountPct,
-                totalPrice,
-                prod.name_bg,
-                prod.name_en,
-                prod.sku,
-                item.line_status ?? "normal",
+                body.source,
               ],
             );
-            items.push(orderItem);
+            const childAwaitingItems = awaitingItems.map((i) => ({
+              ...i,
+              line_status: "normal" as const,
+            }));
+            const childResult = await insertItems(child.id, childAwaitingItems);
+            awaitingChild = {
+              ...child,
+              total_amount: childResult.total,
+              items: childResult.items,
+            };
           }
 
-          // Update total
-          await client.query(
-            "UPDATE orders SET total_amount = $1 WHERE id = $2",
-            [totalAmount, order.id],
-          );
-
-          // Notification
+          // Notification — single line covers both the main and (if any)
+          // awaiting child so the user sees one toast in the bell.
+          const notifMessage = awaitingChild
+            ? `Нова поръчка #${order.id} от ${partner.name} на стойност ${totalAmount.toFixed(2)} € · #${awaitingChild.id} на изчакване (чака стока)`
+            : onlyAwaiting
+              ? `Нова поръчка #${order.id} (на изчакване) от ${partner.name} на стойност ${totalAmount.toFixed(2)} €`
+              : `Нова поръчка #${order.id} от ${partner.name} на стойност ${totalAmount.toFixed(2)} €`;
           await client.query(
             `INSERT INTO notifications (type, message) VALUES ('order_created', $1)`,
-            [
-              `Нова поръчка #${order.id} от ${partner.name} на стойност ${totalAmount.toFixed(2)} €`,
-            ],
+            [notifMessage],
           );
 
           return {
             ...order,
             total_amount: totalAmount,
             items,
+            awaiting_child: awaitingChild,
           };
         });
       } catch (err: any) {
@@ -1961,6 +2065,55 @@ export default async function orderRoutes(app: FastifyInstance) {
           `UPDATE order_items SET line_status = 'normal'
            WHERE id = $1 RETURNING *`,
           [itemId],
+        );
+        return updated;
+      });
+    },
+  );
+
+  // POST /orders/:id/mark-arrived — migration 072 / awaiting child order.
+  // Flips an `awaiting_stock` order back to `confirmed` and resets
+  // order_date to today, so the order surfaces in the day's "Поръчки"
+  // list (the cashier's "second customer visit" workflow). The original
+  // created_at and parent_order_id stay for audit; the cashier can still
+  // see which transaction this was promised against.
+  app.post(
+    "/:id/mark-arrived",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      return await transaction(async (client) => {
+        const {
+          rows: [order],
+        } = await client.query(
+          "SELECT id, order_number, status FROM orders WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+        if (!order) {
+          return reply.status(404).send({ error: "Order not found" });
+        }
+        if (order.status !== "awaiting_stock") {
+          return reply.status(400).send({
+            error: "Only awaiting orders can be marked as arrived",
+            current_status: order.status,
+          });
+        }
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE orders
+              SET status = 'confirmed',
+                  order_date = CURRENT_DATE,
+                  updated_at = NOW()
+            WHERE id = $1
+            RETURNING *`,
+          [id],
+        );
+        await client.query(
+          `INSERT INTO notifications (type, message) VALUES ('order_arrived', $1)`,
+          [
+            `Поръчка #${order.order_number} (на изчакване) — стоката пристигна, прехвърлена в днешните поръчки`,
+          ],
         );
         return updated;
       });
