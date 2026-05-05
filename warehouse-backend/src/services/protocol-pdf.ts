@@ -47,6 +47,16 @@ export interface ProtocolData {
   items: ProtocolItem[];
   totalAmount: number;
   outputPath: string;
+  // Settings → Документи toggle (migration 069). When true, the "Общо"
+  // line prints both the BGN equivalent and the EUR figure.
+  showBgn?: boolean;
+}
+
+const PROTOCOL_EUR_TO_BGN = 1.95583;
+
+function formatProtocolBgn(amountEur: number): string {
+  const bgn = Math.round(amountEur * PROTOCOL_EUR_TO_BGN * 100) / 100;
+  return `${bgn.toFixed(2).replace(".", ",")} лв.`;
 }
 
 function formatDate(iso: string): string {
@@ -143,9 +153,14 @@ export async function generateProtocolPdf(data: ProtocolData): Promise<void> {
       .stroke();
     y += 8;
 
-    // Total
+    // Total — when the dual-currency toggle is on, append the BGN
+    // equivalent so the protocol's bottom line matches the matching
+    // invoice/Стокова разписка that the customer signs alongside.
     doc.font("MainBold").fontSize(10);
-    doc.text(`Общо: ${formatEurAmount(data.totalAmount)}`, L, y, {
+    const totalLine = data.showBgn
+      ? `Общо: ${formatProtocolBgn(data.totalAmount)} / ${formatEurAmount(data.totalAmount)}`
+      : `Общо: ${formatEurAmount(data.totalAmount)}`;
+    doc.text(totalLine, L, y, {
       width: pageW,
       align: "right",
     });

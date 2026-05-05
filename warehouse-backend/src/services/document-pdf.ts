@@ -260,6 +260,10 @@ interface StockDispatchData {
   // "gross": prices in table already include VAT, totals show only Общо (no VAT line)
   pricing_mode?: "net" | "gross";
   outputPath: string;
+  // Settings → Документи toggle (migration 069). When true, the totals
+  // block prints a "BGN | EUR" two-column layout matching the Microinvest
+  // sample МЕРТ-М shared. Default false → EUR-only, unchanged from before.
+  show_bgn?: boolean;
 }
 
 interface CommercialDocData {
@@ -1252,6 +1256,16 @@ function ensurePageSpace(
   }
 }
 
+// Officially-fixed BNB conversion rate (Bulgaria's eurozone entry,
+// 2026-01-01). Hard-coded so every PDF uses the same number without
+// looking it up at render time.
+const STOCK_DISPATCH_EUR_TO_BGN = 1.95583;
+
+function formatBgnLeva(amountEur: number): string {
+  const bgn = Math.round(amountEur * STOCK_DISPATCH_EUR_TO_BGN * 100) / 100;
+  return `${bgn.toFixed(2).replace(".", ",")} лв.`;
+}
+
 function drawStockDispatchTotalsBlock(
   doc: PDFKit.PDFDocument,
   leftCol: number,
@@ -1260,21 +1274,43 @@ function drawStockDispatchTotalsBlock(
   vatEur: number,
   totalEur: number,
   pricingMode: "net" | "gross" = "net",
+  showBgn: boolean = false,
 ) {
-  const blockWidth = 140;
+  // Two-column "BGN | EUR" layout when the toggle is on, single EUR
+  // column otherwise. Matches the sample template the cashier
+  // shared — small BGN/EUR header row above the figures, both
+  // columns right-aligned, "Общо" row in bold.
+  const labelWidth = 60;
+  const eurColW = 70;
+  const bgnColW = showBgn ? 80 : 0;
+  const colGap = showBgn ? 10 : 0;
+  const blockWidth = labelWidth + bgnColW + colGap + eurColW;
   const x = leftCol + pageWidth - blockWidth;
-  const labelWidth = 70;
-  const valueWidth = blockWidth - labelWidth;
+  const bgnX = x + labelWidth;
+  const eurX = bgnX + bgnColW + colGap;
   const rowHeight = 13;
   let y = doc.y;
+
+  if (showBgn) {
+    doc.font("StockSerifBold").fontSize(8);
+    doc.text("BGN", bgnX, y, { width: bgnColW, align: "right" });
+    doc.text("EUR", eurX, y, { width: eurColW, align: "right" });
+    y += rowHeight;
+  }
 
   const drawRow = (label: string, eurValue: number, bold = false) => {
     const fontName = bold ? "StockSerifBold" : "StockSerif";
     const fontSize = bold ? 9 : 8.4;
     doc.font(fontName).fontSize(fontSize);
     doc.text(label, x, y, { width: labelWidth, align: "left" });
-    doc.text(`${formatEUR(eurValue)} €`, x + labelWidth, y, {
-      width: valueWidth,
+    if (showBgn) {
+      doc.text(formatBgnLeva(eurValue), bgnX, y, {
+        width: bgnColW,
+        align: "right",
+      });
+    }
+    doc.text(`${formatEUR(eurValue)} €`, eurX, y, {
+      width: eurColW,
       align: "right",
     });
     y += rowHeight;
@@ -1497,6 +1533,7 @@ export async function generateStockDispatchPdf(
       vatAmountEur,
       totalGrossEur,
       pricingMode,
+      data.show_bgn === true,
     );
 
     doc.font("StockSerif").fontSize(8.5);

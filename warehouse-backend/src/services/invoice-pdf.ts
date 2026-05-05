@@ -130,21 +130,13 @@ function formatEur(
   return formatEurAmount(num, sourceCurrency);
 }
 
-// Renders "X.XX EUR (Y.YY лв.)" when the dual-currency setting is on,
-// otherwise just "X.XX EUR". The BGN value is rounded to 2 decimals
-// using standard half-up rounding so it always lines up with what an
-// auditor would expect from multiplying EUR by 1.95583.
-function formatTotal(
-  amountEur: number,
-  showBgn: boolean,
-  sourceCurrency?: string | null,
-): string {
-  const eur = formatEur(amountEur, sourceCurrency);
-  if (!showBgn) return eur;
-  const bgn = (Math.round(amountEur * EUR_TO_BGN * 100) / 100)
-    .toFixed(2)
-    .replace(".", ",");
-  return `${eur} (${bgn} лв.)`;
+// Convert an EUR amount to its BGN equivalent and format it as
+// "92,00 лв." — half-up rounded to 2 decimals so it matches what an
+// auditor gets from multiplying the EUR figure by 1.95583 with a
+// calculator.
+function formatBgn(amountEur: number): string {
+  const bgn = Math.round(amountEur * EUR_TO_BGN * 100) / 100;
+  return `${bgn.toFixed(2).replace(".", ",")} лв.`;
 }
 
 function formatDate(date: string): string {
@@ -1051,64 +1043,76 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       }
 
       let y = rowY + 10;
-      // Dual-currency totals print the BGN equivalent in parentheses next
-      // to each EUR value, so the totals block needs to start ~80pt
-      // further to the left to fit "1.234,56 EUR (2.414,03 лв.)" without
-      // overlapping the items table. The label width stays the same; the
-      // amount column gets the extra room. The Настройки toggle gates
-      // this — if it's off, layout is identical to before.
+      // Two-column BGN | EUR totals when the Настройки → Документи
+      // toggle is on, single EUR column otherwise. Layout matches the
+      // sample provided by МЕРТ-М: a small "BGN" / "EUR" header row
+      // above the figures, both columns right-aligned and bold for
+      // amounts, with the final "Сума за получаване" / "Общо" row in
+      // a slightly bigger weight.
       const showBgn = data.showBgn === true;
-      const valueWidth = showBgn ? 150 : 65;
       const labelWidth = 130;
-      const totalsX = R - (labelWidth + valueWidth + 5);
+      const eurColW = 70;
+      const bgnColW = showBgn ? 80 : 0;
+      const colGap = showBgn ? 10 : 0;
+      const totalsBlockW = labelWidth + bgnColW + colGap + eurColW;
+      const totalsX = R - totalsBlockW;
+      const bgnX = totalsX + labelWidth;
+      const eurX = bgnX + bgnColW + colGap;
       const totalNet = toEurAmount(data.invoice.total_net, sourceCurrency);
       const totalVat = toEurAmount(data.invoice.total_vat, sourceCurrency);
       const totalGross = toEurAmount(data.invoice.total_gross, sourceCurrency);
-      const estimatedFooterHeight = 135;
+      const estimatedFooterHeight = 135 + (showBgn ? 12 : 0);
 
       if (y + estimatedFooterHeight > doc.page.height - pageMargins.bottom) {
         startNewTablePage();
         y = rowY + 10;
       }
 
-      if (showVat) {
-        doc.fontSize(8).font("Main");
-        doc.text(`Данъчна основа ${vatRateLabel}%:`, totalsX, y, {
-          width: labelWidth,
-        });
-        doc
-          .font("MainBold")
-          .text(
-            formatTotal(totalNet, showBgn, sourceCurrency),
-            totalsX + labelWidth,
-            y,
-            { width: valueWidth, align: "right" },
-          );
-        y += 13;
-
-        doc
-          .font("Main")
-          .text(`ДДС ${vatRateLabel}%:`, totalsX, y, { width: labelWidth });
-        doc
-          .font("MainBold")
-          .text(
-            formatTotal(totalVat, showBgn, sourceCurrency),
-            totalsX + labelWidth,
-            y,
-            { width: valueWidth, align: "right" },
-          );
-        y += 13;
+      // BGN / EUR column header strip. Only drawn when both columns are
+      // present — keeps EUR-only invoices visually unchanged.
+      if (showBgn) {
+        doc.font("MainBold").fontSize(8);
+        doc.text("BGN", bgnX, y, { width: bgnColW, align: "right" });
+        doc.text("EUR", eurX, y, { width: eurColW, align: "right" });
+        y += 12;
       }
 
-      doc.font("MainBold").fontSize(9);
-      doc.text("Сума за получаване:", totalsX, y, { width: labelWidth });
-      doc.text(
-        formatTotal(totalGross, showBgn, sourceCurrency),
-        totalsX + labelWidth,
-        y,
-        { width: valueWidth, align: "right" },
-      );
-      y += 18;
+      const drawTotalsRow = (
+        label: string,
+        amountEur: number,
+        opts?: { bigger?: boolean },
+      ) => {
+        const labelFontSize = opts?.bigger ? 9 : 8;
+        const valueFontSize = opts?.bigger ? 9 : 8;
+        doc
+          .font(opts?.bigger ? "MainBold" : "Main")
+          .fontSize(labelFontSize)
+          .text(label, totalsX, y, { width: labelWidth });
+        if (showBgn) {
+          doc
+            .font("MainBold")
+            .fontSize(valueFontSize)
+            .text(formatBgn(amountEur), bgnX, y, {
+              width: bgnColW,
+              align: "right",
+            });
+        }
+        doc
+          .font("MainBold")
+          .fontSize(valueFontSize)
+          .text(formatEur(amountEur, sourceCurrency), eurX, y, {
+            width: eurColW,
+            align: "right",
+          });
+        y += opts?.bigger ? 14 : 13;
+      };
+
+      if (showVat) {
+        drawTotalsRow(`Данъчна основа ${vatRateLabel}%:`, totalNet);
+        drawTotalsRow(`ДДС ${vatRateLabel}%:`, totalVat);
+      }
+      drawTotalsRow("Сума за получаване:", totalGross, { bigger: true });
+      y += 4;
 
       // Free-text invoice note (e.g. "по проект Алфа"). Rendered below
       // the totals block on the left, before the payment-method line.

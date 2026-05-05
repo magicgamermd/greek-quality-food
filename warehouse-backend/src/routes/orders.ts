@@ -2655,6 +2655,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       })),
       vat_rate: includeVat ? 20 : 0,
       outputPath: stockDispatchPath,
+      show_bgn: company.show_bgn_on_invoice === true,
     });
 
     await generateCommercialDocPdf({
@@ -2701,6 +2702,9 @@ export default async function orderRoutes(app: FastifyInstance) {
       bic: s.bic || undefined,
       mol: s.mol || undefined,
       vet_reg_number: s.vet_reg_number || undefined,
+      // Document toggles (migration 069+) — propagated to every PDF
+      // generator so the BGN-next-to-EUR totals appear consistently.
+      show_bgn_on_invoice: s.show_bgn_on_invoice === true,
     };
   }
 
@@ -2871,6 +2875,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         vat_rate: includeVat ? 20 : 0,
         pricing_mode: pricingMode,
         outputPath,
+        show_bgn: company.show_bgn_on_invoice === true,
       });
 
       const stream = fs.createReadStream(outputPath);
@@ -3019,6 +3024,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         totalVat,
         totalGross,
         outputPath,
+        showBgn: company.show_bgn_on_invoice === true,
       });
 
       const stream = fs.createReadStream(outputPath);
@@ -3167,6 +3173,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         })),
         totalAmount,
         outputPath,
+        showBgn: company.show_bgn_on_invoice === true,
       });
 
       const stream = fs.createReadStream(outputPath);

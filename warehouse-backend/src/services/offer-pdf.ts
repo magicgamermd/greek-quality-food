@@ -67,6 +67,17 @@ export interface OfferPdfData {
   totalVat: number;
   totalGross: number;
   outputPath: string;
+  // Settings → Документи toggle (migration 069). When true, the totals
+  // block prints a "BGN | EUR" two-column layout. Default false →
+  // EUR-only, layout unchanged from before.
+  showBgn?: boolean;
+}
+
+const OFFER_EUR_TO_BGN = 1.95583;
+
+function fmtBgn(amountEur: number): string {
+  const bgn = Math.round(amountEur * OFFER_EUR_TO_BGN * 100) / 100;
+  return `${bgn.toFixed(2).replace(".", ",")} лв.`;
 }
 
 function toNum(v: number | string | null | undefined): number {
@@ -227,33 +238,56 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
     });
 
     // ── Totals ─────────────────────────────────────────────
+    // Two-column "BGN | EUR" layout when the toggle is on, single EUR
+    // column otherwise. Matches the invoice + Стокова разписка
+    // formatting so all transaction documents stay visually aligned.
     doc.moveDown(0.6);
-    const totalsX = L + pageW - 220;
+    const showBgn = data.showBgn === true;
     const labelW = 130;
-    const valueW = 90;
+    const eurW = 90;
+    const bgnW = showBgn ? 90 : 0;
+    const colGap = showBgn ? 10 : 0;
+    const totalsBlockW = labelW + bgnW + colGap + eurW + 5;
+    const totalsX = L + pageW - totalsBlockW;
+    const bgnX = totalsX + labelW + 5;
+    const eurX = bgnX + bgnW + colGap;
 
-    const totalLine = (label: string, value: string, bold = false) => {
+    if (showBgn) {
+      const y = doc.y;
+      doc.font("MainBold").fontSize(8).fillColor("#475569");
+      doc.text("BGN", bgnX, y, { width: bgnW, align: "right" });
+      doc.text("EUR", eurX, y, { width: eurW, align: "right" });
+      doc.y = y + 12;
+    }
+
+    const totalLine = (label: string, amountEur: number, bold = false) => {
       const y = doc.y;
       doc
         .font(bold ? "MainBold" : "Main")
         .fontSize(9)
         .fillColor("#0f172a");
       doc.text(label, totalsX, y, { width: labelW, align: "right" });
-      doc.text(value, totalsX + labelW + 5, y, {
-        width: valueW,
+      if (showBgn) {
+        doc.text(fmtBgn(amountEur), bgnX, y, {
+          width: bgnW,
+          align: "right",
+        });
+      }
+      doc.text(fmtEur(amountEur), eurX, y, {
+        width: eurW,
         align: "right",
       });
       doc.y = y + 14;
     };
-    totalLine("Сума без ДДС:", fmtEur(data.totalNet));
-    totalLine("ДДС 20%:", fmtEur(data.totalVat));
+    totalLine("Сума без ДДС:", data.totalNet);
+    totalLine("ДДС 20%:", data.totalVat);
     doc
       .moveTo(totalsX + labelW - 60, doc.y - 2)
-      .lineTo(totalsX + labelW + valueW + 5, doc.y - 2)
+      .lineTo(totalsX + totalsBlockW, doc.y - 2)
       .lineWidth(0.5)
       .strokeColor("#94a3b8")
       .stroke();
-    totalLine("Обща сума:", fmtEur(data.totalGross), true);
+    totalLine("Обща сума:", data.totalGross, true);
 
     // ── Footer note ────────────────────────────────────────
     doc.moveDown(2);
