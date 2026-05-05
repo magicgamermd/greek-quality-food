@@ -28,6 +28,10 @@ const updateSettingsSchema = z.object({
   writeoff_commission_chair: z.string().max(255).nullish(),
   writeoff_commission_member1: z.string().max(255).nullish(),
   writeoff_commission_member2: z.string().max(255).nullish(),
+  // Document/print toggles (migration 069+) — global preferences that
+  // control how transaction documents render. Booleans stay optional so
+  // partial PATCH-style saves still work.
+  show_bgn_on_invoice: z.boolean().optional(),
 });
 
 async function requireAuth(request: FastifyRequest) {
@@ -163,6 +167,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
           ["writeoff_commission_chair", body.writeoff_commission_chair],
           ["writeoff_commission_member1", body.writeoff_commission_member1],
           ["writeoff_commission_member2", body.writeoff_commission_member2],
+          ["show_bgn_on_invoice", body.show_bgn_on_invoice],
         ];
 
         for (const [field, value] of fields) {

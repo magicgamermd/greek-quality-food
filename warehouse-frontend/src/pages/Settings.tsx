@@ -58,13 +58,21 @@ interface CompanySettings {
   fiscal_auto_print?: boolean;
   fiscal_operator_id?: string;
   fiscal_operator_password?: string;
+  // Document toggles (migration 069+)
+  show_bgn_on_invoice?: boolean;
 }
 
 export function Settings() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<
-    "categories" | "users" | "company" | "fiscal" | "export" | "data"
+    | "categories"
+    | "users"
+    | "company"
+    | "documents"
+    | "fiscal"
+    | "export"
+    | "data"
   >("categories");
   const [exportFrom, setExportFrom] = useState(
     new Date(new Date().getFullYear(), new Date().getMonth(), 1)
@@ -285,6 +293,16 @@ export function Settings() {
           }`}
         >
           Фирмени данни
+        </button>
+        <button
+          onClick={() => setActiveTab("documents")}
+          className={`px-4 py-2 font-medium border-b-2 transition-colors ${
+            activeTab === "documents"
+              ? "border-[#f97316] text-[#f97316]"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Документи
         </button>
         <button
           onClick={() => setActiveTab("fiscal")}
@@ -780,6 +798,76 @@ export function Settings() {
                   <Button
                     type="button"
                     onClick={() => saveCompanyMutation.mutate()}
+                    disabled={saveCompanyMutation.isPending}
+                  >
+                    {saveCompanyMutation.isPending ? (
+                      <>
+                        <Spinner size="sm" />
+                        Запазване...
+                      </>
+                    ) : (
+                      "Запази"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* TAB 3.5: Documents — global toggles affecting how transaction
+          documents render (invoice PDF, etc.). Saved through the same
+          /settings POST endpoint as Фирмени данни — `saveCompanyMutation`
+          mirrors all keys back to the server. */}
+      {activeTab === "documents" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Документи — настройки на печат</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {companyLoading ? (
+              <LoadingOverlay />
+            ) : (
+              <form
+                className="space-y-6 max-w-2xl"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  saveCompanyMutation.mutate();
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    id="show_bgn_on_invoice"
+                    checked={!!companyForm.show_bgn_on_invoice}
+                    onChange={(e) =>
+                      setCompanyForm((prev) => ({
+                        ...prev,
+                        show_bgn_on_invoice: e.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4 mt-1 rounded border-gray-300"
+                  />
+                  <div className="flex-1">
+                    <Label
+                      htmlFor="show_bgn_on_invoice"
+                      className="font-medium cursor-pointer"
+                    >
+                      Показвай BGN до EUR на фактурата
+                    </Label>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Когато е включено, всеки ред в блока „Сума за получаване"
+                      на фактурата ще показва левовата равностойност в скоби
+                      (фиксиран курс на БНБ: 1 EUR = 1,95583 лв.). Изключи го
+                      след преходния период, за да остане само EUR.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <Button
+                    type="submit"
                     disabled={saveCompanyMutation.isPending}
                   >
                     {saveCompanyMutation.isPending ? (

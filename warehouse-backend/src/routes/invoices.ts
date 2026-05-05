@@ -226,6 +226,7 @@ async function getCompanySettings(): Promise<{
   bank_name?: string;
   bic?: string;
   mol?: string;
+  show_bgn_on_invoice?: boolean;
 }> {
   const { rows } = await query("SELECT * FROM settings WHERE id = 1");
   const s = rows[0] || {};
@@ -240,6 +241,7 @@ async function getCompanySettings(): Promise<{
     bank_name: s.bank_name || undefined,
     bic: s.bic || undefined,
     mol: s.mol || undefined,
+    show_bgn_on_invoice: s.show_bgn_on_invoice === true,
   };
 }
 
@@ -623,6 +625,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           includeVat: body.include_vat,
           sourceCurrency: (invoice as any).currency ?? null,
           outputPath: pdfPath,
+          showBgn: company.show_bgn_on_invoice === true,
         });
 
         // Store PDF path
@@ -779,6 +782,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           includeVat,
           sourceCurrency: (updated as any).currency ?? null,
           outputPath: pdfPath,
+          showBgn: company.show_bgn_on_invoice === true,
         });
 
         await client.query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
@@ -1146,6 +1150,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               sourceCurrency: (invoice as any).currency ?? null,
               outputPath: tmpPath,
               copies: 2,
+              showBgn: company.show_bgn_on_invoice === true,
             });
             const buf = await fs.promises.readFile(tmpPath);
             const filename2 = `${invoice.invoice_number}.pdf`;
@@ -1268,6 +1273,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
             sourceCurrency: (invoice as any).currency ?? null,
             outputPath: pdfPath,
+            showBgn: company.show_bgn_on_invoice === true,
           });
           await query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
             pdfPath,
@@ -1532,6 +1538,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           relatedInvoiceNumber: original.invoice_number,
           sourceCurrency: (creditNote as any).currency ?? null,
           outputPath: pdfPath,
+          showBgn: company.show_bgn_on_invoice === true,
         });
 
         // Store PDF path

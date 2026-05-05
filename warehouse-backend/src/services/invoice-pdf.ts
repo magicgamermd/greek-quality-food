@@ -110,13 +110,41 @@ interface InvoiceData {
    * When `2`, both pages get the „Оригинал" label.
    */
   copies?: 1 | 2;
+  /**
+   * Settings → Документи toggle. When true, the totals block prints the
+   * BGN equivalent in parentheses next to the EUR figure (fixed BNB
+   * rate of 1 EUR = 1.95583 BGN). The default `false` keeps EUR-only
+   * output.
+   */
+  showBgn?: boolean;
 }
+
+// Officially-fixed conversion rate adopted by Bulgaria when joining the
+// eurozone on 2026-01-01. Fixed forever, so we can hard-code it.
+const EUR_TO_BGN = 1.95583;
 
 function formatEur(
   num: number | string,
   sourceCurrency?: string | null,
 ): string {
   return formatEurAmount(num, sourceCurrency);
+}
+
+// Renders "X.XX EUR (Y.YY лв.)" when the dual-currency setting is on,
+// otherwise just "X.XX EUR". The BGN value is rounded to 2 decimals
+// using standard half-up rounding so it always lines up with what an
+// auditor would expect from multiplying EUR by 1.95583.
+function formatTotal(
+  amountEur: number,
+  showBgn: boolean,
+  sourceCurrency?: string | null,
+): string {
+  const eur = formatEur(amountEur, sourceCurrency);
+  if (!showBgn) return eur;
+  const bgn = (Math.round(amountEur * EUR_TO_BGN * 100) / 100)
+    .toFixed(2)
+    .replace(".", ",");
+  return `${eur} (${bgn} лв.)`;
 }
 
 function formatDate(date: string): string {
@@ -1023,7 +1051,16 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       }
 
       let y = rowY + 10;
-      const totalsX = R - 200;
+      // Dual-currency totals print the BGN equivalent in parentheses next
+      // to each EUR value, so the totals block needs to start ~80pt
+      // further to the left to fit "1.234,56 EUR (2.414,03 лв.)" without
+      // overlapping the items table. The label width stays the same; the
+      // amount column gets the extra room. The Настройки toggle gates
+      // this — if it's off, layout is identical to before.
+      const showBgn = data.showBgn === true;
+      const valueWidth = showBgn ? 150 : 65;
+      const labelWidth = 130;
+      const totalsX = R - (labelWidth + valueWidth + 5);
       const totalNet = toEurAmount(data.invoice.total_net, sourceCurrency);
       const totalVat = toEurAmount(data.invoice.total_vat, sourceCurrency);
       const totalGross = toEurAmount(data.invoice.total_gross, sourceCurrency);
@@ -1037,30 +1074,40 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       if (showVat) {
         doc.fontSize(8).font("Main");
         doc.text(`Данъчна основа ${vatRateLabel}%:`, totalsX, y, {
-          width: 130,
+          width: labelWidth,
         });
-        doc.font("MainBold").text(formatEur(totalNet), totalsX + 130, y, {
-          width: 65,
-          align: "right",
-        });
+        doc
+          .font("MainBold")
+          .text(
+            formatTotal(totalNet, showBgn, sourceCurrency),
+            totalsX + labelWidth,
+            y,
+            { width: valueWidth, align: "right" },
+          );
         y += 13;
 
         doc
           .font("Main")
-          .text(`ДДС ${vatRateLabel}%:`, totalsX, y, { width: 130 });
-        doc.font("MainBold").text(formatEur(totalVat), totalsX + 130, y, {
-          width: 65,
-          align: "right",
-        });
+          .text(`ДДС ${vatRateLabel}%:`, totalsX, y, { width: labelWidth });
+        doc
+          .font("MainBold")
+          .text(
+            formatTotal(totalVat, showBgn, sourceCurrency),
+            totalsX + labelWidth,
+            y,
+            { width: valueWidth, align: "right" },
+          );
         y += 13;
       }
 
       doc.font("MainBold").fontSize(9);
-      doc.text("Сума за получаване:", totalsX, y, { width: 130 });
-      doc.text(formatEur(totalGross), totalsX + 130, y, {
-        width: 65,
-        align: "right",
-      });
+      doc.text("Сума за получаване:", totalsX, y, { width: labelWidth });
+      doc.text(
+        formatTotal(totalGross, showBgn, sourceCurrency),
+        totalsX + labelWidth,
+        y,
+        { width: valueWidth, align: "right" },
+      );
       y += 18;
 
       // Free-text invoice note (e.g. "по проект Алфа"). Rendered below
