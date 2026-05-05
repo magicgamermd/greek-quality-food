@@ -329,23 +329,35 @@ async function assembleDailyReportData(
     [date],
   );
 
-  // 5c) "Очакван наложен платеж" — Econt COD shipments dispatched today
-  // whose money will only arrive when Econt delivers. Surfaced as a
-  // separate KPI / table block so the cashier can see the gap between
-  // "money in the till today" and "money expected from couriers".
+  // 5c) "Очакван наложен платеж" — Econt COD shipments matched to the
+  // report date by ANY of: shipment date, order creation date, or
+  // related invoice's creation date. The previous filter only matched
+  // `econt_shipment_date OR created_at` but not both, so an order
+  // created today with shipment_date on a different day (e.g. user
+  // picked tomorrow as pickup, or Econt actually shipped yesterday)
+  // wouldn't appear in either day's report. The COALESCE-fallback also
+  // failed when shipment_date is set but to a different date.
+  // Surfaced as a separate KPI / table block so the cashier can see
+  // the gap between "money in the till today" and "money expected
+  // from couriers".
   const { rows: expectedCodRows } = await query(
     `SELECT o.id,
             o.order_number,
             p.name AS partner_name,
             o.econt_shipment_number AS shipment_number,
             o.econt_cod_amount::numeric AS cod_amount,
-            COALESCE(o.econt_shipment_date, o.created_at) AS shipped_at
+            COALESCE(o.econt_shipment_date, o.created_at::date) AS shipped_at
        FROM orders o
        LEFT JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN invoices i ON i.id = o.invoice_id
       WHERE o.econt_shipment_number IS NOT NULL
         AND o.econt_cod_amount IS NOT NULL
         AND o.econt_cod_amount > 0
-        AND DATE(COALESCE(o.econt_shipment_date, o.created_at)) = $1
+        AND (
+              DATE(o.econt_shipment_date) = $1
+           OR DATE(o.created_at) = $1
+           OR DATE(i.invoice_date) = $1
+        )
       ORDER BY o.order_number ASC`,
     [date],
   );
