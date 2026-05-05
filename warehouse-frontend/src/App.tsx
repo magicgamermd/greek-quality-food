@@ -39,11 +39,26 @@ import { UserDetailPage } from "@/pages/admin/UserDetailPage";
 import { RequirePermission } from "@/components/RequirePermission";
 import { PERMISSIONS } from "@/lib/permissions";
 
+// Cold-start friendly defaults:
+//   * `retry: 2` + exponential `retryDelay` so a slow backend (or a
+//     fresh `npm run dev` where Postgres is still accepting connections)
+//     gets two more chances before React Query parks the query in
+//     "error" state — that "stuck error" was the main reason a freshly
+//     opened tab showed empty cards until the user hit refresh.
+//   * `refetchOnMount: "always"` — even when staleTime hasn't elapsed,
+//     re-mounting a route (e.g. nav back to /dashboard) still kicks off
+//     a fresh fetch, so a cache entry that was populated with `{}` from
+//     a partial failure can't outlive the navigation.
+//   * `staleTime: 30_000` and `refetchOnWindowFocus: false` are kept —
+//     they avoid the chatty refetches that come with the libs's
+//     defaults.
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: 2,
+      retryDelay: (attemptIndex) => Math.min(500 * 2 ** attemptIndex, 5_000),
       staleTime: 30_000,
+      refetchOnMount: "always",
       refetchOnWindowFocus: false,
     },
   },

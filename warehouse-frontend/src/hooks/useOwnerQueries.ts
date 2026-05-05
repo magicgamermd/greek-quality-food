@@ -70,18 +70,19 @@ export function useOwnerDashboardKpi() {
   return useQuery({
     queryKey: ["owner", "kpi"],
     queryFn: async (): Promise<OwnerDashboardKPI> => {
-      const [dashRes, lowStockRes] = await Promise.allSettled([
+      // `Promise.all` (not `allSettled`) — a partial failure should
+      // bubble up as a real query error so React Query can retry with
+      // back-off; otherwise the owner mini-dashboard silently renders
+      // zeros after a transient backend hiccup.
+      const [dashRes, lowStockRes] = await Promise.all([
         api.get("/analytics/dashboard"),
         api.get("/inventory/low-stock"),
       ]);
 
-      const dash = dashRes.status === "fulfilled" ? dashRes.value.data : {};
-      const lowStock =
-        lowStockRes.status === "fulfilled"
-          ? Array.isArray(lowStockRes.value.data)
-            ? lowStockRes.value.data
-            : lowStockRes.value.data?.data || []
-          : [];
+      const dash = dashRes?.data ?? {};
+      const lowStock = Array.isArray(lowStockRes?.data)
+        ? lowStockRes.data
+        : (lowStockRes?.data?.data ?? []);
 
       return {
         today_orders: asNumber(dash.today_orders),

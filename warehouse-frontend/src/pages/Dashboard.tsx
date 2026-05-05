@@ -134,19 +134,20 @@ export function Dashboard() {
   } = useQuery<DashboardKPIs>({
     queryKey: ["dashboard-kpis"],
     queryFn: async () => {
-      // Use individual endpoints for accurate counts
-      const [dashRes, lowStockRes] = await Promise.allSettled([
+      // `Promise.all` (instead of `allSettled`) so a network glitch on a
+      // freshly started backend surfaces as a real query error — React
+      // Query then runs the configured retries with exponential back-off,
+      // and on persistent failure the dashboard renders "—" instead of
+      // silently showing zeros for every card.
+      const [dashRes, lowStockRes] = await Promise.all([
         api.get("/analytics/dashboard"),
         api.get("/inventory/low-stock"),
       ]);
 
-      const dash = dashRes.status === "fulfilled" ? dashRes.value?.data : {};
-      const lowStockArr =
-        lowStockRes.status === "fulfilled"
-          ? Array.isArray(lowStockRes.value?.data)
-            ? lowStockRes.value.data
-            : lowStockRes.value?.data?.data || []
-          : [];
+      const dash = dashRes?.data ?? {};
+      const lowStockArr = Array.isArray(lowStockRes?.data)
+        ? lowStockRes.data
+        : (lowStockRes?.data?.data ?? []);
 
       return {
         total_stock_value: parseFloat(dash.total_stock_value) || 0,
