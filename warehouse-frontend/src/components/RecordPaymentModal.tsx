@@ -40,9 +40,12 @@ const getInvoiceRemaining = (inv: Invoice): number => {
   return Number(inv.total_gross) - paid;
 };
 
-const VAT_RATE = 0.2;
-const getOrderGross = (order: Order): number =>
-  Number(order.total_amount) * (1 + VAT_RATE);
+// Razpiska (no-invoice) payments collect the order's stored
+// total_amount as-is. No VAT line is added — a shipment receipt is
+// not a tax document. Invoices, in contrast, carry the VAT split
+// inside total_net / total_vat / total_gross.
+const getOrderTotalToCollect = (order: Order): number =>
+  Number(order.total_amount);
 
 export function RecordPaymentModal({ open, onClose, context }: Props) {
   const qc = useQueryClient();
@@ -106,8 +109,8 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
       didFillInvoiceRef.current = true;
     } else if (context.kind === "order-fixed") {
       if (orderPayments === undefined || didFillOrderRef.current) return;
-      const gross = getOrderGross(context.order);
-      const remaining = Math.max(0, gross - alreadyPaidOnOrder);
+      const total = getOrderTotalToCollect(context.order);
+      const remaining = Math.max(0, total - alreadyPaidOnOrder);
       setForm({
         invoice_id: "",
         amount: remaining.toFixed(2),
@@ -260,10 +263,8 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
 
           {context.kind === "order-fixed" &&
             (() => {
-              const net = Number(context.order.total_amount);
-              const vat = net * VAT_RATE;
-              const gross = net + vat;
-              const remaining = Math.max(0, gross - alreadyPaidOnOrder);
+              const total = getOrderTotalToCollect(context.order);
+              const remaining = Math.max(0, total - alreadyPaidOnOrder);
               const hasPriorPayments = alreadyPaidOnOrder > 0;
               return (
                 <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm space-y-1">
@@ -285,16 +286,8 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
                     <span className="text-gray-500">Дата:</span>
                     <span>{formatDate(context.order.order_date)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Нето:</span>
-                    <span>{formatCurrency(net)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">ДДС (20%):</span>
-                    <span>{formatCurrency(vat)}</span>
-                  </div>
                   <div className="flex justify-between pt-1 border-t border-amber-200">
-                    <span className="text-gray-500">Общо с ДДС:</span>
+                    <span className="text-gray-500">Сума по поръчка:</span>
                     <span
                       className={
                         hasPriorPayments
@@ -302,7 +295,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
                           : "font-bold text-[#f97316]"
                       }
                     >
-                      {formatCurrency(gross)}
+                      {formatCurrency(total)}
                     </span>
                   </div>
                   {hasPriorPayments && (

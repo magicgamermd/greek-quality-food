@@ -327,8 +327,10 @@ export default async function paymentRoutes(app: FastifyInstance) {
           [body.order_id],
         );
         const alreadyPaidOrder = parseFloat(orderPaidTotal);
-        const orderNet = parseFloat(order.total_amount);
-        const orderTotal = orderNet * 1.2;
+        // Razpiska (no-invoice) payment cap is the order's stored
+        // total_amount as-is — there's no VAT line to collect for a
+        // shipment receipt, only the agreed price.
+        const orderTotal = parseFloat(order.total_amount);
         if (alreadyPaidOrder + body.amount > orderTotal * 1.001) {
           return reply.status(400).send({
             error: "Payment exceeds order total",
