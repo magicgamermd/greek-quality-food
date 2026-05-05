@@ -290,6 +290,7 @@ export async function generateDailyReportPdf(
         doc.text(c.header, cx + 2, headerY, {
           width: c.w - 4,
           align: c.align,
+          lineBreak: false,
         });
         cx += c.w;
       }
@@ -314,6 +315,16 @@ export async function generateDailyReportPdf(
         cancelled: "#dc2626", // red
       };
 
+      // Shorten the noisy "Физическо лице — краен потребител" placeholder
+      // since it's by far the most common partner on a retail day and the
+      // long name forces every other row to wrap when wrap is left on.
+      const shortPartner = (name: string) => {
+        const n = (name ?? "").trim();
+        if (n.toLowerCase().startsWith("физическо лице"))
+          return "Физическо лице";
+        return n.length > 22 ? n.slice(0, 20) + "…" : n;
+      };
+
       doc.font("Main").fontSize(8.5).fillColor("#0f172a");
       data.payments.rows.forEach((r, idx) => {
         if (doc.y + rowH > doc.page.height - 60) {
@@ -328,9 +339,7 @@ export async function generateDailyReportPdf(
         const cells = [
           String(idx + 1),
           `#${r.order_number}`,
-          r.partner_name.length > 26
-            ? r.partner_name.slice(0, 24) + "…"
-            : r.partner_name,
+          shortPartner(r.partner_name),
           dateStr,
           r.method ? (PAYMENT_LABEL_BG[r.method] ?? r.method) : "—",
           fmtEur(r.total_amount),
@@ -348,9 +357,15 @@ export async function generateDailyReportPdf(
           } else if (isCancelled && i === 1) {
             doc.fillColor("#dc2626");
           }
+          // `lineBreak: false` is critical — without it PDFKit wraps
+          // long values onto a second visual line that would overlap
+          // the next row (rowH is fixed). `ellipsis: true` collapses
+          // the overflow into a "…" inside the cell width.
           doc.text(val, cx + 2, rowY, {
             width: cols[i].w - 4,
             align: cols[i].align,
+            lineBreak: false,
+            ellipsis: true,
           });
           if (i === cols.length - 1) {
             doc.fillColor("#0f172a").font("Main");
@@ -439,6 +454,7 @@ export async function generateDailyReportPdf(
         doc.text(c.header, cx + 2, headerY, {
           width: c.w - 4,
           align: c.align,
+          lineBreak: false,
         });
         cx += c.w;
       }
@@ -468,9 +484,14 @@ export async function generateDailyReportPdf(
         ];
         cx = L;
         cells.forEach((val, i) => {
+          // `lineBreak: false` + `ellipsis: true` keep each cell on a
+          // single visual line — without it long values wrap and the
+          // next row visually overlaps the current one.
           doc.text(val, cx + 2, rowY, {
             width: cols[i].w - 4,
             align: cols[i].align,
+            lineBreak: false,
+            ellipsis: true,
           });
           cx += cols[i].w;
         });
