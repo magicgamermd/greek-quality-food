@@ -49,6 +49,16 @@ const PAYMENT_LABEL_BG: Record<string, string> = {
   cod: "Наложен платеж",
 };
 
+// Short variants used inside the dense per-order table where column
+// width is at a premium. The cashier scans this column for shape, not
+// to read prose — abbreviations win over wrapping.
+const PAYMENT_LABEL_SHORT_BG: Record<string, string> = {
+  cash: "Кеш",
+  bank: "Банка",
+  card: "Карта",
+  cod: "НП",
+};
+
 export interface DailyReportData {
   date: string; // ISO yyyy-mm-dd
   generatedBy: string; // email of issuing user
@@ -268,16 +278,19 @@ export async function generateDailyReportPdf(
       // are paid in full / partial / unpaid / cancelled. The bottom
       // summary still totals only the actual cash that hit the till
       // (KPI cards drive that, computed from `payments.byMethod`).
+      // The "Дата" column was dropped — every row in a daily report is
+      // by definition `data.date`, so it added noise without information
+      // and stole space from the partner column. Freed width plus the
+      // shrunk "Начин" column (uses short labels) goes to "Партньор".
       const cols = [
         { header: "№", w: 22, align: "right" as const },
         { header: "Поръчка", w: 55, align: "left" as const },
         {
           header: "Партньор",
-          w: pageW - 22 - 55 - 65 - 70 - 65 - 65 - 70,
+          w: pageW - 22 - 55 - 42 - 65 - 65 - 70,
           align: "left" as const,
         },
-        { header: "Дата", w: 65, align: "left" as const },
-        { header: "Начин", w: 70, align: "left" as const },
+        { header: "Начин", w: 42, align: "left" as const },
         { header: "Сума", w: 65, align: "right" as const },
         { header: "Платено", w: 65, align: "right" as const },
         { header: "Статус", w: 70, align: "left" as const },
@@ -322,7 +335,7 @@ export async function generateDailyReportPdf(
         const n = (name ?? "").trim();
         if (n.toLowerCase().startsWith("физическо лице"))
           return "Физическо лице";
-        return n.length > 22 ? n.slice(0, 20) + "…" : n;
+        return n.length > 40 ? n.slice(0, 38) + "…" : n;
       };
 
       doc.font("Main").fontSize(8.5).fillColor("#0f172a");
@@ -332,16 +345,12 @@ export async function generateDailyReportPdf(
           doc.y = 40;
         }
         const rowY = doc.y;
-        // order_date arrives as ISO; slice(0,10) gives yyyy-mm-dd which
-        // formatDateBg converts to dd.mm.yyyy.
-        const dateStr = formatDateBg(r.order_date.slice(0, 10));
         const isCancelled = r.payment_status === "cancelled";
         const cells = [
           String(idx + 1),
           `#${r.order_number}`,
           shortPartner(r.partner_name),
-          dateStr,
-          r.method ? (PAYMENT_LABEL_BG[r.method] ?? r.method) : "—",
+          r.method ? (PAYMENT_LABEL_SHORT_BG[r.method] ?? r.method) : "—",
           fmtEur(r.total_amount),
           r.paid_amount > 0 ? fmtEur(r.paid_amount) : "—",
           STATUS_LABEL[r.payment_status] ?? r.payment_status,
