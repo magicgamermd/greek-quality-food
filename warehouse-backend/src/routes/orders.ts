@@ -622,7 +622,11 @@ export default async function orderRoutes(app: FastifyInstance) {
              (o.invoice_id IS NOT NULL) AS invoiced,
              ipo.id   AS invoice_partner_id,
              ipo.name AS invoice_partner_name,
-             ipo.eik  AS invoice_partner_eik
+             ipo.eik  AS invoice_partner_eik,
+             COALESCE(pay.paid_amount, 0)::numeric AS paid_amount,
+             (o.econt_shipment_number IS NOT NULL
+              AND o.econt_cod_amount IS NOT NULL
+              AND o.econt_cod_amount > 0) AS has_cod_shipment
       FROM orders o
       JOIN partners p ON p.id = o.partner_id
       LEFT JOIN invoices inv ON inv.id = o.invoice_id
@@ -636,6 +640,12 @@ export default async function orderRoutes(app: FastifyInstance) {
         FROM order_items oi
         WHERE oi.order_id = o.id
       ) ic ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(pmt.amount), 0)::numeric AS paid_amount
+        FROM payments pmt
+        WHERE pmt.order_id = o.id
+           OR (o.invoice_id IS NOT NULL AND pmt.invoice_id = o.invoice_id)
+      ) pay ON TRUE
       ${where}
       ${orderClause}
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}

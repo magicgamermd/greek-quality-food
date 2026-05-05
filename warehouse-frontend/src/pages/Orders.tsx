@@ -5326,6 +5326,7 @@ export function Orders() {
                     <TableHead className="w-[200px]">Намерен артикул</TableHead>
                   )}
                   <TableHead className="w-[72px]">Източник</TableHead>
+                  <TableHead className="w-[120px]">Плащане</TableHead>
                   <TableHead className="w-[110px] text-right">
                     Действия
                   </TableHead>
@@ -5335,7 +5336,7 @@ export function Orders() {
                 {filteredOrders.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={10}
+                      colSpan={11}
                       className="text-center text-gray-400 py-8"
                     >
                       {hasActiveTextFilters || showHistory
@@ -5598,6 +5599,45 @@ export function Orders() {
                       )}
                       <TableCell>
                         <Badge variant="secondary">{order.source}</Badge>
+                      </TableCell>
+                      {/* Плащане badge — green/amber/slate/red derived from
+                          paid_amount vs total_amount + the COD-shipment
+                          flag. Cancelled orders short-circuit to a dash so
+                          the user doesn't read "Неплатена" on a void row. */}
+                      <TableCell>
+                        {(() => {
+                          const o = order as any;
+                          if (order.status === "cancelled") {
+                            return (
+                              <span className="text-gray-400 text-sm">—</span>
+                            );
+                          }
+                          const total = parseFloat(
+                            String(order.total_amount ?? 0),
+                          );
+                          const paid = parseFloat(String(o.paid_amount ?? 0));
+                          const isPaid = paid >= total - 0.01 && total > 0;
+                          const isPartial = paid > 0 && paid < total - 0.01;
+                          const isCod = o.has_cod_shipment === true;
+
+                          if (isPaid) {
+                            return <Badge variant="success">Платена</Badge>;
+                          }
+                          if (isPartial) {
+                            return <Badge variant="warning">Частично</Badge>;
+                          }
+                          if (isCod) {
+                            return (
+                              <Badge
+                                variant="warning"
+                                title="Очаква наложен платеж от Еконт"
+                              >
+                                Налож. платеж
+                              </Badge>
+                            );
+                          }
+                          return <Badge variant="destructive">Неплатена</Badge>;
+                        })()}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
