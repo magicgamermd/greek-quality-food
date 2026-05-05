@@ -4035,6 +4035,12 @@ function CreateOrderModal({
     >();
     for (const row of items) {
       if (!row.product_id) continue;
+      // Awaiting lines never deduct stock — backend's POST /orders skips
+      // them in validateRequestedStock and orders.ts /fulfill skips the
+      // inventory update too. Including them here would make the
+      // "Наличността ще отиде под нулата" dialog complain about awaiting
+      // qty going negative when it never touches stock.
+      if (row.line_status === "awaiting") continue;
       const qty = parseFloat(String(row.quantity || 0));
       if (!Number.isFinite(qty) || qty <= 0) continue;
       const id = Number(row.product_id);
@@ -4886,6 +4892,48 @@ export function Orders() {
   // Econt filter pill — orders with a courier shipment + COD attached
   // (i.e. the cashier still owes the till money once Econt collects).
   const [hasCod, setHasCod] = useState(false);
+
+  // Single exclusive filter selector — clicking any chip clears all the
+  // others. Earlier the status buttons were exclusive but the pills
+  // (Под cost / Платени невзети / На изчакване / Наложен платеж) were
+  // independent toggles, so combining them produced empty intersections
+  // ("status=fulfilled AND has_awaiting=true" matched zero rows). Fold
+  // them all into one selector — clicking the active chip again clears
+  // everything (= "Всички").
+  const activeFilter: string = belowCostOnly
+    ? "below_cost"
+    : hasPaidNotTaken
+      ? "paid_not_taken"
+      : hasAwaiting
+        ? "awaiting"
+        : hasCod
+          ? "cod"
+          : statusFilter;
+  const selectFilter = (next: string) => {
+    setStatusFilter("");
+    setBelowCostOnly(false);
+    setHasPaidNotTaken(false);
+    setHasAwaiting(false);
+    setHasCod(false);
+    if (next === activeFilter) return; // toggle off
+    switch (next) {
+      case "below_cost":
+        setBelowCostOnly(true);
+        break;
+      case "paid_not_taken":
+        setHasPaidNotTaken(true);
+        break;
+      case "awaiting":
+        setHasAwaiting(true);
+        break;
+      case "cod":
+        setHasCod(true);
+        break;
+      default:
+        setStatusFilter(next); // pending / quoted / … / "" (Всички)
+    }
+  };
+
   // Per-column text filters
   const [filters, setFilters] = useState({
     order_number: "",
@@ -5353,9 +5401,13 @@ export function Orders() {
         ].map((s) => (
           <button
             key={s}
-            onClick={() => setStatusFilter(s)}
+            onClick={() => selectFilter(s)}
             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              statusFilter === s
+              statusFilter === s &&
+              !belowCostOnly &&
+              !hasPaidNotTaken &&
+              !hasAwaiting &&
+              !hasCod
                 ? "bg-[#f97316] text-white"
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
@@ -5365,7 +5417,7 @@ export function Orders() {
         ))}
         {canSeeBelowCostFilter && (
           <button
-            onClick={() => setBelowCostOnly((v) => !v)}
+            onClick={() => selectFilter("below_cost")}
             className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
               belowCostOnly
                 ? "bg-amber-500 text-white"
@@ -5379,7 +5431,7 @@ export function Orders() {
         )}
         {/* Batch F1 — line-status filter pills (open paid_not_taken / awaiting) */}
         <button
-          onClick={() => setHasPaidNotTaken((v) => !v)}
+          onClick={() => selectFilter("paid_not_taken")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasPaidNotTaken
               ? "bg-amber-500 text-white"
@@ -5390,7 +5442,7 @@ export function Orders() {
           💰 Платени невзети
         </button>
         <button
-          onClick={() => setHasAwaiting((v) => !v)}
+          onClick={() => selectFilter("awaiting")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasAwaiting
               ? "bg-gray-500 text-white"
@@ -5405,7 +5457,7 @@ export function Orders() {
             "товарителница" search input, gives the cashier a fast path
             to "find me everything Econt is bringing money in for". */}
         <button
-          onClick={() => setHasCod((v) => !v)}
+          onClick={() => selectFilter("cod")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasCod
               ? "bg-violet-500 text-white"
