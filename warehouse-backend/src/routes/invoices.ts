@@ -707,15 +707,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           order.partner_id,
         ]);
 
-        // Recalculate totals
-        const totalNet = items.reduce(
+        // Recalculate totals — order_items.total_price is GROSS (МЕРТ-М
+        // stores Microinvest gross prices; we extract net + VAT from
+        // gross on VAT-registered invoices, and emit gross-only when
+        // the invoice is no-VAT). Matches POST /invoices.
+        const totalGross = items.reduce(
           (sum: number, i: any) => sum + parseFloat(i.total_price),
           0,
         );
         const includeVat = invoice.include_vat !== false;
         const vatRate = includeVat ? 20 : 0;
-        const totalVat = includeVat ? totalNet * 0.2 : 0;
-        const totalGross = totalNet + totalVat;
+        const vatMul = 1 + vatRate / 100;
+        const totalNet = includeVat ? totalGross / vatMul : totalGross;
+        const totalVat = includeVat ? totalGross - totalNet : 0;
 
         const {
           rows: [{ total: paidTotal }],
