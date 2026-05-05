@@ -541,4 +541,15 @@ describe("Purchase Orders — CRUD", () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it("DELETE /:id allows note deletion", async () => {
+    mockQuery
+      .mockResolvedValueOnce(rows([{ status: "note" }]))
+      .mockResolvedValueOnce(rows([]));
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/purchase-orders/4",
+    });
+    expect(res.statusCode).toBe(204);
+  });
 });

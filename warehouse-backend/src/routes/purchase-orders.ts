@@ -228,7 +228,7 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
     },
   );
 
-  // PATCH /:id — drafts only. Items are replaced wholesale when present;
+  // PATCH /:id — drafts and notes only. Items are replaced wholesale when present;
   // partial line edits aren't worth the API complexity for this tool.
   app.patch(
     "/:id",
@@ -315,10 +315,10 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
       );
       if (rows.length === 0)
         return reply.status(404).send({ error: "Not found" });
-      if (rows[0].status !== "draft") {
+      if (rows[0].status !== "draft" && rows[0].status !== "note") {
         return reply
           .status(400)
-          .send({ error: "Само чернови могат да бъдат изтрити" });
+          .send({ error: "Само бележки и чернови могат да бъдат изтрити" });
       }
       await query("DELETE FROM purchase_orders WHERE id = $1", [id]);
       return reply.status(204).send();
