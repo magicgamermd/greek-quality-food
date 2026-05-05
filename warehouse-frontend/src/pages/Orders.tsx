@@ -4695,18 +4695,24 @@ export function Orders() {
   // open line state. Backend uses EXISTS on order_items.line_status.
   const [hasPaidNotTaken, setHasPaidNotTaken] = useState(false);
   const [hasAwaiting, setHasAwaiting] = useState(false);
+  // Econt filter pill — orders with a courier shipment + COD attached
+  // (i.e. the cashier still owes the till money once Econt collects).
+  const [hasCod, setHasCod] = useState(false);
   // Per-column text filters
   const [filters, setFilters] = useState({
     order_number: "",
     partner: "",
     invoice: "",
     stock_dispatch: "",
+    shipment: "",
     article: "",
   });
-  // Article filter is sent to the backend (other text filters are
-  // client-side fuzzy match only). Debounce so each keystroke does not
-  // hit the API.
+  // Article + shipment_number filters are sent to the backend so the
+  // search works across the full history page (not just the 50 rows
+  // currently rendered). Other text filters stay client-side fuzzy.
+  // Debounce so each keystroke does not hit the API.
   const debouncedArticle = useDebouncedValue(filters.article.trim(), 300);
+  const debouncedShipment = useDebouncedValue(filters.shipment.trim(), 300);
   // Date range filter — same pattern as Приемане на стоки
   const todayIso = new Date().toISOString().split("T")[0];
   const thirtyDaysAgoIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
@@ -4732,7 +4738,9 @@ export function Orders() {
       belowCostOnly,
       hasPaidNotTaken,
       hasAwaiting,
+      hasCod,
       debouncedArticle,
+      debouncedShipment,
     ],
     queryFn: () => {
       const parts: string[] = [];
@@ -4741,8 +4749,11 @@ export function Orders() {
       if (belowCostOnly) parts.push("below_cost_only=true");
       if (hasPaidNotTaken) parts.push("has_paid_not_taken=true");
       if (hasAwaiting) parts.push("has_awaiting=true");
+      if (hasCod) parts.push("has_cod=true");
       if (debouncedArticle)
         parts.push(`article=${encodeURIComponent(debouncedArticle)}`);
+      if (debouncedShipment)
+        parts.push(`shipment_number=${encodeURIComponent(debouncedShipment)}`);
       const params = parts.length > 0 ? `?${parts.join("&")}` : "";
       return api.get(`/orders${params}`).then((r) => {
         const d = r.data;
@@ -4804,6 +4815,12 @@ export function Orders() {
       }
       // Stock dispatch
       if (!matchField(order.stock_dispatch_number, filters.stock_dispatch))
+        return false;
+      // Shipment number — Econt tracking ID. Backend already filters
+      // server-side via `?shipment_number=...`, but the client-side
+      // pass keeps the matching consistent when the request hasn't
+      // refetched yet.
+      if (!matchField((order as any).econt_shipment_number, filters.shipment))
         return false;
 
       // Date range — based on order_date
@@ -5172,6 +5189,21 @@ export function Orders() {
         >
           ⏳ На изчакване
         </button>
+        {/* Econt COD filter — show only orders with a courier shipment
+            attached AND a cod_amount > 0. Combined with the new
+            "товарителница" search input, gives the cashier a fast path
+            to "find me everything Econt is bringing money in for". */}
+        <button
+          onClick={() => setHasCod((v) => !v)}
+          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            hasCod
+              ? "bg-violet-500 text-white"
+              : "bg-violet-50 text-violet-800 border border-violet-200 hover:bg-violet-100"
+          }`}
+          title="Покажи само поръчки с Еконт товарителница и наложен платеж"
+        >
+          🚚 Наложен платеж
+        </button>
       </div>
 
       {/* Date filter — same pattern as Приемане на стоки */}
@@ -5253,6 +5285,20 @@ export function Orders() {
               setFilters((f) => ({ ...f, stock_dispatch: e.target.value }))
             }
             placeholder="Стокова разписка"
+            className="pl-8 h-9 text-sm"
+          />
+        </div>
+        {/* Shipment-number search — paste an Econt tracking ID from the
+            email and the matching order pops up. Backend match is
+            ILIKE on econt_shipment_number, so partial codes work too. */}
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Input
+            value={filters.shipment}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, shipment: e.target.value }))
+            }
+            placeholder="№ товарителница"
             className="pl-8 h-9 text-sm"
           />
         </div>

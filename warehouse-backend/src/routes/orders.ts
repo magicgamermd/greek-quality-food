@@ -447,6 +447,15 @@ export default async function orderRoutes(app: FastifyInstance) {
       article,
       has_paid_not_taken,
       has_awaiting,
+      // Filter pill — show only orders that have an Econt shipment
+      // attached (товарителница). Combined with `has_cod` it filters
+      // down to "Еконт с наложен платеж" specifically.
+      has_econt_shipment,
+      has_cod,
+      // Search input — match the Econt shipment_number partially so
+      // the cashier can paste a tracking number from the email and
+      // jump straight to the matching order.
+      shipment_number,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -496,6 +505,20 @@ export default async function orderRoutes(app: FastifyInstance) {
         SELECT 1 FROM order_items oi
         WHERE oi.order_id = o.id AND oi.line_status = 'awaiting'
       )`;
+    }
+    // Econt filter pills.
+    if (has_econt_shipment === "true") {
+      where += ` AND o.econt_shipment_number IS NOT NULL`;
+    }
+    if (has_cod === "true") {
+      where += ` AND o.econt_shipment_number IS NOT NULL
+                 AND o.econt_cod_amount IS NOT NULL
+                 AND o.econt_cod_amount > 0`;
+    }
+    const shipmentNumber = normalizeOptionalText(shipment_number);
+    if (shipmentNumber) {
+      where += ` AND o.econt_shipment_number ILIKE $${paramIdx++}`;
+      params.push(`%${shipmentNumber}%`);
     }
 
     const fromDate = normalizeOptionalText(date_from);
