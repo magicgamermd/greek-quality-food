@@ -37,6 +37,7 @@ import {
   FileSignature,
   History,
   Building2,
+  CreditCard,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -487,9 +488,11 @@ const ProductSearch = forwardRef<
 function OrderDetailModal({
   order,
   onClose,
+  onRecordPayment,
 }: {
   order: Order | null;
   onClose: () => void;
+  onRecordPayment: (order: Order) => void;
 }) {
   const qc = useQueryClient();
   const { token: authToken } = useAuth();
@@ -1777,6 +1780,18 @@ function OrderDetailModal({
                   Изпълни поръчка
                 </Button>
               )}
+              {detail.status !== "pending" &&
+                detail.status !== "quoted" &&
+                detail.status !== "cancelled" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => onRecordPayment(detail)}
+                    className="border-emerald-500 text-emerald-700 hover:bg-emerald-50"
+                  >
+                    <CreditCard className="h-4 w-4" />
+                    Запиши плащане
+                  </Button>
+                )}
             </div>
 
             {/* Row 2 — Invoice group (available from confirmed onwards) */}
@@ -5732,6 +5747,7 @@ export function Orders() {
       <OrderDetailModal
         order={detailOrder}
         onClose={() => setDetailOrder(null)}
+        onRecordPayment={(o) => setPaymentOrder(o)}
       />
 
       {paymentOrder && (
@@ -5749,6 +5765,7 @@ export function Orders() {
                     paymentOrder.partner_name ??
                     undefined,
                   total: Number(paymentOrder.total_amount),
+                  order: paymentOrder,
                 }
               : { kind: "order-fixed", order: paymentOrder }
           }
