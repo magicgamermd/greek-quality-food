@@ -276,6 +276,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
   });
 
   const [supplierId, setSupplierId] = useState<number | null>(null);
+  const [label, setLabel] = useState("");
   const [notes, setNotes] = useState("");
   const [expectedDate, setExpectedDate] = useState("");
   const [items, setItems] = useState<PurchaseOrderItem[]>([emptyItem()]);
@@ -302,6 +303,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
     if (!open) return;
     if (isEdit && detailQuery.data) {
       setSupplierId(detailQuery.data.supplier_id);
+      setLabel(detailQuery.data.label ?? "");
       setNotes(detailQuery.data.notes ?? "");
       setExpectedDate(
         detailQuery.data.expected_delivery_date
@@ -323,6 +325,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       );
     } else if (!isEdit) {
       setSupplierId(null);
+      setLabel("");
       setNotes("");
       setExpectedDate("");
       setItems([emptyItem()]);
@@ -331,7 +334,9 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
   }, [open, isEdit, detailQuery.data?.id]);
 
   const detail = detailQuery.data;
-  const isReadOnly = isEdit && detail?.status !== "draft";
+  const isReadOnly =
+    isEdit && detail?.status !== "draft" && detail?.status !== "note";
+  const isNote = isEdit ? detail?.status === "note" : true;
 
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -342,6 +347,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       if (validItems.length === 0) throw new Error("Добави поне един артикул");
       const payload = {
         supplier_id: supplierId,
+        label: label || null,
         notes: notes || null,
         expected_delivery_date: expectedDate || null,
         items: validItems.map((i) => ({
@@ -397,6 +403,20 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       );
       qc.invalidateQueries({ queryKey: ["purchase-orders"] });
       qc.invalidateQueries({ queryKey: ["purchase-order", orderId] });
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const convertSingleNoteMut = useMutation({
+    mutationFn: () =>
+      api
+        .post("/purchase-orders/merge", { ids: [orderId] })
+        .then((r) => r.data),
+    onSuccess: (data) => {
+      toast.success(`Бележка превърната в ${data.order_number}`);
+      qc.invalidateQueries({ queryKey: ["purchase-orders"] });
+      qc.invalidateQueries({ queryKey: ["purchase-order", orderId] });
+      onClose();
     },
     onError: (err) => toast.error(getApiErrorMessage(err)),
   });
@@ -484,11 +504,21 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       >
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-3">
-            {isEdit ? `Заявка ${detail?.order_number ?? ""}` : "Нова заявка"}
+            {isEdit
+              ? isNote
+                ? `Бележка${detail?.label ? ` — ${detail.label}` : ""}`
+                : `Заявка ${detail?.order_number ?? ""}`
+              : "Нова бележка"}
             {isEdit && detail && (
               <Badge variant={STATUS_VARIANTS[detail.status]}>
                 {STATUS_LABELS[detail.status]}
               </Badge>
+            )}
+            {isEdit && (detail?.merged_from_count ?? 0) > 0 && (
+              <span className="text-xs text-gray-500">
+                от {detail!.merged_from_count}{" "}
+                {detail!.merged_from_count === 1 ? "бележка" : "бележки"}
+              </span>
             )}
           </DialogTitle>
           <p className="text-xs text-gray-400 mt-1">
@@ -531,16 +561,31 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                   ))}
                 </select>
               </div>
+              {!isNote && (
+                <div>
+                  <Label>Очаквана дата на доставка</Label>
+                  <Input
+                    type="date"
+                    value={expectedDate}
+                    disabled={isReadOnly}
+                    onChange={(e) => setExpectedDate(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {isNote && (
               <div>
-                <Label>Очаквана дата на доставка</Label>
+                <Label>Етикет (опционално)</Label>
                 <Input
-                  type="date"
-                  value={expectedDate}
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="напр. Кухня в Хемус"
+                  maxLength={120}
                   disabled={isReadOnly}
-                  onChange={(e) => setExpectedDate(e.target.value)}
                 />
               </div>
-            </div>
+            )}
 
             {/* Items */}
             <div>
@@ -703,7 +748,21 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                 ? "Запазване…"
                 : isEdit
                   ? "Запази промените"
-                  : "Създай заявка"}
+                  : isNote
+                    ? "Създай бележка"
+                    : "Създай заявка"}
+            </Button>
+          )}
+          {isEdit && isNote && (
+            <Button
+              variant="outline"
+              onClick={() => convertSingleNoteMut.mutate()}
+              disabled={convertSingleNoteMut.isPending}
+            >
+              <Merge className="h-4 w-4 mr-1" />
+              {convertSingleNoteMut.isPending
+                ? "Превръщане…"
+                : "Превърни в заявка"}
             </Button>
           )}
           {isEdit && detail?.status === "draft" && (
@@ -784,8 +843,7 @@ export default function PurchaseOrders() {
   const noteDetails = useQueries({
     queries: noteIds.map((id) => ({
       queryKey: ["purchase-order", id],
-      queryFn: () =>
-        api.get(`/purchase-orders/${id}`).then((r) => r.data),
+      queryFn: () => api.get(`/purchase-orders/${id}`).then((r) => r.data),
       staleTime: 30_000,
     })),
   });
