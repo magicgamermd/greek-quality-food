@@ -48,6 +48,7 @@ const createSchema = z.object({
 const updateSchema = z.object({
   supplier_id: z.number().int().positive().optional(),
   notes: z.string().nullish().optional(),
+  label: z.string().max(120).nullish().optional(),
   expected_delivery_date: z.string().nullish().optional(),
   items: z.array(itemSchema).optional(),
 });
@@ -253,11 +254,9 @@ export default async function purchaseOrderRoutes(app: FastifyInstance) {
           if (!existing) {
             throw Object.assign(new Error("Not found"), { statusCode: 404 });
           }
-          if (existing.status !== "draft") {
+          if (existing.status !== "draft" && existing.status !== "note") {
             throw Object.assign(
-              new Error(
-                "Само заявки в статус 'Чернова' могат да се редактират",
-              ),
+              new Error("Само бележки и чернови могат да се редактират"),
               { statusCode: 400 },
             );
           }

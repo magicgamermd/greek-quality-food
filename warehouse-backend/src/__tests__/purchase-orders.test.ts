@@ -494,4 +494,51 @@ describe("Purchase Orders — CRUD", () => {
     expect(res.statusCode).toBe(201);
     expect(res.json().label).toBe("Кухня в Хемус");
   });
+
+  it("PATCH /:id allows editing a note (status='note')", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi
+          .fn()
+          // SELECT FOR UPDATE
+          .mockResolvedValueOnce(rows([{ id: 5, status: "note" }]))
+          // UPDATE purchase_orders
+          .mockResolvedValueOnce(rows([]))
+          // DELETE items + INSERT items
+          .mockResolvedValueOnce(rows([]))
+          .mockResolvedValueOnce(rows([])),
+      };
+      return cb(client as any);
+    });
+    mockQuery
+      .mockResolvedValueOnce(
+        rows([{ id: 5, status: "note", supplier_name: "S" }]),
+      )
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/purchase-orders/5",
+      payload: {
+        label: "Updated label",
+        items: [{ product_id: 10, quantity: 3 }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("PATCH /:id rejects sent orders (unchanged behavior)", async () => {
+    mockTransaction.mockImplementationOnce(async (cb: any) => {
+      const client = {
+        query: vi.fn().mockResolvedValueOnce(rows([{ id: 5, status: "sent" }])),
+      };
+      return cb(client as any);
+    });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/purchase-orders/5",
+      payload: { label: "x" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });
