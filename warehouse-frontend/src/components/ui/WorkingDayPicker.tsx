@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
-import {
-  isWorkingDay,
-  isPast,
-  nonWorkingReason,
-  toIsoDate,
-} from "@/lib/bgCalendar";
+import { getHoliday, isPast, isWeekend, toIsoDate } from "@/lib/bgCalendar";
 
 export interface WorkingDayPickerRoute {
   receiverCity: string;
@@ -125,13 +120,19 @@ export function WorkingDayPicker({
 
   const grid = useMemo(() => buildGrid(viewDate), [viewDate]);
 
-  // Pre-validate visible month's working days through Econt when route + token
-  // are both available. Each call is cached server-side for 24h.
+  // Pre-validate the visible month through Econt when route + token are
+  // both available. Office mode is skipped (backend short-circuits to
+  // valid). Address mode validates ALL future dates including weekends —
+  // the courier service Econt offers for some routes does include
+  // Saturday/Sunday pickup, so static weekend exclusion would mislead
+  // the user. Each call is cached server-side for 24h.
   useEffect(() => {
     if (!open || !econtRoute || !token || !econtRoute.weight) return;
+    // Skip pre-validation for office delivery — Econt accepts every date
+    // for any valid office, so the API calls would be pure noise.
+    if (econtRoute.receiverOfficeCode) return;
     const candidates = grid.filter(
-      (d) =>
-        d.getMonth() === viewDate.getMonth() && isWorkingDay(d) && !isPast(d),
+      (d) => d.getMonth() === viewDate.getMonth() && !isPast(d),
     );
     let cancelled = false;
     const next: typeof econtChecks = { ...econtChecks };
@@ -247,7 +248,12 @@ export function WorkingDayPicker({
             {grid.map((d) => {
               const iso = toIsoDate(d);
               const inMonth = d.getMonth() === viewDate.getMonth();
-              const staticReason = nonWorkingReason(d);
+              // Hard blockers: only past dates are unconditionally
+              // blocked. Weekends and BG holidays are advisory only —
+              // Econt actually offers Sat/Sun courier service for some
+              // routes, so static blocking would over-restrict. Econt's
+              // own validation result decides for the rest.
+              const past = isPast(d);
               const econtState = econtChecks[iso];
               const econtReason =
                 econtState && econtState !== "loading" && !econtState.valid
@@ -255,8 +261,18 @@ export function WorkingDayPicker({
                   : null;
               const isSelected = value === iso;
               const isLoading = econtState === "loading";
-              const blocked = !!staticReason || !!econtReason;
-              const tooltip = staticReason || econtReason || "";
+              const blocked = past || !!econtReason;
+
+              // Visual hints (greyed but still selectable):
+              const holidayName = getHoliday(d);
+              const weekend = isWeekend(d);
+              const advisory = holidayName ?? (weekend ? "Уикенд" : null);
+
+              const tooltip = past
+                ? "Минала дата"
+                : econtReason
+                  ? `Еконт: ${econtReason}`
+                  : (advisory ?? "");
 
               return (
                 <button
@@ -278,7 +294,9 @@ export function WorkingDayPicker({
                     isSelected
                       ? "bg-[#f97316] text-white font-semibold"
                       : !blocked && inMonth
-                        ? "hover:bg-orange-50 text-gray-900"
+                        ? advisory
+                          ? "hover:bg-orange-50 text-gray-500 italic"
+                          : "hover:bg-orange-50 text-gray-900"
                         : "",
                   ].join(" ")}
                 >
@@ -293,8 +311,12 @@ export function WorkingDayPicker({
 
           {/* Legend */}
           <div className="mt-2 pt-2 border-t border-gray-100 text-[10px] text-gray-500 leading-relaxed">
-            Сиво — неработни дни (събота / неделя / празник) или дни, които
-            Еконт отказва за този маршрут.
+            Зачертаните дни са минали или Еконт ги отказва за този маршрут.
+            <span className="italic text-gray-400">
+              {" "}
+              Курсивни — почивни (събота / неделя / празник), но някои са
+              достъпни за пратки според маршрута.
+            </span>
           </div>
         </div>
       )}
