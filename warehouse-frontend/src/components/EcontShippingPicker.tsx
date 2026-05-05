@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Truck, ChevronDown, ChevronUp } from "lucide-react";
+import { WorkingDayPicker } from "@/components/ui/WorkingDayPicker";
 
 interface City {
   id: number;
@@ -383,29 +384,42 @@ export function EcontShippingPicker({
                   />
                 </div>
               </div>
-              {/* Date picker — Econt requires this for address delivery */}
+              {/* Date picker — Econt requires this for address delivery.
+                  Custom WorkingDayPicker greys out weekends, BG holidays
+                  and Econt-rejected dates for the chosen route. */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
                   Дата на доставка *
                 </label>
-                <input
-                  type="date"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                <WorkingDayPicker
                   value={
                     value.econt_shipment_date ??
                     (() => {
                       const t = new Date();
                       t.setDate(t.getDate() + 1);
-                      return t.toISOString().slice(0, 10);
+                      const y = t.getFullYear();
+                      const m = String(t.getMonth() + 1).padStart(2, "0");
+                      const d = String(t.getDate()).padStart(2, "0");
+                      return `${y}-${m}-${d}`;
                     })()
                   }
-                  onChange={(e) =>
-                    onChange({ econt_shipment_date: e.target.value })
+                  onChange={(iso) => onChange({ econt_shipment_date: iso })}
+                  apiBaseUrl={apiBaseUrl}
+                  token={token}
+                  econtRoute={
+                    cityInput && (debouncedWeight ?? 0) > 0
+                      ? {
+                          receiverCity: cityInput,
+                          receiverStreet: value.econt_street,
+                          receiverNum: value.econt_street_num,
+                          weight: debouncedWeight,
+                        }
+                      : null
                   }
                 />
                 <p className="text-[11px] text-gray-500 mt-1">
-                  Еконт изисква дата на доставка при изпращане до адрес. По
-                  подразбиране — утрешен ден.
+                  Сивите дни са почивни (събота / неделя / празник) или отказани
+                  от Еконт за този маршрут. По подразбиране — утрешен ден.
                 </p>
               </div>
             </>

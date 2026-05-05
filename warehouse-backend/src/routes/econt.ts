@@ -33,10 +33,20 @@ function normalizeIsoDate(input: unknown): string {
 let citiesCache: any[] | null = null;
 let officesCache: any[] | null = null;
 
+// In-memory cache for /validate-shipment-date — keyed by route+date,
+// 24h TTL. Spares the Econt API from re-validating the same calendar
+// cell after the user clicks back to it.
+type ValidateCacheEntry = {
+  value: { valid: boolean; reason?: string };
+  expiresAt: number;
+};
+const validateDateCache = new Map<string, ValidateCacheEntry>();
+
 // Exported for tests that need to reset cache between runs.
 export function __resetEcontCaches() {
   citiesCache = null;
   officesCache = null;
+  validateDateCache.clear();
   __resetSenderCache();
   __primeSenderFromEnv();
 }
@@ -295,11 +305,105 @@ export default async function econtRoutes(app: FastifyInstance) {
 
       const priceBGN = result.label?.totalPrice ?? result.totalPrice ?? 0;
       const priceEUR = Math.round((priceBGN / 1.95583) * 100) / 100;
+      // Diagnostic log gated by env var. Set ECONT_DEBUG=1 to surface what
+      // the API actually returned for office vs address mode comparison.
+      if (process.env.ECONT_DEBUG === "1") {
+        const mode = receiverOfficeCode ? "office" : "address";
+        console.log(
+          `[econt/calculate] mode=${mode} city=${receiverCity} weight=${weight} → priceBGN=${priceBGN} (totalPrice=${result.label?.totalPrice ?? "—"}, top-level=${result.totalPrice ?? "—"})`,
+        );
+      }
       return reply.send({
         price: priceEUR,
         priceBGN,
         currency: "EUR",
       });
+    },
+  );
+
+  // POST /econt/validate-shipment-date — does Econt accept this sendDate
+  // for the given route + weight? Wraps the createLabel API in
+  // mode:"validate" and either echoes a 200 {valid:true} or surfaces
+  // Econt's error message in {valid:false, reason}. Cached in-memory
+  // for 24h by (city|office|street/num, date) to spare the API quota.
+  app.post(
+    "/validate-shipment-date",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+
+      const {
+        receiverCity,
+        receiverPostCode,
+        receiverOfficeCode,
+        receiverStreet,
+        receiverNum,
+        weight,
+        date,
+      } = request.body as {
+        receiverCity: string;
+        receiverPostCode?: string;
+        receiverOfficeCode?: string;
+        receiverStreet?: string;
+        receiverNum?: string;
+        weight: number;
+        date: string;
+      };
+
+      if (!receiverCity || !weight || !date) {
+        return reply
+          .status(400)
+          .send({ error: "receiverCity, weight and date are required" });
+      }
+
+      const sendDate = normalizeIsoDate(date);
+      const cacheKey = `${receiverCity}|${receiverOfficeCode ?? `${receiverStreet ?? ""}/${receiverNum ?? ""}`}|${sendDate}`;
+      const cached = validateDateCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return reply.send(cached.value);
+      }
+
+      const shipmentType =
+        weight > 500 ? "pallet" : weight > 50 ? "cargo" : "pack";
+
+      const label: any = {
+        ...(await resolveSender()),
+        receiverClient: { name: "Валидация", phones: ["0000000000"] },
+        shipmentType,
+        weight,
+        packCount: 1,
+        sendDate,
+      };
+
+      if (receiverOfficeCode) {
+        label.receiverOfficeCode = receiverOfficeCode;
+      } else {
+        label.receiverAddress = {
+          city: { name: receiverCity, postCode: receiverPostCode || "" },
+          street: receiverStreet || "Тест",
+          num: receiverNum || "1",
+        };
+      }
+
+      let response: { valid: boolean; reason?: string };
+      try {
+        await econtPost("Shipments/LabelService.createLabel.json", {
+          mode: "validate",
+          label,
+        });
+        response = { valid: true };
+      } catch (err: any) {
+        // econtPost throws with statusCode 400 + message "Еконт: <…>".
+        // Treat any rejection as an invalid date with the surfaced reason.
+        const msg = (err?.message ?? "").replace(/^Еконт:\s*/, "");
+        response = { valid: false, reason: msg || "Невалидна дата" };
+      }
+
+      validateDateCache.set(cacheKey, {
+        value: response,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      });
+      return reply.send(response);
     },
   );
 
