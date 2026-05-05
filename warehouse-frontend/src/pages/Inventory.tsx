@@ -233,28 +233,19 @@ export function Inventory() {
 
       const params = new URLSearchParams();
       params.set("page", String(page));
-      params.set("limit", String(tab === "negative" ? 500 : pageSize));
+      params.set("limit", String(pageSize));
       if (search.trim()) params.set("search", search.trim());
 
       if (base === "/inventory") {
         if (tab === "available") params.set("has_stock", "true");
         else if (tab === "zero") params.set("has_stock", "zero");
-        // "negative" → no filter, we paginate client-side after filter
+        else if (tab === "negative") params.set("has_stock", "negative");
       }
 
       return api.get(`${base}?${params}`).then((r) => {
         const d = r.data;
         const arr = Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
         const normalized = arr.map((item: any) => normalizeInventoryItem(item));
-        if (tab === "negative") {
-          const onlyNegative = normalized
-            .filter((it: StockLevel) => Number(it.total_quantity ?? 0) < 0)
-            .sort(
-              (a: StockLevel, b: StockLevel) =>
-                Number(a.total_quantity ?? 0) - Number(b.total_quantity ?? 0),
-            );
-          return { items: onlyNegative, total: onlyNegative.length };
-        }
         const total = d?.pagination?.total ?? d?.count ?? arr.length;
         return { items: normalized, total };
       });

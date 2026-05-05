@@ -274,11 +274,23 @@ export default async function productRoutes(app: FastifyInstance) {
       params.push(`%${supplier_group}%`);
     }
 
-    // active_only filter: only products with stock > 0
+    // active_only filter: only products with stock > 0.
+    // zero_stock / negative_stock are catalog-only views — surfaced as
+    // pills next to "С цени / Без цени" so the cashier can spot
+    // products waiting to be reordered (zero) or already oversold
+    // (negative). Both bypass active_only and run their own HAVING.
+    const { zero_stock, negative_stock } = request.query as any;
     const showActiveOnly =
-      active_only === "true" || (active_only !== "false" && catalog !== "true");
+      zero_stock !== "true" &&
+      negative_stock !== "true" &&
+      (active_only === "true" ||
+        (active_only !== "false" && catalog !== "true"));
     let havingClause = "";
-    if (showActiveOnly) {
+    if (zero_stock === "true") {
+      havingClause = "HAVING COALESCE(SUM(inv.quantity), 0) = 0";
+    } else if (negative_stock === "true") {
+      havingClause = "HAVING COALESCE(SUM(inv.quantity), 0) < 0";
+    } else if (showActiveOnly) {
       havingClause = "HAVING COALESCE(SUM(inv.quantity), 0) > 0";
     } else if (low_stock === "true") {
       havingClause =

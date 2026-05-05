@@ -71,6 +71,13 @@ export default async function inventoryRoutes(app: FastifyInstance) {
       havingConds.push("COALESCE(SUM(inv.quantity), 0) > 0");
     } else if (has_stock === "zero") {
       havingConds.push("COALESCE(SUM(inv.quantity), 0) = 0");
+    } else if (has_stock === "negative") {
+      // "На минус" tab in the warehouse view — products that have been
+      // sold past zero (paid_not_taken or admin-confirmed oversell).
+      // Was previously handled by fetching every inventory row and
+      // filtering client-side, which silently capped at limit=500 and
+      // missed the matches when negatives sat after the first page.
+      havingConds.push("COALESCE(SUM(inv.quantity), 0) < 0");
     }
 
     const having =

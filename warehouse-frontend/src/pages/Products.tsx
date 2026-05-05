@@ -589,7 +589,12 @@ function CategoryManagerModal({
   );
 }
 
-type PriceFilter = "with_price" | "all" | "no_price";
+type PriceFilter =
+  | "with_price"
+  | "all"
+  | "no_price"
+  | "zero_stock"
+  | "negative_stock";
 type StockTab = "active" | "catalog";
 
 export function Products() {
@@ -632,8 +637,16 @@ export function Products() {
       if (brandFilter) params.set("brand", brandFilter);
       if (priceFilter === "no_price") params.set("no_selling_price", "true");
       if (priceFilter === "with_price") params.set("has_price", "true");
-      // Stock tab: active_only=true for "Налични", catalog=true for "Каталог"
-      if (stockTab === "active") {
+      if (priceFilter === "zero_stock") params.set("zero_stock", "true");
+      if (priceFilter === "negative_stock")
+        params.set("negative_stock", "true");
+      // Stock tab: active_only=true for "Налични", catalog=true for "Каталог".
+      // The new stock-based filters (zero/negative) need the catalog scope so
+      // the HAVING clause they push can match products that are currently
+      // outside the active_only=true cut.
+      const stockFilterActive =
+        priceFilter === "zero_stock" || priceFilter === "negative_stock";
+      if (stockTab === "active" && !stockFilterActive) {
         params.set("active_only", "true");
       } else {
         params.set("catalog", "true");
@@ -720,6 +733,8 @@ export function Products() {
     { value: "all", label: "Всички" },
     { value: "with_price", label: "С цени" },
     { value: "no_price", label: "Без цени" },
+    { value: "zero_stock", label: "🟡 Нулеви" },
+    { value: "negative_stock", label: "🔴 На минус" },
   ];
 
   return (
