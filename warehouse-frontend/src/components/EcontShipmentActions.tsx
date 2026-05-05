@@ -142,6 +142,14 @@ export function EcontShipmentActions({
           receiverName: order.econt_receiver_name,
           receiverPhone: order.econt_receiver_phone,
           receiverCity: order.econt_city,
+          // Per Econt API spec, the receiver's `city.postCode` is a
+          // required field on the shipment. Auto-filled by the picker
+          // when the city is chosen from the catalogue; the form's
+          // current edit may not have flushed to the order row yet,
+          // so prefer it over the persisted value.
+          receiverPostCode:
+            (form.econt_post_code ?? (order as any).econt_post_code) ||
+            undefined,
           // Send EITHER office OR address — backend treats a truthy
           // receiverOfficeCode as "office delivery" regardless of street.
           // Use the order's stored delivery type (or fall back to "office"

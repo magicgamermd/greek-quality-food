@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Truck, ChevronDown, ChevronUp } from "lucide-react";
 import { WorkingDayPicker } from "@/components/ui/WorkingDayPicker";
@@ -21,6 +21,14 @@ export interface EcontShippingValue {
   econt_receiver_name: string;
   econt_receiver_phone: string;
   econt_city: string;
+  /**
+   * Auto-filled from the Econt city catalogue (`getCities.postCode`)
+   * the moment the picked city name matches an entry. Per Econt API
+   * docs the `city.postCode` field is required when creating a label,
+   * so the picker keeps it in sync with the selected city instead of
+   * asking the cashier to type it manually.
+   */
+  econt_post_code?: string;
   econt_office_code?: string;
   econt_office_name?: string;
   econt_street?: string;
@@ -110,14 +118,27 @@ export function EcontShippingPicker({
     placeholderData: keepPreviousData,
   });
 
-  // Resolve city ID by exact name match — needed for street autocomplete
-  const cityId = useMemo(() => {
+  // Resolve city ID + postCode by exact name match. ID drives street
+  // autocomplete; postCode is a required Econt label field that we
+  // auto-fill so the cashier doesn't have to look it up manually.
+  const cityMatch = useMemo(() => {
     const list = citiesQuery.data?.data || [];
-    const exact = list.find(
-      (c) => c.name === cityInput || c.nameEn === cityInput,
+    return (
+      list.find((c) => c.name === cityInput || c.nameEn === cityInput) ?? null
     );
-    return exact?.id ?? null;
   }, [citiesQuery.data, cityInput]);
+  const cityId = cityMatch?.id ?? null;
+  const cityPostCode = cityMatch?.postCode ?? "";
+
+  // Mirror the matched postCode onto the form value so it travels with
+  // /econt/calculate, /econt/shipment, and the order's persisted Econt
+  // payload. Effect runs only when the postCode actually changes; the
+  // guard avoids a write-loop with the parent's onChange.
+  useEffect(() => {
+    if (cityPostCode && value.econt_post_code !== cityPostCode) {
+      onChange({ econt_post_code: cityPostCode });
+    }
+  }, [cityPostCode, value.econt_post_code, onChange]);
 
   const streetInput = value.econt_street ?? "";
   const debouncedStreet = useDebouncedValue(streetInput);
@@ -183,6 +204,10 @@ export function EcontShippingPicker({
         "/econt/calculate",
         {
           receiverCity: cityInput,
+          // Per Econt API docs, `city.postCode` is a required field on
+          // the receiver block — passed through here so the calculator
+          // doesn't fall back to a different city with the same name.
+          receiverPostCode: cityPostCode || undefined,
           // Send EITHER office OR address — never both. The backend treats a
           // truthy receiverOfficeCode as "office delivery" regardless of any
           // street fields, so leftover office_code from a previous picker
@@ -289,22 +314,48 @@ export function EcontShippingPicker({
                 <option value="address">До адрес</option>
               </select>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Град
-              </label>
-              <input
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
-                placeholder="Започнете да пишете..."
-                value={cityInput}
-                onChange={(e) => onChange({ econt_city: e.target.value })}
-                list="econt-city-list"
-              />
-              <datalist id="econt-city-list">
-                {(citiesQuery.data?.data || []).map((c) => (
-                  <option key={c.id} value={c.name} />
-                ))}
-              </datalist>
+            <div className="grid grid-cols-[1fr_110px] gap-2">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Град
+                </label>
+                <input
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                  placeholder="Започнете да пишете..."
+                  value={cityInput}
+                  onChange={(e) => {
+                    // Reset post code when the city text is edited;
+                    // the auto-fill effect re-applies it once the new
+                    // input matches a known city. Without this reset
+                    // the previously matched postCode would briefly
+                    // travel with a half-typed wrong city.
+                    onChange({
+                      econt_city: e.target.value,
+                      econt_post_code: undefined,
+                    });
+                  }}
+                  list="econt-city-list"
+                />
+                <datalist id="econt-city-list">
+                  {(citiesQuery.data?.data || []).map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.postCode ? `${c.postCode}` : ""}
+                    </option>
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Пощ. код
+                </label>
+                <input
+                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700"
+                  placeholder="—"
+                  value={value.econt_post_code ?? ""}
+                  readOnly
+                  title="Авто-попълва се при избор на град от списъка"
+                />
+              </div>
             </div>
           </div>
 
