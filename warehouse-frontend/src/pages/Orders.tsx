@@ -695,6 +695,14 @@ function OrderDetailModal({
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["order-detail"] });
       refetchDetail();
+      toast.success("Статусът е обновен");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при обновяване на статуса",
+      );
     },
   });
 
@@ -719,6 +727,14 @@ function OrderDetailModal({
     mutationFn: (id: number) => api.post(`/orders/${id}/fulfill`),
     onSuccess: () => {
       invalidateAllOrderRelated();
+      toast.success("Поръчката е изпълнена");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при изпълнение на поръчката",
+      );
     },
   });
 
@@ -789,6 +805,14 @@ function OrderDetailModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["order-detail"] });
+      toast.success("Касовата бележка е принтирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при принтиране на касова бележка",
+      );
     },
   });
 
@@ -796,6 +820,14 @@ function OrderDetailModal({
     mutationFn: (id: number) => api.post(`/orders/${id}/dispatch-to-warehouse`),
     onSuccess: () => {
       invalidateAllOrderRelated();
+      toast.success("Поръчката е изпратена към склад");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при изпращане към склад",
+      );
     },
   });
 
@@ -843,6 +875,14 @@ function OrderDetailModal({
       if (newInvoiceId) {
         setTimeout(() => void openInvoicePdf(newInvoiceId), 300);
       }
+      toast.success("Фактурата е генерирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при генериране на фактура",
+      );
     },
   });
 
@@ -851,6 +891,14 @@ function OrderDetailModal({
       api.post(`/invoices/${invoiceId}/send-email`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["order-detail"] });
+      toast.success("Фактурата е изпратена по имейл");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при изпращане на фактура",
+      );
     },
   });
 
@@ -861,6 +909,14 @@ function OrderDetailModal({
       api.put(`/orders/${id}/status`, { status: "confirmed" }),
     onSuccess: () => {
       invalidateAllOrderRelated();
+      toast.success("Статусът е обновен");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при потвърждение на поръчката",
+      );
     },
   });
 
@@ -869,12 +925,32 @@ function OrderDetailModal({
   const handoverMutation = useMutation({
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) =>
       api.post(`/orders/${orderId}/items/${itemId}/handover`),
-    onSuccess: () => invalidateAllOrderRelated(),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+      toast.success("Артикулът е предаден");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при предаване на артикула",
+      );
+    },
   });
   const confirmAwaitingMutation = useMutation({
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) =>
       api.post(`/orders/${orderId}/items/${itemId}/confirm-from-awaiting`),
-    onSuccess: () => invalidateAllOrderRelated(),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+      toast.success("Артикулът е потвърден");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при потвърждение на артикула",
+      );
+    },
   });
 
   // Batch E — Quotation transitions. /quote moves pending → quoted (and
@@ -885,6 +961,14 @@ function OrderDetailModal({
     onSuccess: (_res, id) => {
       invalidateAllOrderRelated();
       void handleDocDownload(id, "offer");
+      toast.success("Офертата е генерирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при генериране на оферта",
+      );
     },
   });
 
@@ -892,6 +976,14 @@ function OrderDetailModal({
     mutationFn: (id: number) => api.post(`/orders/${id}/unquote`),
     onSuccess: () => {
       invalidateAllOrderRelated();
+      toast.success("Офертата е върната към обработка");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при връщане на офертата",
+      );
     },
   });
 
@@ -908,6 +1000,14 @@ function OrderDetailModal({
     },
     onSuccess: () => {
       invalidateAllOrderRelated();
+      toast.success("Фактурата е регенерирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при регенериране на фактура",
+      );
     },
   });
 
@@ -928,6 +1028,14 @@ function OrderDetailModal({
       if (cnId) {
         setTimeout(() => void openInvoicePdf(cnId), 300);
       }
+      toast.success("Кредитното известие е издадено");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при издаване на кредитно известие",
+      );
     },
   });
 
@@ -938,6 +1046,14 @@ function OrderDetailModal({
       invalidateAllOrderRelated();
       setCancelInvoiceOpen(false);
       setCancelInvoiceReason("");
+      toast.success("Фактурата е анулирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при анулиране на фактура",
+      );
     },
   });
 
@@ -948,6 +1064,7 @@ function OrderDetailModal({
     onSuccess: () => {
       invalidateAllOrderRelated();
       setGeneratedInvoiceId(null);
+      toast.success("Фактурата е изтрита");
     },
     onError: (err: any) => {
       const detail =
@@ -4600,7 +4717,17 @@ export function Orders() {
 
   const fulfillMutation = useMutation({
     mutationFn: (id: number) => api.post(`/orders/${id}/fulfill`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      toast.success("Поръчката е изпълнена");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при изпълнение на поръчката",
+      );
+    },
   });
 
   const [pendingFulfillOversell, setPendingFulfillOversell] = useState<{
@@ -4676,23 +4803,63 @@ export function Orders() {
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       api.put(`/orders/${id}/status`, { status }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      toast.success("Статусът е обновен");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при обновяване на статуса",
+      );
+    },
   });
 
   const invoiceMutation = useMutation({
     mutationFn: (id: number) => api.post("/invoices", { order_id: id }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      toast.success("Фактурата е генерирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при генериране на фактура",
+      );
+    },
   });
 
   const fiscalReceiptMutation = useMutation({
     mutationFn: (id: number) => api.post("/fiscal/receipt", { order_id: id }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      toast.success("Касовата бележка е принтирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при принтиране на касова бележка",
+      );
+    },
   });
 
   const regenerateInvoiceMutation = useMutation({
     mutationFn: (invoiceId: number) =>
       api.put(`/invoices/${invoiceId}/regenerate`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      toast.success("Фактурата е регенерирана");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при регенериране на фактура",
+      );
+    },
   });
 
   const deleteOrderMutation = useMutation({
@@ -4700,6 +4867,14 @@ export function Orders() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["partner-order-counts"] });
+      toast.success("Поръчката е изтрита");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при изтриване на поръчката",
+      );
     },
   });
 

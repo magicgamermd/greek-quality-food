@@ -14,6 +14,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import type { Invoice } from "@/types";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -205,7 +206,17 @@ export function Invoices() {
 
   const markSentMutation = useMutation({
     mutationFn: (id: number) => api.patch(`/invoices/${id}/mark-sent`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["invoices"] });
+      toast.success("Фактурата е маркирана като изпратена");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при маркиране на фактурата",
+      );
+    },
   });
 
   const creditNoteMutation = useMutation({
@@ -218,6 +229,14 @@ export function Invoices() {
       qc.invalidateQueries({ queryKey: ["invoices"] });
       setCreditNoteModal(null);
       setCreditNoteReason("");
+      toast.success("Кредитното известие е издадено");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при издаване на кредитно известие",
+      );
     },
   });
 

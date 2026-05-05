@@ -10,6 +10,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
 import type { Product, Category } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -160,6 +161,14 @@ function ProductModal({
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["brands"] });
       onClose();
+      toast.success(product ? "Продуктът е обновен" : "Продуктът е създаден");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при запис на продукта",
+      );
     },
   });
   const saveError = mutation.error
@@ -439,6 +448,14 @@ function CategoryManagerModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
       setForm({ name_bg: "", name_en: "" });
+      toast.success("Категорията е създадена");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при запис на категорията",
+      );
     },
   });
 
@@ -447,6 +464,14 @@ function CategoryManagerModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
       qc.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Категорията е изтрита");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при изтриване на категорията",
+      );
     },
   });
 
@@ -669,7 +694,17 @@ export function Products() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.delete(`/products/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["products"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Продуктът е изтрит");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при изтриване на продукта",
+      );
+    },
   });
 
   const openAdd = () => {

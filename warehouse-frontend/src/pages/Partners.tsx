@@ -11,6 +11,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import type { Partner, PriceListItem, Product } from "@/types";
 import { formatCurrency } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -143,6 +144,14 @@ function PartnerModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["partners"] });
       onClose();
+      toast.success(partner ? "Партньорът е обновен" : "Партньорът е създаден");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при запис на партньора",
+      );
     },
   });
 
@@ -447,6 +456,14 @@ function PriceListModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["price-list", partner.id] });
       onClose();
+      toast.success("Ценовата листа е запазена");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при запис на ценовата листа",
+      );
     },
   });
 
@@ -554,6 +571,14 @@ function PriceGroupSelect({
       api.put(`/partners/${partnerId}`, { price_group }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["partners"] });
+      toast.success("Ценовата група е обновена");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при смяна на ценова група",
+      );
     },
   });
 
