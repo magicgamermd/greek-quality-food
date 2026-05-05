@@ -45,7 +45,9 @@ describe("generateDailyReportPdf", () => {
       payments: {
         byMethod: [{ method: "cash", count: 1, sum: 359.11 }],
         total: 359.11,
+        rows: [],
       },
+      expectedCod: { count: 0, total: 0, rows: [] },
       econtShipments: [],
       outstanding: { totalRemaining: 0, totalCount: 0, top10: [] },
       topProducts: [
@@ -73,7 +75,8 @@ describe("generateDailyReportPdf", () => {
         cancelled: { count: 0, sum: 0 },
         byPaymentMethod: [],
       },
-      payments: { byMethod: [], total: 0 },
+      payments: { byMethod: [], total: 0, rows: [] },
+      expectedCod: { count: 0, total: 0, rows: [] },
       econtShipments: [],
       outstanding: { totalRemaining: 0, totalCount: 0, top10: [] },
       topProducts: [],
@@ -98,7 +101,8 @@ describe("generateDailyReportPdf", () => {
         cancelled: { count: 0, sum: 0 },
         byPaymentMethod: [],
       },
-      payments: { byMethod: [], total: 0 },
+      payments: { byMethod: [], total: 0, rows: [] },
+      expectedCod: { count: 0, total: 0, rows: [] },
       econtShipments: [
         {
           order_number: 102,

@@ -297,6 +297,56 @@ async function assembleDailyReportData(
     0,
   );
 
+  // 5b) Detailed payments rows for the day — feeds the cashier-style
+  // payments table on the PDF. Joins through invoices to surface the
+  // order number + partner that the cash hit. invoice_status is exposed
+  // so the PDF can prefix "[АНУЛИРАНА]" when the invoice was cancelled
+  // after the payment landed (rare but possible with refunds).
+  const { rows: paymentDetailRows } = await query(
+    `SELECT pmt.id,
+            pmt.amount::numeric AS amount,
+            pmt.payment_method AS method,
+            pmt.bank_reference AS reference,
+            pmt.paid_at,
+            COALESCE(o.order_number, o2.order_number) AS order_number,
+            COALESCE(p.name, p2.name) AS partner_name,
+            i.status AS invoice_status
+       FROM payments pmt
+       LEFT JOIN invoices i ON i.id = pmt.invoice_id
+       LEFT JOIN orders o2 ON o2.invoice_id = i.id
+       LEFT JOIN orders o ON o.id = pmt.order_id
+       LEFT JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN partners p2 ON p2.id = i.partner_id
+      WHERE DATE(pmt.paid_at) = $1
+      ORDER BY pmt.paid_at DESC, pmt.id DESC`,
+    [date],
+  );
+
+  // 5c) "Очакван наложен платеж" — Econt COD shipments dispatched today
+  // whose money will only arrive when Econt delivers. Surfaced as a
+  // separate KPI / table block so the cashier can see the gap between
+  // "money in the till today" and "money expected from couriers".
+  const { rows: expectedCodRows } = await query(
+    `SELECT o.id,
+            o.order_number,
+            p.name AS partner_name,
+            o.econt_shipment_number AS shipment_number,
+            o.econt_cod_amount::numeric AS cod_amount,
+            COALESCE(o.econt_shipment_date, o.created_at) AS shipped_at
+       FROM orders o
+       LEFT JOIN partners p ON p.id = o.partner_id
+      WHERE o.econt_shipment_number IS NOT NULL
+        AND o.econt_cod_amount IS NOT NULL
+        AND o.econt_cod_amount > 0
+        AND DATE(COALESCE(o.econt_shipment_date, o.created_at)) = $1
+      ORDER BY o.order_number ASC`,
+    [date],
+  );
+  const expectedCodTotal = expectedCodRows.reduce(
+    (s: number, r: any) => s + parseFloat(r.cod_amount ?? 0),
+    0,
+  );
+
   // 6) Outstanding invoices snapshot at end of $date — totals.
   // Excludes: credit notes themselves, cancelled invoices, and invoices that
   // have been credit-noted (i.e. a credit_note row points at them).
@@ -411,6 +461,29 @@ async function assembleDailyReportData(
         sum: parseFloat(r.sum ?? 0),
       })),
       total: paymentTotal,
+      // Per-row detail for the cashier-style payments table on the PDF.
+      // `paid_at` is preserved as ISO so the renderer can format it
+      // however it wants (the existing report uses dd.MM.yyyy HH:mm).
+      rows: paymentDetailRows.map((r: any) => ({
+        order_number: r.order_number ?? null,
+        partner_name: r.partner_name ?? "—",
+        paid_at: r.paid_at,
+        method: r.method,
+        reference: r.reference ?? null,
+        amount: parseFloat(r.amount ?? 0),
+        invoice_status: r.invoice_status ?? null,
+      })),
+    },
+    expectedCod: {
+      count: expectedCodRows.length,
+      total: expectedCodTotal,
+      rows: expectedCodRows.map((r: any) => ({
+        order_number: r.order_number ?? r.id,
+        partner_name: r.partner_name ?? "—",
+        shipped_at: r.shipped_at,
+        shipment_number: r.shipment_number,
+        cod_amount: parseFloat(r.cod_amount ?? 0),
+      })),
     },
     econtShipments: orderRows
       .filter((o: any) => !!o.econt_shipment_number)

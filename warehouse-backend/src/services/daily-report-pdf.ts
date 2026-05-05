@@ -76,6 +76,30 @@ export interface DailyReportData {
   payments: {
     byMethod: Array<{ method: string; count: number; sum: number }>;
     total: number;
+    // Per-row detail for the cashier-style table on page 1.
+    rows: Array<{
+      order_number: number | null;
+      partner_name: string;
+      paid_at: string; // ISO timestamp
+      method: string;
+      reference: string | null;
+      amount: number;
+      invoice_status: string | null;
+    }>;
+  };
+  // "Очакван наложен платеж" — Econt COD shipments sent today whose
+  // money is still in transit with the courier. Tracked separately so
+  // the cashier can see the gap between cash in hand and money owed.
+  expectedCod: {
+    count: number;
+    total: number;
+    rows: Array<{
+      order_number: number;
+      partner_name: string;
+      shipped_at: string;
+      shipment_number: string;
+      cod_amount: number;
+    }>;
   };
   econtShipments: Array<{
     order_number: number;
@@ -135,28 +159,83 @@ export async function generateDailyReportPdf(
     const pageW = doc.page.width - 80;
 
     // ── Header ───────────────────────────────────────────
+    // Per the cashier-shared sample: a left-aligned title, a quiet
+    // subtitle line under it, then a 3-card KPI strip summarising
+    // the day's money flow.
     doc.font("MainBold").fontSize(16).fillColor("#0f172a");
-    doc.text("МЕРТ-М — Дневен отчет", L, doc.y, {
+    doc.text("МЕРТ-М — Дневен отчет на плащания", L, doc.y, {
       width: pageW,
-      align: "center",
+      align: "left",
     });
-    doc.moveDown(0.2);
-    doc.font("Main").fontSize(10).fillColor("#475569");
-    doc.text(formatDateBg(data.date), L, doc.y, {
+    doc.moveDown(0.15);
+    doc.font("Main").fontSize(9.5).fillColor("#64748b");
+    doc.text(`По разписки · ${formatDateBg(data.date)}`, L, doc.y, {
       width: pageW,
-      align: "center",
+      align: "left",
     });
-    doc.moveDown(0.1);
-    doc
-      .fontSize(8)
-      .text(
-        `Генериран от: ${data.generatedBy} на ${formatDateBg(new Date().toISOString().slice(0, 10))} ${new Date().toTimeString().slice(0, 5)}`,
-        L,
-        doc.y,
-        { width: pageW, align: "center" },
-      );
     doc.fillColor("#0f172a");
     doc.moveDown(0.8);
+
+    // ── KPI strip ────────────────────────────────────────
+    // Four equally-sized cards: Получени общо · В брой · По банка/Карта
+    // · Наложен платеж (очакван). The last card is the new addition
+    // requested by МЕРТ-М — money already shipped via Econt that's
+    // still in transit with the courier.
+    const cashSum = data.payments.byMethod
+      .filter((m) => m.method === "cash")
+      .reduce((s, m) => s + m.sum, 0);
+    const bankSum = data.payments.byMethod
+      .filter((m) => m.method === "bank" || m.method === "card")
+      .reduce((s, m) => s + m.sum, 0);
+
+    const kpiCards: Array<{
+      label: string;
+      value: string;
+      color: string;
+    }> = [
+      {
+        label: "Получени плащания",
+        value: fmtEur(data.payments.total),
+        color: "#10b981", // emerald
+      },
+      { label: "В брой", value: fmtEur(cashSum), color: "#0f172a" },
+      {
+        label: "По банка / Карта",
+        value: fmtEur(bankSum),
+        color: "#0f172a",
+      },
+      {
+        label: "Наложен платеж (очакван)",
+        value: fmtEur(data.expectedCod.total),
+        color: "#f59e0b", // amber — money in transit, not yet in the till
+      },
+    ];
+
+    const kpiGap = 8;
+    const kpiW = (pageW - kpiGap * (kpiCards.length - 1)) / kpiCards.length;
+    const kpiH = 50;
+    let kpiX = L;
+    const kpiY = doc.y;
+    for (const card of kpiCards) {
+      doc
+        .roundedRect(kpiX, kpiY, kpiW, kpiH, 4)
+        .lineWidth(0.6)
+        .strokeColor("#e2e8f0")
+        .stroke();
+      doc.font("Main").fontSize(8).fillColor("#64748b");
+      doc.text(card.label, kpiX + 8, kpiY + 8, {
+        width: kpiW - 16,
+        align: "left",
+      });
+      doc.font("MainBold").fontSize(13).fillColor(card.color);
+      doc.text(card.value, kpiX + 8, kpiY + 24, {
+        width: kpiW - 16,
+        align: "left",
+      });
+      kpiX += kpiW + kpiGap;
+    }
+    doc.fillColor("#0f172a");
+    doc.y = kpiY + kpiH + 14;
 
     const sectionHeader = (title: string) => {
       doc.font("MainBold").fontSize(11).fillColor("#0f172a");
@@ -314,28 +393,202 @@ export async function generateDailyReportPdf(
     }
     doc.fillColor("#0f172a").moveDown(0.6);
 
-    // ── Раздел 3: Постъпления ───────────────────────────
-    sectionHeader("ПОСТЪПЛЕНИЯ ДНЕС (реално получени)");
-    if (data.payments.byMethod.length === 0) {
+    // ── Раздел 3: Плащания (детайлна таблица) ───────────
+    sectionHeader("ПОСТЪПЛЕНИЯ ДНЕС");
+    if (data.payments.rows.length === 0) {
       doc
         .fillColor("#64748b")
         .text("Няма записани плащания за този ден.", L, doc.y);
       doc.fillColor("#0f172a");
     } else {
-      for (const m of data.payments.byMethod) {
-        doc.text(
-          `   ${PAYMENT_LABEL_BG[m.method] ?? m.method}: ${fmtEur(m.sum)}`,
-          L,
-          doc.y,
-        );
+      // Cashier-style table — № | Поръчка | Партньор | Дата | Начин |
+      // Референция | Сума | Статус. Status column flags cancelled
+      // invoices the payment is attached to (rare, but the сашер
+      // wants it visible).
+      const cols = [
+        { header: "№", w: 22, align: "right" as const },
+        { header: "Поръчка", w: 60, align: "left" as const },
+        {
+          header: "Партньор",
+          w: pageW - 22 - 60 - 95 - 80 - 80 - 60 - 50,
+          align: "left" as const,
+        },
+        { header: "Дата", w: 95, align: "left" as const },
+        { header: "Начин", w: 80, align: "left" as const },
+        { header: "Референция", w: 80, align: "left" as const },
+        { header: "Сума", w: 60, align: "right" as const },
+        { header: "Статус", w: 50, align: "left" as const },
+      ];
+      const rowH = 14;
+      const headerY = doc.y;
+      let cx = L;
+      doc.font("MainBold").fontSize(8).fillColor("#475569");
+      for (const c of cols) {
+        doc.text(c.header, cx + 2, headerY, {
+          width: c.w - 4,
+          align: c.align,
+        });
+        cx += c.w;
       }
-      doc.moveDown(0.2);
+      doc.y = headerY + rowH;
+      doc
+        .moveTo(L, doc.y - 2)
+        .lineTo(L + pageW, doc.y - 2)
+        .lineWidth(0.3)
+        .strokeColor("#cbd5e1")
+        .stroke();
+
+      doc.font("Main").fontSize(8.5).fillColor("#0f172a");
+      data.payments.rows.forEach((r, idx) => {
+        if (doc.y + rowH > doc.page.height - 60) {
+          doc.addPage();
+          doc.y = 40;
+        }
+        const rowY = doc.y;
+        const ts = new Date(r.paid_at);
+        const dateStr = `${formatDateBg(r.paid_at.slice(0, 10))} ${String(ts.getHours()).padStart(2, "0")}:${String(ts.getMinutes()).padStart(2, "0")}`;
+        const cancelled = r.invoice_status === "cancelled";
+        const cells = [
+          String(idx + 1),
+          r.order_number != null ? `#${r.order_number}` : "—",
+          r.partner_name.length > 26
+            ? r.partner_name.slice(0, 24) + "…"
+            : r.partner_name,
+          dateStr,
+          PAYMENT_LABEL_BG[r.method] ?? r.method,
+          r.reference ?? "—",
+          fmtEur(r.amount),
+          cancelled ? "АНУЛ." : "—",
+        ];
+        cx = L;
+        if (cancelled) doc.fillColor("#dc2626");
+        cells.forEach((val, i) => {
+          doc.text(val, cx + 2, rowY, {
+            width: cols[i].w - 4,
+            align: cols[i].align,
+          });
+          cx += cols[i].w;
+        });
+        if (cancelled) doc.fillColor("#0f172a");
+        doc.y = rowY + rowH;
+      });
+      doc
+        .moveTo(L, doc.y)
+        .lineTo(L + pageW, doc.y)
+        .lineWidth(0.3)
+        .strokeColor("#cbd5e1")
+        .stroke();
+      doc.moveDown(0.4);
+
+      // Footer summary block, right-aligned, three rows.
+      const summaryX = L + pageW - 220;
+      doc.font("Main").fontSize(9).fillColor("#0f172a");
+      doc.text("В брой:", summaryX, doc.y, { width: 130, align: "right" });
+      doc.font("MainBold").text(fmtEur(cashSum), summaryX + 130, doc.y - 11, {
+        width: 90,
+        align: "right",
+      });
+      doc.font("Main").text("По банка / Карта:", summaryX, doc.y, {
+        width: 130,
+        align: "right",
+      });
+      doc.font("MainBold").text(fmtEur(bankSum), summaryX + 130, doc.y - 11, {
+        width: 90,
+        align: "right",
+      });
+      doc
+        .moveTo(summaryX + 70, doc.y - 1)
+        .lineTo(summaryX + 220, doc.y - 1)
+        .lineWidth(0.4)
+        .strokeColor("#94a3b8")
+        .stroke();
       doc
         .font("MainBold")
-        .text(`   Общо: ${fmtEur(data.payments.total)}`, L, doc.y);
-      doc.font("Main");
+        .fontSize(10)
+        .text("Общо:", summaryX, doc.y, { width: 130, align: "right" });
+      doc
+        .font("MainBold")
+        .text(fmtEur(data.payments.total), summaryX + 130, doc.y - 12, {
+          width: 90,
+          align: "right",
+        });
+      doc.font("Main").fontSize(9).fillColor("#0f172a");
     }
-    doc.moveDown(0.6);
+    doc.moveDown(0.8);
+
+    // ── Раздел 3b: Очакван наложен платеж ───────────────
+    // Econt COD shipments dispatched today whose money is still in
+    // transit with the courier — surfaced as a separate table so the
+    // cashier can see what's expected from couriers vs what hit the
+    // till today.
+    if (data.expectedCod.rows.length > 0) {
+      sectionHeader("ОЧАКВАН НАЛОЖЕН ПЛАТЕЖ (товарителници)");
+      doc.fontSize(9).fillColor("#475569");
+      doc.text(
+        `Изпратени днес товарителници с наложен платеж: ${data.expectedCod.count}     Очаквана сума: ${fmtEur(data.expectedCod.total)}`,
+        L,
+        doc.y,
+      );
+      doc.moveDown(0.3);
+
+      const cols = [
+        { header: "№", w: 22, align: "right" as const },
+        { header: "Поръчка", w: 60, align: "left" as const },
+        {
+          header: "Партньор",
+          w: pageW - 22 - 60 - 130 - 75,
+          align: "left" as const,
+        },
+        { header: "Товарителница", w: 130, align: "left" as const },
+        { header: "Сума", w: 75, align: "right" as const },
+      ];
+      const rowH = 14;
+      const headerY = doc.y;
+      let cx = L;
+      doc.font("MainBold").fontSize(8).fillColor("#475569");
+      for (const c of cols) {
+        doc.text(c.header, cx + 2, headerY, {
+          width: c.w - 4,
+          align: c.align,
+        });
+        cx += c.w;
+      }
+      doc.y = headerY + rowH;
+      doc
+        .moveTo(L, doc.y - 2)
+        .lineTo(L + pageW, doc.y - 2)
+        .lineWidth(0.3)
+        .strokeColor("#cbd5e1")
+        .stroke();
+
+      doc.font("Main").fontSize(8.5).fillColor("#0f172a");
+      data.expectedCod.rows.forEach((r, idx) => {
+        if (doc.y + rowH > doc.page.height - 60) {
+          doc.addPage();
+          doc.y = 40;
+        }
+        const rowY = doc.y;
+        const cells = [
+          String(idx + 1),
+          `#${r.order_number}`,
+          r.partner_name.length > 32
+            ? r.partner_name.slice(0, 30) + "…"
+            : r.partner_name,
+          r.shipment_number,
+          fmtEur(r.cod_amount),
+        ];
+        cx = L;
+        cells.forEach((val, i) => {
+          doc.text(val, cx + 2, rowY, {
+            width: cols[i].w - 4,
+            align: cols[i].align,
+          });
+          cx += cols[i].w;
+        });
+        doc.y = rowY + rowH;
+      });
+      doc.moveDown(0.6);
+    }
 
     // ── Раздел 4: Еконт доставки (only if any) ───────────
     if (data.econtShipments.length > 0) {
@@ -486,12 +739,30 @@ export async function generateDailyReportPdf(
     doc.moveDown(1);
 
     // ── Footer ──────────────────────────────────────────
+    doc.moveDown(0.4);
     doc.font("Main").fontSize(8.5).fillColor("#475569");
     doc.text(
       "Изготвил: ____________________     Подпис: ____________________",
       L,
       doc.y,
       { width: pageW },
+    );
+    doc.moveDown(0.4);
+
+    // Sample-style attribution line: "Отпечатано: 22.04.2026 18:05 ·
+    // Плащания: 10". Lives at the bottom of the last page so the
+    // cashier can verify the print belongs to the right session.
+    const now = new Date();
+    const printedTs = `${formatDateBg(now.toISOString().slice(0, 10))} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    doc.fontSize(8).fillColor("#94a3b8");
+    doc.text(
+      `Отпечатано: ${printedTs} · Плащания: ${data.payments.rows.length}` +
+        (data.expectedCod.count > 0
+          ? ` · Очаквани: ${data.expectedCod.count}`
+          : ""),
+      L,
+      doc.y,
+      { width: pageW, align: "right" },
     );
 
     doc.end();
