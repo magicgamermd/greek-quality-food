@@ -470,6 +470,10 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           );
         }
 
+        // Skip awaiting lines — these are placeholders for goods that
+        // haven't arrived yet (migration 072) and don't belong on the
+        // invoice. They live on the order for visibility but the
+        // child order owns the active workflow.
         const { rows: items } = await client.query(
           `SELECT oi.*,
                   oi.name_bg_snapshot AS name_bg,
@@ -479,6 +483,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
          FROM order_items oi
          LEFT JOIN products p ON p.id = oi.product_id
          WHERE oi.order_id = $1
+           AND oi.line_status != 'awaiting'
          ORDER BY oi.id`,
           [body.order_id],
         );
@@ -687,7 +692,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           });
         }
 
-        // Get current order items
+        // Get current order items — skip awaiting lines (migration 072,
+        // doc generation never includes them).
         const { rows: items } = await client.query(
           `SELECT oi.*,
                   oi.name_bg_snapshot AS name_bg,
@@ -697,6 +703,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
            FROM order_items oi
            LEFT JOIN products p ON p.id = oi.product_id
            WHERE oi.order_id = $1
+             AND oi.line_status != 'awaiting'
            ORDER BY oi.id`,
           [order.id],
         );
@@ -1089,6 +1096,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               .status(404)
               .send({ error: "PDF not yet generated (no linked order)" });
           }
+          // Skip awaiting lines — see migration 072. Doc reissue path.
           const { rows: rawItems } = await query(
             `SELECT oi.*,
                     oi.name_bg_snapshot AS name_bg,
@@ -1098,6 +1106,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
              FROM order_items oi
              LEFT JOIN products p ON p.id = oi.product_id
              WHERE oi.order_id = $1
+               AND oi.line_status != 'awaiting'
              ORDER BY oi.id`,
             [order.id],
           );
@@ -1211,6 +1220,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               .status(404)
               .send({ error: "PDF not yet generated (no linked order)" });
           }
+          // Skip awaiting lines — see migration 072. Credit note path.
           const { rows: rawItems } = await query(
             `SELECT oi.*,
                     oi.name_bg_snapshot AS name_bg,
@@ -1220,6 +1230,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
            FROM order_items oi
            LEFT JOIN products p ON p.id = oi.product_id
            WHERE oi.order_id = $1
+             AND oi.line_status != 'awaiting'
            ORDER BY oi.id`,
             [order.id],
           );
@@ -1498,6 +1509,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           );
           if (orders.length > 0) {
             sourceOrderId = orders[0].id;
+            // Skip awaiting lines — see migration 072.
             const { rows: items } = await client.query(
               `SELECT oi.*,
                       oi.name_bg_snapshot AS name_bg,
@@ -1507,6 +1519,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
                FROM order_items oi
                LEFT JOIN products p ON p.id = oi.product_id
                WHERE oi.order_id = $1
+                 AND oi.line_status != 'awaiting'
                ORDER BY oi.id`,
               [orders[0].id],
             );

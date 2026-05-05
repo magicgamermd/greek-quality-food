@@ -995,16 +995,22 @@ export default async function orderRoutes(app: FastifyInstance) {
             belowCostDetails = belowCost;
           }
 
-          // Split items by awaiting status. The awaiting bucket gets
-          // promoted to a separate child order with status='awaiting_stock'
-          // and parent_order_id pointing back to the main order — see
-          // migration 072. Two cases drive this split:
-          //   - mixed (non-awaiting + awaiting) → main order carries the
-          //     normal/paid_not_taken lines as today; child carries the
-          //     awaiting ones (line_status flipped to 'normal' inside it
-          //     since the child itself signals awaiting via order.status).
-          //   - only awaiting → no parent; the order itself is the
-          //     awaiting bucket, status='awaiting_stock'.
+          // Awaiting items get a dual presence in the data model: they
+          // stay on the main order as visible historical context (with
+          // line_status='awaiting' so docs/totals/PDFs can filter them
+          // out) AND they get duplicated into a separate child order
+          // with parent_order_id back to main and status='awaiting_stock'.
+          // Two cases drive this:
+          //   - mixed (non-awaiting + awaiting) → main keeps ALL items
+          //     including awaiting; child carries a copy of the awaiting
+          //     ones (line_status flipped to 'normal' inside it since
+          //     the child itself signals awaiting via order.status). The
+          //     awaiting line on main is for "this is what the customer
+          //     also asked for, hasn't arrived yet"; the child is the
+          //     active workflow track for when stock arrives.
+          //   - only awaiting → no parent, no duplication; the order
+          //     itself is the awaiting bucket, status='awaiting_stock'
+          //     and items are line_status='normal' inside it.
           const awaitingItems = body.items.filter(
             (i) => i.line_status === "awaiting",
           );
@@ -1015,21 +1021,23 @@ export default async function orderRoutes(app: FastifyInstance) {
             nonAwaitingItems.length === 0 && awaitingItems.length > 0;
 
           // mainItems are what the primary order's order_items table will
-          // hold. In the only-awaiting case, the awaiting items become the
-          // primary order's items with line_status='normal' (the order's
-          // status='awaiting_stock' carries the "waiting" semantic at the
-          // order level instead of per-line).
+          // hold. only-awaiting case: items become 'normal' inside the
+          // (now-awaiting) order. mixed/normal: keep all items as-is so
+          // the awaiting lines remain visible on the parent.
           const mainItems = onlyAwaiting
             ? awaitingItems.map((i) => ({
                 ...i,
                 line_status: "normal" as const,
               }))
-            : nonAwaitingItems;
+            : body.items;
           const mainStatus = onlyAwaiting ? "awaiting_stock" : body.status;
 
           // Insert helper — used twice: once for the main order and once
           // for the awaiting child (mixed case). Snapshots product fields
-          // onto each line, returns total + inserted rows.
+          // onto each line, returns total + inserted rows. Awaiting lines
+          // (line_status='awaiting') are inserted but DO NOT contribute to
+          // `total_amount` — the cashier shouldn't be asked to invoice or
+          // collect payment for goods that haven't arrived yet.
           const insertItems = async (
             targetOrderId: number,
             sourceItems: typeof body.items,
@@ -1055,7 +1063,9 @@ export default async function orderRoutes(app: FastifyInstance) {
                   2,
                 ),
               );
-              total += totalPrice;
+              if (item.line_status !== "awaiting") {
+                total += totalPrice;
+              }
               const {
                 rows: [orderItem],
               } = await client.query(
@@ -2943,6 +2953,13 @@ export default async function orderRoutes(app: FastifyInstance) {
     );
     if (!order) return null;
 
+    // Doc generation skips awaiting lines — these represent goods the
+    // customer has asked for but that haven't arrived yet, so they don't
+    // belong on the стокова разписка / фактура / приемо-предавателен.
+    // The line still lives on the order_items table for the in-app
+    // detail view (so the cashier sees "this order also has an item on
+    // hold for stock"), but every document the customer signs/receives
+    // reflects only what's actually being handed over.
     const { rows: items } = await db.query(
       `SELECT oi.*,
               oi.name_bg_snapshot AS name_bg,
@@ -2954,6 +2971,7 @@ export default async function orderRoutes(app: FastifyInstance) {
        FROM order_items oi
        LEFT JOIN products pr ON pr.id = oi.product_id
        WHERE oi.order_id = $1
+         AND oi.line_status != 'awaiting'
        ORDER BY oi.id`,
       [orderId],
     );
