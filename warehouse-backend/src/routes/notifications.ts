@@ -103,6 +103,54 @@ export default async function notificationRoutes(app: FastifyInstance) {
     return { data: result, count: result.length };
   });
 
+  // GET /notifications/unread-count — fast path for the bell badge
+  app.get("/unread-count", async (request, reply) => {
+    await requireAuth(request as FastifyRequest, reply as FastifyReply);
+    const user = (request as any).user;
+    const userId = user.sub || user.id;
+
+    const { rows: lowStock } = await query(`
+      SELECT p.id FROM products p
+       LEFT JOIN inventory i ON i.product_id = p.id
+       GROUP BY p.id, p.low_stock_threshold
+      HAVING COALESCE(SUM(i.quantity),0) <= p.low_stock_threshold
+       LIMIT 100
+    `);
+    const { rows: expiring } = await query(`
+      SELECT b.id FROM batches b
+       JOIN inventory i ON i.batch_id = b.id
+      WHERE b.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+        AND i.quantity > 0
+       LIMIT 100
+    `);
+    const { rows: persistent } = await query(`
+      SELECT id FROM notifications ORDER BY created_at DESC LIMIT 50
+    `);
+
+    const allIds = [
+      ...lowStock.map((r: any) => `low-${r.id}`),
+      ...expiring.map((r: any) => `exp-${r.id}`),
+      ...persistent.map((r: any) => `db-${r.id}`),
+    ];
+
+    if (allIds.length === 0) return { count: 0 };
+
+    const { rows: reads } = await query(
+      `SELECT notification_id, dismissed, read_at
+         FROM notification_reads
+        WHERE user_id = $1 AND notification_id = ANY($2::text[])`,
+      [userId, allIds],
+    );
+    const readMap = new Map(reads.map((r: any) => [r.notification_id, r]));
+
+    let count = 0;
+    for (const id of allIds) {
+      const entry = readMap.get(id);
+      if (!entry?.dismissed && !entry?.read_at) count++;
+    }
+    return { count };
+  });
+
   // PUT /notifications/:id/read — mark one as read
   app.put("/:id/read", async (request: FastifyRequest, reply: FastifyReply) => {
     await requireAuth(request, reply);
