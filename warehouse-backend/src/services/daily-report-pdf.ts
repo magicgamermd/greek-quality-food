@@ -76,15 +76,21 @@ export interface DailyReportData {
   payments: {
     byMethod: Array<{ method: string; count: number; sum: number }>;
     total: number;
-    // Per-row detail for the cashier-style table on page 1.
+    // Per-order rows for the cashier-style table — every order from
+    // the day, including those without any recorded payment yet.
+    // `payment_status` summarises the paid_amount/total_amount ratio.
     rows: Array<{
-      order_number: number | null;
+      order_number: number;
       partner_name: string;
-      paid_at: string; // ISO timestamp
-      method: string;
-      reference: string | null;
-      amount: number;
+      order_date: string; // ISO yyyy-mm-ddT…
+      total_amount: number;
+      paid_amount: number;
+      payment_count: number;
+      last_paid_at: string | null;
+      method: string | null;
+      invoice_number: string | null;
       invoice_status: string | null;
+      payment_status: "paid" | "partial" | "unpaid" | "cancelled";
     }>;
   };
   // "Очакван наложен платеж" — Econt COD shipments sent today whose
@@ -251,31 +257,30 @@ export async function generateDailyReportPdf(
       doc.font("Main").fontSize(9).fillColor("#0f172a");
     };
 
-    // ── Раздел 3: Плащания (детайлна таблица) ───────────
-    sectionHeader("ПОСТЪПЛЕНИЯ ДНЕС");
+    // ── Раздел 3: Поръчки + плащания (детайлна таблица) ────
+    sectionHeader("ПОРЪЧКИ И ПЛАЩАНИЯ ДНЕС");
     if (data.payments.rows.length === 0) {
-      doc
-        .fillColor("#64748b")
-        .text("Няма записани плащания за този ден.", L, doc.y);
+      doc.fillColor("#64748b").text("Няма поръчки за този ден.", L, doc.y);
       doc.fillColor("#0f172a");
     } else {
-      // Cashier-style table — № | Поръчка | Партньор | Дата | Начин |
-      // Референция | Сума | Статус. Status column flags cancelled
-      // invoices the payment is attached to (rare, but the сашер
-      // wants it visible).
+      // Per-order table — every order from the day, regardless of
+      // payment state. Status column tells the cashier which orders
+      // are paid in full / partial / unpaid / cancelled. The bottom
+      // summary still totals only the actual cash that hit the till
+      // (KPI cards drive that, computed from `payments.byMethod`).
       const cols = [
         { header: "№", w: 22, align: "right" as const },
-        { header: "Поръчка", w: 60, align: "left" as const },
+        { header: "Поръчка", w: 55, align: "left" as const },
         {
           header: "Партньор",
-          w: pageW - 22 - 60 - 95 - 80 - 80 - 60 - 50,
+          w: pageW - 22 - 55 - 65 - 70 - 65 - 65 - 70,
           align: "left" as const,
         },
-        { header: "Дата", w: 95, align: "left" as const },
-        { header: "Начин", w: 80, align: "left" as const },
-        { header: "Референция", w: 80, align: "left" as const },
-        { header: "Сума", w: 60, align: "right" as const },
-        { header: "Статус", w: 50, align: "left" as const },
+        { header: "Дата", w: 65, align: "left" as const },
+        { header: "Начин", w: 70, align: "left" as const },
+        { header: "Сума", w: 65, align: "right" as const },
+        { header: "Платено", w: 65, align: "right" as const },
+        { header: "Статус", w: 70, align: "left" as const },
       ];
       const rowH = 14;
       const headerY = doc.y;
@@ -296,6 +301,19 @@ export async function generateDailyReportPdf(
         .strokeColor("#cbd5e1")
         .stroke();
 
+      const STATUS_LABEL: Record<string, string> = {
+        paid: "Платена",
+        partial: "Частично",
+        unpaid: "Неплатена",
+        cancelled: "Анулирана",
+      };
+      const STATUS_COLOR: Record<string, string> = {
+        paid: "#16a34a", // green
+        partial: "#f59e0b", // amber
+        unpaid: "#64748b", // slate
+        cancelled: "#dc2626", // red
+      };
+
       doc.font("Main").fontSize(8.5).fillColor("#0f172a");
       data.payments.rows.forEach((r, idx) => {
         if (doc.y + rowH > doc.page.height - 60) {
@@ -303,31 +321,44 @@ export async function generateDailyReportPdf(
           doc.y = 40;
         }
         const rowY = doc.y;
-        const ts = new Date(r.paid_at);
-        const dateStr = `${formatDateBg(r.paid_at.slice(0, 10))} ${String(ts.getHours()).padStart(2, "0")}:${String(ts.getMinutes()).padStart(2, "0")}`;
-        const cancelled = r.invoice_status === "cancelled";
+        // order_date arrives as ISO; slice(0,10) gives yyyy-mm-dd which
+        // formatDateBg converts to dd.mm.yyyy.
+        const dateStr = formatDateBg(r.order_date.slice(0, 10));
+        const isCancelled = r.payment_status === "cancelled";
         const cells = [
           String(idx + 1),
-          r.order_number != null ? `#${r.order_number}` : "—",
+          `#${r.order_number}`,
           r.partner_name.length > 26
             ? r.partner_name.slice(0, 24) + "…"
             : r.partner_name,
           dateStr,
-          PAYMENT_LABEL_BG[r.method] ?? r.method,
-          r.reference ?? "—",
-          fmtEur(r.amount),
-          cancelled ? "АНУЛ." : "—",
+          r.method ? (PAYMENT_LABEL_BG[r.method] ?? r.method) : "—",
+          fmtEur(r.total_amount),
+          r.paid_amount > 0 ? fmtEur(r.paid_amount) : "—",
+          STATUS_LABEL[r.payment_status] ?? r.payment_status,
         ];
         cx = L;
-        if (cancelled) doc.fillColor("#dc2626");
         cells.forEach((val, i) => {
+          // Last column (Статус) gets the per-status color so the
+          // cashier can scan the column visually. Cancelled rows
+          // additionally paint the order # cell red.
+          if (i === cols.length - 1) {
+            doc.fillColor(STATUS_COLOR[r.payment_status] ?? "#0f172a");
+            doc.font("MainBold");
+          } else if (isCancelled && i === 1) {
+            doc.fillColor("#dc2626");
+          }
           doc.text(val, cx + 2, rowY, {
             width: cols[i].w - 4,
             align: cols[i].align,
           });
+          if (i === cols.length - 1) {
+            doc.fillColor("#0f172a").font("Main");
+          } else if (isCancelled && i === 1) {
+            doc.fillColor("#0f172a");
+          }
           cx += cols[i].w;
         });
-        if (cancelled) doc.fillColor("#0f172a");
         doc.y = rowY + rowH;
       });
       doc

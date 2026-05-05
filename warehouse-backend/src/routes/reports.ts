@@ -297,28 +297,35 @@ async function assembleDailyReportData(
     0,
   );
 
-  // 5b) Detailed payments rows for the day — feeds the cashier-style
-  // payments table on the PDF. Joins through invoices to surface the
-  // order number + partner that the cash hit. invoice_status is exposed
-  // so the PDF can prefix "[АНУЛИРАНА]" when the invoice was cancelled
-  // after the payment landed (rare but possible with refunds).
-  const { rows: paymentDetailRows } = await query(
-    `SELECT pmt.id,
-            pmt.amount::numeric AS amount,
-            pmt.payment_method AS method,
-            pmt.bank_reference AS reference,
-            pmt.paid_at,
-            COALESCE(o.order_number, o2.order_number) AS order_number,
-            COALESCE(p.name, p2.name) AS partner_name,
-            i.status AS invoice_status
-       FROM payments pmt
-       LEFT JOIN invoices i ON i.id = pmt.invoice_id
-       LEFT JOIN orders o2 ON o2.invoice_id = i.id
-       LEFT JOIN orders o ON o.id = pmt.order_id
+  // 5b) Per-order rows for the cashier-style table on the PDF — every
+  // order created today is listed regardless of whether a payment has
+  // been recorded against it yet. Aggregates payment data so the PDF
+  // can flag each row as "Платено / Частично / Неплатено" and surface
+  // how much money has actually landed against the order's invoice.
+  // Two payment-link paths because both the legacy `payments.invoice_id`
+  // and the newer `payments.order_id` are in use.
+  const { rows: orderPaymentRows } = await query(
+    `SELECT o.id,
+            o.order_number,
+            o.order_date,
+            o.total_amount::numeric AS total_amount,
+            o.status,
+            p.name AS partner_name,
+            i.payment_method,
+            i.invoice_number,
+            i.status AS invoice_status,
+            COALESCE(SUM(pmt.amount), 0)::numeric AS paid_amount,
+            COUNT(pmt.id)::int AS payment_count,
+            MAX(pmt.paid_at) AS last_paid_at
+       FROM orders o
        LEFT JOIN partners p ON p.id = o.partner_id
-       LEFT JOIN partners p2 ON p2.id = i.partner_id
-      WHERE DATE(pmt.paid_at) = $1
-      ORDER BY pmt.paid_at DESC, pmt.id DESC`,
+       LEFT JOIN invoices i ON i.id = o.invoice_id
+       LEFT JOIN payments pmt ON (pmt.invoice_id = i.id OR pmt.order_id = o.id)
+                              AND DATE(pmt.paid_at) <= $1
+      WHERE DATE(o.order_date) = $1
+      GROUP BY o.id, o.order_number, o.order_date, o.total_amount, o.status,
+               p.name, i.payment_method, i.invoice_number, i.status
+      ORDER BY o.order_number ASC`,
     [date],
   );
 
@@ -461,18 +468,43 @@ async function assembleDailyReportData(
         sum: parseFloat(r.sum ?? 0),
       })),
       total: paymentTotal,
-      // Per-row detail for the cashier-style payments table on the PDF.
-      // `paid_at` is preserved as ISO so the renderer can format it
-      // however it wants (the existing report uses dd.MM.yyyy HH:mm).
-      rows: paymentDetailRows.map((r: any) => ({
-        order_number: r.order_number ?? null,
-        partner_name: r.partner_name ?? "—",
-        paid_at: r.paid_at,
-        method: r.method,
-        reference: r.reference ?? null,
-        amount: parseFloat(r.amount ?? 0),
-        invoice_status: r.invoice_status ?? null,
-      })),
+      // Per-order detail for the cashier-style table on the PDF. Every
+      // order from the day is here, with paid_amount/total_amount used
+      // to derive paid/partial/unpaid status. ISO date strings only
+      // (Postgres TIMESTAMPTZ comes back as Date objects, which lack
+      // .slice — toISOString() is the lingua franca).
+      rows: orderPaymentRows.map((r: any) => {
+        const total = parseFloat(r.total_amount ?? 0);
+        const paid = parseFloat(r.paid_amount ?? 0);
+        const cancelled = r.status === "cancelled";
+        let paymentStatus: "paid" | "partial" | "unpaid" | "cancelled";
+        if (cancelled) paymentStatus = "cancelled";
+        else if (paid >= total - 0.01) paymentStatus = "paid";
+        else if (paid > 0) paymentStatus = "partial";
+        else paymentStatus = "unpaid";
+        const orderDateIso =
+          r.order_date instanceof Date
+            ? r.order_date.toISOString()
+            : String(r.order_date);
+        const lastPaidIso = r.last_paid_at
+          ? r.last_paid_at instanceof Date
+            ? r.last_paid_at.toISOString()
+            : String(r.last_paid_at)
+          : null;
+        return {
+          order_number: r.order_number ?? r.id,
+          partner_name: r.partner_name ?? "—",
+          order_date: orderDateIso,
+          total_amount: total,
+          paid_amount: paid,
+          payment_count: r.payment_count ?? 0,
+          last_paid_at: lastPaidIso,
+          method: r.payment_method ?? null,
+          invoice_number: r.invoice_number ?? null,
+          invoice_status: r.invoice_status ?? null,
+          payment_status: paymentStatus,
+        };
+      }),
     },
     expectedCod: {
       count: expectedCodRows.length,
@@ -480,7 +512,12 @@ async function assembleDailyReportData(
       rows: expectedCodRows.map((r: any) => ({
         order_number: r.order_number ?? r.id,
         partner_name: r.partner_name ?? "—",
-        shipped_at: r.shipped_at,
+        // Same TIMESTAMPTZ → string conversion as the payments rows
+        // above; the renderer expects an ISO string it can slice.
+        shipped_at:
+          r.shipped_at instanceof Date
+            ? r.shipped_at.toISOString()
+            : String(r.shipped_at),
         shipment_number: r.shipment_number,
         cod_amount: parseFloat(r.cod_amount ?? 0),
       })),
