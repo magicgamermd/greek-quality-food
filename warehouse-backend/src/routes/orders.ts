@@ -17,6 +17,7 @@ import {
   generateStockDispatchPdf,
   generateCommercialDocPdf,
 } from "../services/document-pdf.js";
+import { renderReplacementPdf } from "../services/razpiska-replacement-pdf.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { generateWarrantyCardPdf } from "../services/warranty-pdf.js";
 import { generateOfferPdf } from "../services/offer-pdf.js";
@@ -3256,6 +3257,77 @@ export default async function orderRoutes(app: FastifyInstance) {
           error:
             "Стокова разписка може да се генерира само за потвърдени поръчки нататък",
         });
+      }
+
+      // Замяна (product replacement) → render the dual-section
+      // "Стокова разписка за Замяна" template instead of the standard one.
+      // The order's items already carry `is_returning` snapshots so the
+      // PDF can split them into the give / return sections without a
+      // second query. Total comes signed from the validated order
+      // (positive = customer pays, negative = customer refunded).
+      // Payment method (cash/pos/bank) lives on a single `payments` row
+      // created at finalize-time — we look it up here so the PDF can show
+      // both the "Платено в …" / "Възстановено в …" line and the
+      // descriptive sentence's correct verb.
+      if (order.is_replacement) {
+        const docNumber =
+          order.order_number != null
+            ? String(order.order_number)
+            : `25-${String(order.id).padStart(6, "0")}`;
+        const partner = effectiveReceiver(order);
+
+        const { rows: paymentRows } = await query(
+          `SELECT payment_method
+             FROM payments
+            WHERE order_id = $1
+            ORDER BY paid_at DESC
+            LIMIT 1`,
+          [id],
+        );
+        const persistedMethod = paymentRows[0]?.payment_method as
+          | string
+          | undefined;
+        const paymentMethod:
+          | "cash"
+          | "pos"
+          | "bank"
+          | "bank_transfer"
+          | undefined =
+          persistedMethod === "cash" ||
+          persistedMethod === "pos" ||
+          persistedMethod === "bank" ||
+          persistedMethod === "bank_transfer"
+            ? persistedMethod
+            : undefined;
+
+        const buf = await renderReplacementPdf({
+          id: order.id,
+          number: docNumber,
+          date: new Date(order.order_date || order.created_at),
+          partner: {
+            name: partner.name || "—",
+            egn_or_eik: partner.eik || null,
+            address: partner.address || null,
+          },
+          items: items.map((i: any) => ({
+            product_name: i.name_bg || i.name_en || "—",
+            product_code: i.sku || "",
+            quantity: parseFloat(i.quantity),
+            unit_price: parseFloat(i.unit_price),
+            is_returning: i.is_returning === true,
+          })),
+          total: parseFloat(order.total_amount ?? 0),
+          payment_method: paymentMethod,
+        });
+        const filename = `Стокова_разписка_за_Замяна_${docNumber}.pdf`;
+        const encodedFilename = encodeURIComponent(filename);
+        return reply
+          .header("Content-Type", "application/pdf")
+          .header(
+            "Content-Disposition",
+            `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+          )
+          .send(buf);
       }
 
       // For invoiced orders, use the VAT setting from the invoice; otherwise use query param
