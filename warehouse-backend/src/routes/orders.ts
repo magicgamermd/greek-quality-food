@@ -2625,32 +2625,94 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (order.status === "fulfilled") {
         const result = await transaction(async (client) => {
           // Re-lock the order inside the cancel transaction to avoid races
-          // against concurrent fulfill/invoice operations.
-          await client.query("SELECT id FROM orders WHERE id = $1 FOR UPDATE", [
-            id,
-          ]);
+          // against concurrent fulfill/invoice operations. Re-read the
+          // is_replacement flag from the locked row so the cancel branches
+          // off the freshest committed value.
+          const {
+            rows: [locked],
+          } = await client.query(
+            "SELECT id, is_replacement FROM orders WHERE id = $1 FOR UPDATE",
+            [id],
+          );
 
           // Return each item's quantity to inventory. MERT-M: no batches,
           // so we upsert on the partial unique index
           // inventory_product_warehouse_nobatch_uidx (product_id, warehouse_id)
           // WHERE batch_id IS NULL (added in migration 045).
+          //
+          // Замяна (product replacement, spec 4.4): for replacement orders
+          // we REVERSE the fulfill direction — give lines (is_returning=
+          // false) get their stock back (+qty) and return lines
+          // (is_returning=true) lose stock again (−qty), because the
+          // returned item is no longer ours to keep once the cancellation
+          // undoes the swap. Additionally we write a MIRROR payment row
+          // that flips is_refund of the original payment so the books
+          // net to zero.
           const { rows: items } = await client.query(
-            "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
+            "SELECT product_id, quantity, is_returning FROM order_items WHERE order_id = $1",
             [id],
           );
 
-          for (const item of items) {
-            const qty = parseFloat(item.quantity);
-            if (qty <= 0) continue;
+          if (locked.is_replacement) {
+            for (const item of items) {
+              const qty = parseFloat(item.quantity);
+              if (qty <= 0) continue;
+              // Reverse fulfill: give lines were decremented → re-add;
+              // return lines were incremented → re-deduct. The signed
+              // delta below is what we ADD to inventory.
+              const delta = item.is_returning ? -qty : qty;
+              const { rowCount } = await client.query(
+                `UPDATE inventory
+                   SET quantity = quantity + $1,
+                       updated_at = NOW()
+                 WHERE product_id = $2
+                   AND warehouse_id = 1
+                   AND batch_id IS NULL`,
+                [delta, item.product_id],
+              );
+              if (!rowCount) {
+                await client.query(
+                  `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+                   VALUES ($1, 1, $2, NULL)`,
+                  [item.product_id, delta],
+                );
+              }
+            }
 
-            await client.query(
-              `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
-             VALUES ($1, 1, $2, NULL)
-             ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
-             DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
-                           updated_at = NOW()`,
-              [item.product_id, qty],
+            // Mirror payment: flip is_refund on the original (oldest)
+            // payment row for this order. amount stays positive; only
+            // direction reverses. Skip silently if no payment was
+            // recorded (e.g. zero-total replacement).
+            const { rows: origPayments } = await client.query(
+              `SELECT amount, payment_method, is_refund
+                 FROM payments
+                WHERE order_id = $1
+                ORDER BY id ASC
+                LIMIT 1`,
+              [id],
             );
+            if (origPayments[0]) {
+              const orig = origPayments[0];
+              await client.query(
+                `INSERT INTO payments (order_id, amount, payment_method, is_refund, paid_at)
+                 VALUES ($1, $2, $3, $4, NOW())`,
+                [id, orig.amount, orig.payment_method, !orig.is_refund],
+              );
+            }
+          } else {
+            for (const item of items) {
+              const qty = parseFloat(item.quantity);
+              if (qty <= 0) continue;
+
+              await client.query(
+                `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+               VALUES ($1, 1, $2, NULL)
+               ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
+               DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                             updated_at = NOW()`,
+                [item.product_id, qty],
+              );
+            }
           }
 
           // Cancel the order
