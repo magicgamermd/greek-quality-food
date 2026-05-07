@@ -13,6 +13,7 @@ import productRoutes from "./routes/products.js";
 import inventoryRoutes from "./routes/inventory.js";
 import incomingRoutes from "./routes/incoming.js";
 import orderRoutes from "./routes/orders.js";
+import purchaseOrderRoutes from "./routes/purchase-orders.js";
 import partnerRoutes from "./routes/partners.js";
 import invoiceRoutes from "./routes/invoices.js";
 import paymentRoutes from "./routes/payments.js";
@@ -27,6 +28,7 @@ import exportRoutes from "./routes/export.js";
 import productAliasRoutes from "./routes/product-aliases.js";
 import fiscalRoutes from "./routes/fiscal.js";
 import econtRoutes from "./routes/econt.js";
+import printRoutes from "./routes/print.js";
 import reportsRoutes from "./routes/reports.js";
 import chatRoutes from "./routes/chat.js";
 import agentRoutes from "./routes/agent.js";
@@ -74,6 +76,11 @@ export async function build() {
     "http://127.0.0.1:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5174",
+    // Tauri desktop app (mertm-desktop). The bundled webview serves the
+    // built frontend from `tauri://localhost` on macOS, so API calls from
+    // the desktop client carry that origin.
+    "tauri://localhost",
+    "http://tauri.localhost",
   ];
   const devCorsPatterns = [
     // LAN access on port 5173 or 5174
@@ -234,6 +241,7 @@ export async function build() {
   await app.register(inventoryRoutes, { prefix: "/inventory" });
   await app.register(incomingRoutes, { prefix: "/incoming" });
   await app.register(orderRoutes, { prefix: "/orders" });
+  await app.register(purchaseOrderRoutes, { prefix: "/purchase-orders" });
   await app.register(partnerRoutes, { prefix: "/partners" });
   await app.register(invoiceRoutes, { prefix: "/invoices" });
   await app.register(paymentRoutes, { prefix: "/payments" });
@@ -249,6 +257,7 @@ export async function build() {
   await app.register(productAliasRoutes, { prefix: "/product-aliases" });
   await app.register(fiscalRoutes, { prefix: "/fiscal" });
   await app.register(econtRoutes, { prefix: "/econt" });
+  await app.register(printRoutes, { prefix: "/print" });
   await app.register(reportsRoutes, { prefix: "/reports" });
   await app.register(chatRoutes);
   await app.register(agentRoutes, { prefix: "/agent" });

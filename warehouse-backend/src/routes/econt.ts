@@ -19,8 +19,9 @@ const ECONT_BASE = "http://ee.econt.com/services";
  * midnight; round-tripping through UTC drops the date by one in any
  * positive offset (Europe/Sofia +03 → 2026-05-07 local midnight =
  * 2026-05-06T21:00Z = "2026-05-06" after slice). Same trap for raw
- * "YYYY-MM-DD" strings, which `new Date()` parses as UTC midnight; we
- * short-circuit those by matching the prefix directly.
+ * "YYYY-MM-DD" strings, which `new Date()` parses as UTC midnight and
+ * then displays at -03 offset locally; we short-circuit those by
+ * matching the prefix instead of going through Date at all.
  */
 function normalizeIsoDate(input: unknown): string {
   const fmt = (d: Date) =>
@@ -220,12 +221,16 @@ export default async function econtRoutes(app: FastifyInstance) {
         { cityID: Number(city_id) },
       );
       const all = (res.streets || []) as any[];
-      const ql = (q || "").toLowerCase();
+      // Strip whitespace + dots so "ул.тр", "ул. тр", "тр" all hit the
+      // same streets. Econt returns mixed shapes ("ул. Трети март" vs
+      // "Панайот Волов") so a naive substring check on raw text drops
+      // matches the second the user types the prefix without a space.
+      const norm = (s: string) => (s || "").toLowerCase().replace(/[\s.]/g, "");
+      const ql = norm(q || "");
       const filtered = ql
         ? all.filter(
             (s: any) =>
-              (s.name || "").toLowerCase().includes(ql) ||
-              (s.nameEn || "").toLowerCase().includes(ql),
+              norm(s.name).includes(ql) || norm(s.nameEn).includes(ql),
           )
         : all;
       return reply.send({
@@ -254,6 +259,7 @@ export default async function econtRoutes(app: FastifyInstance) {
         receiverNum,
         weight,
         codAmount,
+        servicesPayer,
       } = request.body as {
         receiverCity: string;
         receiverPostCode?: string;
@@ -262,7 +268,7 @@ export default async function econtRoutes(app: FastifyInstance) {
         receiverNum?: string;
         weight: number;
         codAmount?: number;
-        shippingPayer?: string;
+        servicesPayer?: "SENDER" | "RECEIVER";
       };
 
       if (!receiverCity || !weight) {
@@ -300,10 +306,17 @@ export default async function econtRoutes(app: FastifyInstance) {
         };
       }
 
-      const reqBody = request.body as any;
-      if (reqBody.shippingPayer === "receiver") {
-        label.payAfterAccept = true;
-        label.payAfterTest = false;
+      // Mirror the /shipment endpoint's payer mapping so calculate ↔ create
+      // can't diverge. Without paymentReceiverMethod, Econt's calculator
+      // omits the "плащане в брой при получаване" surcharge that the real
+      // waybill applies, producing a quote noticeably lower than reality.
+      const payer = (servicesPayer || "SENDER").toUpperCase();
+      if (payer === "RECEIVER") {
+        label.paymentReceiverMethod = "cash";
+        label.paymentReceiverAmount = 100;
+        label.paymentReceiverAmountIsPercent = true;
+      } else {
+        label.paymentSenderMethod = "cash";
       }
 
       const result = await econtPost(
@@ -314,14 +327,29 @@ export default async function econtRoutes(app: FastifyInstance) {
         },
       );
 
-      const priceBGN = result.label?.totalPrice ?? result.totalPrice ?? 0;
-      const priceEUR = Math.round((priceBGN / 1.95583) * 100) / 100;
-      // Diagnostic log gated by env var. Set ECONT_DEBUG=1 to surface what
-      // the API actually returned for office vs address mode comparison.
+      // Econt returns totalPrice in the currency named by `currency` —
+      // for our account that's EUR. Treat the response currency as the
+      // source of truth and convert per direction; the previous code
+      // assumed BGN and divided by 1.95583 unconditionally, halving the
+      // displayed price (e.g. real 24.42 EUR rendered as 12.11 EUR).
+      const labelObj = result.label ?? result;
+      const totalPrice = Number(labelObj.totalPrice ?? result.totalPrice ?? 0);
+      const respCurrency = String(
+        labelObj.currency ?? result.currency ?? "BGN",
+      ).toUpperCase();
+      const priceEUR =
+        respCurrency === "EUR"
+          ? totalPrice
+          : Math.round((totalPrice / 1.95583) * 100) / 100;
+      const priceBGN =
+        respCurrency === "BGN"
+          ? totalPrice
+          : Math.round(totalPrice * 1.95583 * 100) / 100;
+
       if (process.env.ECONT_DEBUG === "1") {
         const mode = receiverOfficeCode ? "office" : "address";
         console.log(
-          `[econt/calculate] mode=${mode} city=${receiverCity} weight=${weight} → priceBGN=${priceBGN} (totalPrice=${result.label?.totalPrice ?? "—"}, top-level=${result.totalPrice ?? "—"})`,
+          `[econt/calculate] mode=${mode} city=${receiverCity} weight=${weight} payer=${payer} → totalPrice=${totalPrice} ${respCurrency} (priceEUR=${priceEUR} priceBGN=${priceBGN})`,
         );
       }
       return reply.send({

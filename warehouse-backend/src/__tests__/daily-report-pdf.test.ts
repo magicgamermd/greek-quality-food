@@ -47,6 +47,7 @@ describe("generateDailyReportPdf", () => {
         total: 359.11,
         rows: [],
       },
+      unpaidToday: { count: 0, total: 0 },
       expectedCod: { count: 0, total: 0, rows: [] },
       econtShipments: [],
       outstanding: { totalRemaining: 0, totalCount: 0, top10: [] },
@@ -76,6 +77,7 @@ describe("generateDailyReportPdf", () => {
         byPaymentMethod: [],
       },
       payments: { byMethod: [], total: 0, rows: [] },
+      unpaidToday: { count: 0, total: 0 },
       expectedCod: { count: 0, total: 0, rows: [] },
       econtShipments: [],
       outstanding: { totalRemaining: 0, totalCount: 0, top10: [] },
@@ -102,6 +104,7 @@ describe("generateDailyReportPdf", () => {
         byPaymentMethod: [],
       },
       payments: { byMethod: [], total: 0, rows: [] },
+      unpaidToday: { count: 0, total: 0 },
       expectedCod: { count: 0, total: 0, rows: [] },
       econtShipments: [
         {

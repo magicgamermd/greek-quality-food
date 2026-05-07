@@ -20,6 +20,7 @@ import {
   Settings,
   CheckCheck,
   Boxes,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePermissions } from "@/contexts/PermissionContext";
@@ -100,6 +101,12 @@ const allNavItems: Array<{
     permission: PERMISSIONS.REPORTS_VIEW,
   },
   {
+    to: "/purchase-orders",
+    icon: ClipboardList,
+    label: "Заявки",
+    permission: PERMISSIONS.PURCHASE_ORDERS_MANAGE,
+  },
+  {
     to: "/settings",
     icon: Settings,
     label: "Настройки",
@@ -119,6 +126,7 @@ const routeNames: Record<string, string> = {
   "/invoices": "Фактури",
   "/payments": "Плащания",
   "/analytics": "Анализи",
+  "/purchase-orders": "Заявки",
   "/settings": "Настройки",
 };
 

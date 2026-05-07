@@ -553,6 +553,23 @@ function OrderDetailModal({
   // exposed when the order's partner is an individual (физ. лице). When
   // empty we fall back to partner.name server-side.
   const [clientDisplayName, setClientDisplayName] = useState("");
+  const [clientDisplayEgn, setClientDisplayEgn] = useState("");
+  const [clientDisplayAddress, setClientDisplayAddress] = useState("");
+  // Per-line warranty selection — checkboxes rendered next to each item
+  // in the order drawer. Reset to empty Set on order change so a freshly
+  // opened drawer never inherits picks from the previous order.
+  const [warrantyItemIds, setWarrantyItemIds] = useState<Set<number>>(
+    new Set(),
+  );
+  const [warrantyDialogOpen, setWarrantyDialogOpen] = useState(false);
+  const [warrantyBuyerName, setWarrantyBuyerName] = useState("");
+  const toggleWarrantyItem = (id: number) =>
+    setWarrantyItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // Batch D — issue invoice in the name of a different (company) partner.
   // Only available when the order's partner is an individual. Either pick
   // an existing company partner, or supply full new-partner data — the
@@ -561,9 +578,15 @@ function OrderDetailModal({
     useState<PartnerOverride | null>(null);
   const [partnerOverrideOpen, setPartnerOverrideOpen] = useState(false);
   // Sub-dialog form state — reset on every open.
-  const [overrideMode, setOverrideMode] = useState<"existing" | "new">(
-    "existing",
-  );
+  const [overrideMode, setOverrideMode] = useState<
+    "individual_anon" | "individual_named" | "existing" | "new"
+  >("existing");
+  // Local inputs for the named-individual receiver (mirror clientDisplay*,
+  // but live inside the dialog so users can preview before applying).
+  const [overrideIndividualName, setOverrideIndividualName] = useState("");
+  const [overrideIndividualEgn, setOverrideIndividualEgn] = useState("");
+  const [overrideIndividualAddress, setOverrideIndividualAddress] =
+    useState("");
   const [overrideExistingId, setOverrideExistingId] = useState<number | null>(
     null,
   );
@@ -604,6 +627,11 @@ function OrderDetailModal({
     setCreditNoteRestoreStock(true);
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
+    setClientDisplayEgn("");
+    setClientDisplayAddress("");
+    setWarrantyItemIds(new Set());
+    setWarrantyBuyerName("");
+    setWarrantyDialogOpen(false);
     setInvoiceNote("");
     setVatExemptionReason("");
     setInvoiceDateOverride("");
@@ -644,11 +672,30 @@ function OrderDetailModal({
   }, [(detail as any)?.invoice_partner_id]);
 
   // Reset the partner-override sub-dialog form whenever it opens, so a
-  // closed-and-reopened dialog never shows stale picks.
+  // closed-and-reopened dialog never shows stale picks. Default tab tries
+  // to mirror current state: if a company override is in effect → existing
+  // company tab; if a named individual is in play → individual tab; else
+  // start on existing-company.
   useEffect(() => {
     if (!partnerOverrideOpen) return;
-    setOverrideMode("existing");
-    setOverrideExistingId(null);
+    if (partnerOverride) {
+      setOverrideMode("existing");
+      setOverrideExistingId(
+        "partner_id" in partnerOverride ? partnerOverride.partner_id : null,
+      );
+    } else if (
+      clientDisplayName.trim() ||
+      clientDisplayEgn.trim() ||
+      clientDisplayAddress.trim()
+    ) {
+      setOverrideMode("individual_named");
+    } else {
+      setOverrideMode("individual_anon");
+      setOverrideExistingId(null);
+    }
+    setOverrideIndividualName(clientDisplayName);
+    setOverrideIndividualEgn(clientDisplayEgn);
+    setOverrideIndividualAddress(clientDisplayAddress);
     setNewPartner({
       name: "",
       eik: "",
@@ -752,7 +799,7 @@ function OrderDetailModal({
         minusAt = Date.now();
         return;
       }
-      if (e.key === "+" || (e.key === "=" && e.shiftKey)) {
+      if (e.key === "+" || e.key === "=") {
         if (minusAt && Date.now() - minusAt < 1500) {
           minusAt = 0;
           // Default to the order's existing date so the user only needs to
@@ -925,6 +972,12 @@ function OrderDetailModal({
         client_display_name: partnerOverride
           ? undefined
           : clientDisplayName.trim() || undefined,
+        client_display_egn: partnerOverride
+          ? undefined
+          : clientDisplayEgn.trim() || undefined,
+        client_display_address: partnerOverride
+          ? undefined
+          : clientDisplayAddress.trim() || undefined,
         // Batch G+H — optional invoice extras
         invoice_note: invoiceNote.trim() || undefined,
         vat_exemption_reason: !includeVat
@@ -1195,7 +1248,7 @@ function OrderDetailModal({
   const handleDocDownload = async (
     orderId: number,
     docType: "stock-dispatch" | "commercial-doc" | "warranty" | "offer",
-    options?: { pricingMode?: "net" | "gross" },
+    options?: { pricingMode?: "net" | "gross"; buyerName?: string },
   ) => {
     try {
       // For invoiced orders, backend reads VAT from invoice; for fulfilled, use toggle
@@ -1203,12 +1256,56 @@ function OrderDetailModal({
       const invoiced = detail?.invoice_id ?? generatedInvoiceId;
       if (!invoiced && !includeVat) params.set("include_vat", "false");
       if (options?.pricingMode === "gross") params.set("pricing_mode", "gross");
+      if (docType === "warranty") {
+        if (warrantyItemIds.size === 0) {
+          toast.error(
+            "Маркирайте поне един артикул с тикчето в първата колона.",
+          );
+          return;
+        }
+        params.set(
+          "items",
+          [...warrantyItemIds].sort((a, b) => a - b).join(","),
+        );
+        if (options?.buyerName) params.set("buyer_name", options.buyerName);
+      }
       const queryString = params.toString();
       const vatParam = queryString ? `?${queryString}` : "";
       const res = await api.get(
         `/orders/${orderId}/${docType}-pdf${vatParam}`,
-        { responseType: "blob" },
+        {
+          responseType: "blob",
+          // Read 4xx error JSON via a fallback transformer below
+          validateStatus: (s) => s >= 200 && s < 500,
+        },
       );
+      if (res.status >= 400) {
+        // Backend returned a JSON error in a Blob — read it back, decide
+        // what to do. For warranty: a missing-name error opens a dialog
+        // that prompts for the buyer name and retries on submit.
+        const text = await (res.data as Blob).text();
+        let payload: any = {};
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          /* non-JSON response */
+        }
+        if (
+          docType === "warranty" &&
+          payload?.require_buyer_name &&
+          !options?.buyerName
+        ) {
+          setWarrantyBuyerName("");
+          setWarrantyDialogOpen(true);
+          return;
+        }
+        toast.error(payload?.error ?? "Грешка при генериране на документ");
+        return;
+      }
+      // Stock dispatch is an A4 document — print on the regular printer
+      // via the browser dialog, NOT the Zebra. The Zebra printer is
+      // reserved for label-format documents (Econt waybills + warehouse
+      // packing notes), wired in their own components.
       const blob = new Blob([res.data], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
 
@@ -1324,7 +1421,17 @@ function OrderDetailModal({
             {/* Header info */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 bg-gray-50 rounded-lg p-4">
               <div>
-                <div className="text-xs text-gray-500 mb-1">Партньор</div>
+                <div className="text-xs text-gray-500 mb-1 flex items-center gap-2">
+                  <span>Партньор</span>
+                  <button
+                    type="button"
+                    onClick={() => setPartnerOverrideOpen(true)}
+                    className="text-[11px] text-blue-600 hover:text-blue-800 hover:underline"
+                    title="Редакция получател — име на ФЛ или фирма"
+                  >
+                    📝 Редакция
+                  </button>
+                </div>
                 <div className="font-medium text-sm">
                   {/* Precedence:
                       1. `partnerOverride` — local state during the invoice
@@ -1332,13 +1439,16 @@ function OrderDetailModal({
                       2. `invoice_partner_name` — server-side persisted
                          override exposed by GET /orders/:id once the
                          invoice has been created and is still active.
-                      3. Original partner. */}
+                      3. `clientDisplayName` — local state for a named
+                         individual receiver (no override partner used).
+                      4. Original partner. */}
                   {partnerOverride
                     ? partnerOverride.name
                     : ((detail as any).invoice_partner_name ??
-                      detail.partner?.name ??
-                      detail.partner_name ??
-                      `#${detail.partner_id}`)}
+                      (clientDisplayName.trim() ||
+                        detail.partner?.name ||
+                        detail.partner_name ||
+                        `#${detail.partner_id}`))}
                 </div>
                 {partnerOverride && partnerOverride.eik ? (
                   <div className="text-[11px] text-gray-500 mt-0.5">
@@ -1350,6 +1460,10 @@ function OrderDetailModal({
                     <span className="ml-1 text-amber-600">
                       (издадена на фирма)
                     </span>
+                  </div>
+                ) : clientDisplayName.trim() && !partnerOverride ? (
+                  <div className="text-[11px] text-emerald-600 mt-0.5">
+                    👤 Физическо лице с име
                   </div>
                 ) : null}
               </div>
@@ -1469,6 +1583,12 @@ function OrderDetailModal({
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead
+                      className="w-10 text-center"
+                      title="Маркирай артикулите за гаранционна карта"
+                    >
+                      🛡
+                    </TableHead>
                     <TableHead>Продукт</TableHead>
                     <TableHead className="w-24 text-right whitespace-nowrap">
                       К-во
@@ -1488,7 +1608,7 @@ function OrderDetailModal({
                   {items.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={5}
+                        colSpan={6}
                         className="text-center text-gray-400 py-6"
                       >
                         Няма артикули
@@ -1518,6 +1638,15 @@ function OrderDetailModal({
                             : "";
                       return (
                         <TableRow key={item.id} className={rowBg}>
+                          <TableCell className="text-center align-middle">
+                            <input
+                              type="checkbox"
+                              checked={warrantyItemIds.has(item.id)}
+                              onChange={() => toggleWarrantyItem(item.id)}
+                              className="h-4 w-4 cursor-pointer accent-blue-600"
+                              title="Включи в гаранционна карта"
+                            />
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <Package className="h-4 w-4 text-gray-400 shrink-0" />
@@ -2729,27 +2858,91 @@ function OrderDetailModal({
       <Dialog open={partnerOverrideOpen} onOpenChange={setPartnerOverrideOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Издай фактура на фирма</DialogTitle>
+            <DialogTitle>Редакция получател</DialogTitle>
           </DialogHeader>
 
-          <div className="flex gap-2">
+          {hasInvoice && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+              ⚠ Поръчката вече има фактура. Промените тук НЕ се прилагат
+              автоматично върху съществуващата фактура. За да се отрази, изтрий
+              фактурата (или анулирай) и я регенерирай.
+            </div>
+          )}
+
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              size="sm"
+              variant={
+                overrideMode === "individual_anon" ? "default" : "outline"
+              }
+              onClick={() => setOverrideMode("individual_anon")}
+            >
+              👤 Анонимно ФЛ
+            </Button>
+            <Button
+              size="sm"
+              variant={
+                overrideMode === "individual_named" ? "default" : "outline"
+              }
+              onClick={() => setOverrideMode("individual_named")}
+            >
+              👤 ФЛ с данни
+            </Button>
             <Button
               size="sm"
               variant={overrideMode === "existing" ? "default" : "outline"}
               onClick={() => setOverrideMode("existing")}
             >
-              Съществуваща
+              🏢 Съществуваща фирма
             </Button>
             <Button
               size="sm"
               variant={overrideMode === "new" ? "default" : "outline"}
               onClick={() => setOverrideMode("new")}
             >
-              + Нов партньор
+              + Нова фирма
             </Button>
           </div>
 
-          {overrideMode === "existing" ? (
+          {overrideMode === "individual_anon" ? (
+            <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+              👤 Фактурата ще бъде издадена на „Физическо лице — краен
+              потребител" без лични данни.
+            </div>
+          ) : overrideMode === "individual_named" ? (
+            <div className="space-y-2">
+              <div>
+                <Label>Име *</Label>
+                <Input
+                  autoFocus
+                  value={overrideIndividualName}
+                  onChange={(e) => setOverrideIndividualName(e.target.value)}
+                  placeholder="напр. Иван Иванов"
+                />
+              </div>
+              <div>
+                <Label>ЕГН</Label>
+                <Input
+                  value={overrideIndividualEgn}
+                  onChange={(e) => setOverrideIndividualEgn(e.target.value)}
+                  placeholder="напр. 8501010000"
+                  maxLength={20}
+                />
+              </div>
+              <div>
+                <Label>Адрес</Label>
+                <Input
+                  value={overrideIndividualAddress}
+                  onChange={(e) => setOverrideIndividualAddress(e.target.value)}
+                  placeholder={`напр. гр. София, ул. „Витоша" 25`}
+                />
+              </div>
+              <p className="text-[11px] text-gray-500 mt-1">
+                Данните се записват на фактурата като „Получател". Партньор в
+                базата НЕ се създава — за разово фактуриране на ФЛ.
+              </p>
+            </div>
+          ) : overrideMode === "existing" ? (
             <div>
               <Label>Партньор</Label>
               <Combobox
@@ -2883,6 +3076,39 @@ function OrderDetailModal({
             <Button
               onClick={() => {
                 if (!order) return;
+                if (overrideMode === "individual_anon") {
+                  // Anonymous individual — clear everything that would
+                  // override the default "Физическо лице — краен потребител".
+                  setPartnerOverride(null);
+                  setClientDisplayName("");
+                  setClientDisplayEgn("");
+                  setClientDisplayAddress("");
+                  setInvoicePartnerMutation.mutate({
+                    orderId: order.id,
+                    payload: null,
+                  });
+                  setPartnerOverrideOpen(false);
+                  return;
+                }
+                if (overrideMode === "individual_named") {
+                  // Named individual: clear company override, save the
+                  // free-text name/EGN/address locally; consumed at invoice
+                  // generation via `client_display_*` fields.
+                  if (!overrideIndividualName.trim()) {
+                    toast.error("Името е задължително");
+                    return;
+                  }
+                  setPartnerOverride(null);
+                  setClientDisplayName(overrideIndividualName.trim());
+                  setClientDisplayEgn(overrideIndividualEgn.trim());
+                  setClientDisplayAddress(overrideIndividualAddress.trim());
+                  setInvoicePartnerMutation.mutate({
+                    orderId: order.id,
+                    payload: null,
+                  });
+                  setPartnerOverrideOpen(false);
+                  return;
+                }
                 let payload: any = null;
                 if (overrideMode === "existing") {
                   const picked = overridePartners.find(
@@ -2905,6 +3131,11 @@ function OrderDetailModal({
                     ),
                   );
                 }
+                // Switching to a company override clears any named-individual
+                // intent — the two are mutually exclusive on the invoice.
+                setClientDisplayName("");
+                setClientDisplayEgn("");
+                setClientDisplayAddress("");
                 // Persist on the order so every document picks it up.
                 setInvoicePartnerMutation.mutate({
                   orderId: order.id,
@@ -2914,6 +3145,76 @@ function OrderDetailModal({
               }}
             >
               Запази
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Warranty buyer-name prompt — opens when the backend tells us
+          the order can't auto-resolve a buyer (anonymous individual,
+          no client_display_name, no invoice override). The cashier
+          types the buyer name once and the warranty PDF re-fetches. */}
+      <Dialog
+        open={warrantyDialogOpen}
+        onOpenChange={(o) => {
+          setWarrantyDialogOpen(o);
+          if (!o) setWarrantyBuyerName("");
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Име на купувача за гаранцията</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500">
+              Поръчката е на анонимно физическо лице — гаранцията се издава на
+              конкретно име. Името се вписва само върху тази гаранционна карта
+              (не се записва на партньора).
+            </p>
+            <div>
+              <Label>Име на купувача *</Label>
+              <Input
+                autoFocus
+                value={warrantyBuyerName}
+                onChange={(e) => setWarrantyBuyerName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && warrantyBuyerName.trim()) {
+                    e.preventDefault();
+                    setWarrantyDialogOpen(false);
+                    handleDocDownload(detail!.id, "warranty", {
+                      buyerName: warrantyBuyerName.trim(),
+                    });
+                  }
+                }}
+                placeholder="напр. Иван Петров Иванов"
+              />
+            </div>
+            <p className="text-[11px] text-gray-500">
+              Маркирани {warrantyItemIds.size}{" "}
+              {warrantyItemIds.size === 1 ? "артикул" : "артикула"} за гаранция.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setWarrantyDialogOpen(false);
+                setWarrantyBuyerName("");
+              }}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={() => {
+                if (!warrantyBuyerName.trim() || !detail) return;
+                setWarrantyDialogOpen(false);
+                handleDocDownload(detail.id, "warranty", {
+                  buyerName: warrantyBuyerName.trim(),
+                });
+              }}
+              disabled={!warrantyBuyerName.trim()}
+            >
+              Издай гаранция
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2944,6 +3245,17 @@ function EditOrderItemsModal({
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [bulkDiscount, setBulkDiscount] = useState("");
+
+  const applyBulkDiscount = () => {
+    const v = parseFloat(bulkDiscount);
+    if (!Number.isFinite(v) || v < 0 || v > 100) return;
+    setItems((prev) =>
+      prev.map((it) =>
+        it.product_id ? { ...it, discount_percent: bulkDiscount } : it,
+      ),
+    );
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -3297,7 +3609,48 @@ function EditOrderItemsModal({
           </div>
 
           <div className="space-y-2">
-            <Label>Артикули</Label>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <Label>Артикули</Label>
+              <div className="flex items-center gap-2">
+                <Label
+                  htmlFor="bulk-discount-edit"
+                  className="text-sm font-normal text-gray-600"
+                >
+                  Обща отстъпка %:
+                </Label>
+                <Input
+                  id="bulk-discount-edit"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  value={bulkDiscount}
+                  onChange={(e) => setBulkDiscount(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      applyBulkDiscount();
+                    }
+                  }}
+                  placeholder="0"
+                  className="w-20"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={applyBulkDiscount}
+                  disabled={
+                    bulkDiscount === "" ||
+                    !Number.isFinite(parseFloat(bulkDiscount)) ||
+                    parseFloat(bulkDiscount) < 0 ||
+                    parseFloat(bulkDiscount) > 100
+                  }
+                >
+                  Приложи на всички
+                </Button>
+              </div>
+            </div>
             <div className="border rounded-lg overflow-x-auto">
               <Table className="min-w-[1000px]">
                 <TableHeader>
@@ -3711,6 +4064,111 @@ function CreateOrderModal({
   const [customerMode, setCustomerMode] = useState<"legal" | "individual">(
     "legal",
   );
+
+  // New-firm sub-dialog: cashier types EIK, we auto-fill from the BG
+  // trade registry, then on submit POST /partners and select the new
+  // row inline so the order keeps moving.
+  const [newFirmOpen, setNewFirmOpen] = useState(false);
+  const [newFirm, setNewFirm] = useState({
+    name: "",
+    eik: "",
+    vat_number: "",
+    address: "",
+    city: "",
+    contact_person: "",
+    phone: "",
+    email: "",
+  });
+  const [newFirmEikLoading, setNewFirmEikLoading] = useState(false);
+  const [newFirmEikAutoFilled, setNewFirmEikAutoFilled] = useState(false);
+  const [newFirmSaving, setNewFirmSaving] = useState(false);
+
+  useEffect(() => {
+    if (!newFirmOpen) return;
+    const eik = newFirm.eik.trim();
+    if (!/^\d{9}$|^\d{13}$/.test(eik)) {
+      setNewFirmEikAutoFilled(false);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setNewFirmEikLoading(true);
+      try {
+        const res = await api.get(`/partners/lookup/${eik}`);
+        if (cancelled) return;
+        const data = res.data || {};
+        setNewFirm((p) => ({
+          ...p,
+          name: p.name || data.name || "",
+          address: p.address || data.address || "",
+          city: p.city || data.city || "",
+          vat_number: p.vat_number || data.vat_number || "",
+          contact_person: p.contact_person || data.manager || "",
+          phone: p.phone || data.phone || "",
+          email: p.email || data.email || "",
+        }));
+        setNewFirmEikAutoFilled(true);
+      } catch {
+        /* silent — user can fill manually */
+      } finally {
+        if (!cancelled) setNewFirmEikLoading(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [newFirm.eik, newFirmOpen]);
+
+  const resetNewFirm = () => {
+    setNewFirm({
+      name: "",
+      eik: "",
+      vat_number: "",
+      address: "",
+      city: "",
+      contact_person: "",
+      phone: "",
+      email: "",
+    });
+    setNewFirmEikAutoFilled(false);
+    setNewFirmEikLoading(false);
+  };
+
+  const submitNewFirm = async () => {
+    if (!newFirm.name.trim()) {
+      toast.error("Името е задължително");
+      return;
+    }
+    setNewFirmSaving(true);
+    try {
+      const res = await api.post("/partners", {
+        name: newFirm.name.trim(),
+        eik: newFirm.eik.trim() || undefined,
+        vat_number: newFirm.vat_number.trim() || undefined,
+        address: newFirm.address.trim() || undefined,
+        city: newFirm.city.trim() || undefined,
+        contact_person: newFirm.contact_person.trim() || undefined,
+        phone: newFirm.phone.trim() || undefined,
+        email: newFirm.email.trim() || undefined,
+        partner_type: "legal_entity",
+      });
+      const created = res.data;
+      qc.invalidateQueries({ queryKey: ["partners"] });
+      setForm((f) => ({ ...f, partner_id: String(created.id) }));
+      setNewFirmOpen(false);
+      resetNewFirm();
+      toast.success(`Партньорът "${created.name}" е създаден`);
+    } catch (err: any) {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при създаване на партньор",
+      );
+    } finally {
+      setNewFirmSaving(false);
+    }
+  };
   const [form, setForm] = useState({
     partner_id: "",
     delivery_date: today,
@@ -3719,6 +4177,7 @@ function CreateOrderModal({
     econt_receiver_name: "",
     econt_receiver_phone: "",
     econt_city: "",
+    econt_post_code: "",
     econt_office_code: "",
     econt_office_name: "",
     econt_street: "",
@@ -3741,6 +4200,17 @@ function CreateOrderModal({
   const [orderCreated, setOrderCreated] = useState(false);
   const [confirmOverstock, setConfirmOverstock] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [bulkDiscount, setBulkDiscount] = useState("");
+
+  const applyBulkDiscount = () => {
+    const v = parseFloat(bulkDiscount);
+    if (!Number.isFinite(v) || v < 0 || v > 100) return;
+    setItems((prev) =>
+      prev.map((it) =>
+        it.product_id ? { ...it, discount_percent: bulkDiscount } : it,
+      ),
+    );
+  };
   const [pendingOversell, setPendingOversell] = useState<{
     items: OversellItem[];
     proceed: () => void;
@@ -3815,6 +4285,7 @@ function CreateOrderModal({
         econt_receiver_name: "",
         econt_receiver_phone: "",
         econt_city: "",
+        econt_post_code: "",
         econt_office_code: "",
         econt_office_name: "",
         econt_street: "",
@@ -3922,7 +4393,8 @@ function CreateOrderModal({
   // row's tag dropdown. Two cases:
   //   1. quantity > available stock and current is 'normal' → split the
   //      row into a normal line carrying the available qty and a new
-  //      line carrying the overage with the chosen status.
+  //      line carrying the overage with the chosen status. Mirrors the
+  //      'Раздели' buttons in the overage warning banner.
   //   2. otherwise (enough stock OR row is already split) → flip the
   //      whole row to the chosen status. Useful when the customer paid
   //      for everything but won't pick up today, even though we have it
@@ -4369,710 +4841,897 @@ function CreateOrderModal({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onClose} modal={false}>
-      <DialogContent
-        className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col"
-        onKeyDown={handleDialogKeyDown}
-      >
-        <DialogHeader className="shrink-0">
-          <DialogTitle>Нова поръчка</DialogTitle>
-          <p className="text-xs text-gray-400 mt-1">
-            Tab/Enter между полетата · Ctrl+Enter за създаване
-          </p>
-        </DialogHeader>
-        <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
-          {/* Тип клиент (сегмент) */}
-          <div className="flex flex-wrap items-center gap-2">
-            <Label className="mr-2">Тип клиент:</Label>
-            <div className="inline-flex rounded-lg border bg-gray-50 p-1">
-              <button
+    <>
+      <Dialog open={open} onOpenChange={onClose} modal={false}>
+        <DialogContent
+          className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col"
+          onKeyDown={handleDialogKeyDown}
+        >
+          <DialogHeader className="shrink-0">
+            <DialogTitle>Нова поръчка</DialogTitle>
+            <p className="text-xs text-gray-400 mt-1">
+              Tab/Enter между полетата · Ctrl+Enter за създаване
+            </p>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
+            {/* Тип клиент (сегмент) */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Label className="mr-2">Тип клиент:</Label>
+              <div className="inline-flex rounded-lg border bg-gray-50 p-1">
+                <button
+                  type="button"
+                  onClick={() => setCustomerMode("legal")}
+                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                    customerMode === "legal"
+                      ? "bg-white shadow text-gray-900"
+                      : "text-gray-500 hover:text-gray-900"
+                  }`}
+                >
+                  🏢 Фирма (с ЕИК)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCustomerMode("individual")}
+                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                    customerMode === "individual"
+                      ? "bg-white shadow text-gray-900"
+                      : "text-gray-500 hover:text-gray-900"
+                  }`}
+                  disabled={!anonymousIndividual}
+                  title={
+                    anonymousIndividual
+                      ? "Физическо лице — без ЕИК, без лични данни"
+                      : "Seed партньорът липсва — изпълнете миграцията"
+                  }
+                >
+                  👤 Физическо лице
+                </button>
+              </div>
+              <Button
                 type="button"
-                onClick={() => setCustomerMode("legal")}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
-                  customerMode === "legal"
-                    ? "bg-white shadow text-gray-900"
-                    : "text-gray-500 hover:text-gray-900"
-                }`}
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setCustomerMode("legal");
+                  resetNewFirm();
+                  setNewFirmOpen(true);
+                }}
+                title="Създай нов партньор-фирма по ЕИК (auto-fill от Търговски регистър)"
               >
-                🏢 Фирма (с ЕИК)
-              </button>
-              <button
-                type="button"
-                onClick={() => setCustomerMode("individual")}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
-                  customerMode === "individual"
-                    ? "bg-white shadow text-gray-900"
-                    : "text-gray-500 hover:text-gray-900"
-                }`}
-                disabled={!anonymousIndividual}
-                title={
-                  anonymousIndividual
-                    ? "Физическо лице — без ЕИК, без лични данни"
-                    : "Seed партньорът липсва — изпълнете миграцията"
-                }
-              >
-                👤 Физическо лице
-              </button>
+                + Нова фирма
+              </Button>
+              {customerMode === "individual" && (
+                <span className="text-xs text-gray-500">
+                  Продажба на краен потребител. Касовата бележка излиза от
+                  фискалния апарат.
+                </span>
+              )}
             </div>
-            {customerMode === "individual" && (
-              <span className="text-xs text-gray-500">
-                Продажба на краен потребител. Касовата бележка излиза от
-                фискалния апарат.
-              </span>
-            )}
-          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>
-                {customerMode === "individual" ? "Клиент" : "Партньор *"}
-              </Label>
-              {customerMode === "individual" ? (
-                <div className="h-9 flex items-center px-3 rounded-md border bg-gray-50 text-sm text-gray-700">
-                  👤 Физическо лице — краен потребител
-                </div>
-              ) : (
-                <div className="flex items-stretch gap-2">
-                  <div className="flex-1">
-                    <Combobox
-                      inputRef={partnerInputRef}
-                      items={partners
-                        .filter((p) => (p as any).partner_type !== "individual")
-                        .map((p) => ({
-                          value: String(p.id),
-                          label: p.name,
-                          hint: p.microinvest_code
-                            ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
-                            : p.eik
-                              ? `ЕИК: ${p.eik}`
-                              : undefined,
-                        }))}
-                      value={form.partner_id}
-                      onChange={(val) =>
-                        setForm((f) => ({
-                          ...f,
-                          partner_id: val,
-                        }))
-                      }
-                      onClear={() =>
-                        setForm((f) => ({
-                          ...f,
-                          partner_id: "",
-                        }))
-                      }
-                      onPickEnter={() =>
-                        queueMicrotask(() =>
-                          focusAndSelect(dateInputRef.current),
-                        )
-                      }
-                      placeholder="Избери или потърси по код, име или ЕИК..."
-                      emptyMessage="Няма намерени партньори."
-                    />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>
+                  {customerMode === "individual" ? "Клиент" : "Партньор *"}
+                </Label>
+                {customerMode === "individual" ? (
+                  <div className="h-9 flex items-center px-3 rounded-md border bg-gray-50 text-sm text-gray-700">
+                    👤 Физическо лице — краен потребител
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setHistoryOpen(true)}
-                    disabled={!form.partner_id}
-                    title={
-                      form.partner_id
-                        ? "Виж минали поръчки от този партньор"
-                        : "Избери партньор"
+                ) : (
+                  <div className="flex items-stretch gap-2">
+                    <div className="flex-1">
+                      <Combobox
+                        inputRef={partnerInputRef}
+                        items={partners
+                          .filter(
+                            (p) => (p as any).partner_type !== "individual",
+                          )
+                          .map((p) => ({
+                            value: String(p.id),
+                            label: p.name,
+                            hint: p.microinvest_code
+                              ? `Код: ${p.microinvest_code}${p.eik ? ` · ЕИК: ${p.eik}` : ""}`
+                              : p.eik
+                                ? `ЕИК: ${p.eik}`
+                                : undefined,
+                          }))}
+                        value={form.partner_id}
+                        onChange={(val) =>
+                          setForm((f) => ({
+                            ...f,
+                            partner_id: val,
+                          }))
+                        }
+                        onClear={() =>
+                          setForm((f) => ({
+                            ...f,
+                            partner_id: "",
+                          }))
+                        }
+                        onPickEnter={() =>
+                          queueMicrotask(() =>
+                            focusAndSelect(dateInputRef.current),
+                          )
+                        }
+                        placeholder="Избери или потърси по код, име или ЕИК..."
+                        emptyMessage="Няма намерени партньори."
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryOpen(true)}
+                      disabled={!form.partner_id}
+                      title={
+                        form.partner_id
+                          ? "Виж минали поръчки от този партньор"
+                          : "Избери партньор"
+                      }
+                      className="shrink-0 inline-flex items-center gap-1.5 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <History className="h-4 w-4" />
+                      <span className="hidden sm:inline">История</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label>Дата на доставка</Label>
+                <Input
+                  ref={dateInputRef}
+                  type="date"
+                  value={form.delivery_date}
+                  min={today}
+                  placeholder="дд.мм.гггг"
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, delivery_date: e.target.value }))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      focusProductSearch(items[0]?.row_key);
                     }
-                    className="shrink-0 inline-flex items-center gap-1.5 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <Label>Артикули</Label>
+                <div className="flex items-center gap-2">
+                  <Label
+                    htmlFor="bulk-discount-create"
+                    className="text-sm font-normal text-gray-600"
                   >
-                    <History className="h-4 w-4" />
-                    <span className="hidden sm:inline">История</span>
-                  </button>
+                    Обща отстъпка %:
+                  </Label>
+                  <Input
+                    id="bulk-discount-create"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                    value={bulkDiscount}
+                    onChange={(e) => setBulkDiscount(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        applyBulkDiscount();
+                      }
+                    }}
+                    placeholder="0"
+                    className="w-20"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={applyBulkDiscount}
+                    disabled={
+                      bulkDiscount === "" ||
+                      !Number.isFinite(parseFloat(bulkDiscount)) ||
+                      parseFloat(bulkDiscount) < 0 ||
+                      parseFloat(bulkDiscount) > 100
+                    }
+                  >
+                    Приложи на всички
+                  </Button>
+                </div>
+              </div>
+              <div className="border rounded-lg overflow-x-auto">
+                <Table className="min-w-[1000px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[320px]">Продукт</TableHead>
+                      <TableHead className="w-24">Наличност</TableHead>
+                      <TableHead className="w-28">Количество</TableHead>
+                      <TableHead className="w-24">Кг</TableHead>
+                      <TableHead className="w-32">Ед. цена</TableHead>
+                      <TableHead className="w-20">Отст. %</TableHead>
+                      <TableHead className="w-28">Сума</TableHead>
+                      <TableHead className="w-12"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {items.map((item, i) => {
+                      const qty = Number(item.quantity) || 0;
+                      const price = Number(item.unit_price) || 0;
+                      const discount = Number(item.discount_percent) || 0;
+                      const lineTotal = qty * price * (1 - discount / 100);
+                      const availableStock = getEffectiveStock(item);
+                      // Only flag overstock on normal lines; paid-not-taken
+                      // and awaiting lines opt out of the red warning bg.
+                      const overStock =
+                        item.line_status === "normal" &&
+                        item.product_id &&
+                        availableStock >= 0 &&
+                        qty > availableStock;
+                      const noPrice = item.product_id && !price;
+                      // Effective price (post-discount) — used за below-cost
+                      // проверката, за да хващаме и случая "цена 10лв при 20%
+                      // отстъпка дава 8лв < ДЦ 9лв".
+                      const effectivePrice = price * (1 - discount / 100);
+                      const belowCost =
+                        item.product_id &&
+                        effectivePrice > 0 &&
+                        item.cost_price > 0 &&
+                        effectivePrice < item.cost_price;
+                      return (
+                        <TableRow
+                          key={item.row_key}
+                          className={
+                            item.line_status === "paid_not_taken"
+                              ? "bg-amber-50"
+                              : item.line_status === "awaiting"
+                                ? "bg-gray-50"
+                                : overStock
+                                  ? "bg-red-50"
+                                  : belowCost
+                                    ? "bg-amber-50"
+                                    : ""
+                          }
+                        >
+                          <TableCell>
+                            {item.product_id ? (
+                              <div className="flex items-center gap-2">
+                                <Package className="h-4 w-4 text-gray-400 shrink-0" />
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
+                                    <span>{item.product_name}</span>
+                                    {item.line_status === "paid_not_taken" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
+                                        💰 Платена невзета
+                                      </span>
+                                    )}
+                                    {item.line_status === "awaiting" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
+                                        ⏳ На изчакване
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-gray-400">
+                                    {item.unit}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <ProductSearchBoundary
+                                key={`psb-${item.row_key}`}
+                              >
+                                <ProductSearch
+                                  ref={(h) => {
+                                    productSearchRefs.current[item.row_key] = h;
+                                  }}
+                                  partnerId={form.partner_id}
+                                  onSelect={(p) => handleProductSelect(i, p)}
+                                  disabled={!form.partner_id}
+                                />
+                              </ProductSearchBoundary>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {item.product_id ? (
+                              <span
+                                className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
+                              >
+                                {availableStock}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              ref={(el) => {
+                                qtyRefs.current[item.row_key] = el;
+                              }}
+                              type="number"
+                              min="0.001"
+                              step="0.001"
+                              value={item.quantity}
+                              onChange={(e) =>
+                                setItem(i, "quantity", e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  focusAndSelect(
+                                    priceRefs.current[item.row_key],
+                                  );
+                                }
+                              }}
+                              className={`w-24 ${overStock ? "border-red-400 text-red-600" : ""}`}
+                              disabled={!item.product_id}
+                            />
+                            {overStock && (
+                              <div className="text-xs text-red-500 mt-0.5">
+                                max {availableStock}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={item.weight_kg}
+                              onChange={(e) =>
+                                setItem(i, "weight_kg", e.target.value)
+                              }
+                              className="w-20"
+                              disabled={!item.product_id}
+                              placeholder="0"
+                              title="Тегло (кг) — ще се запамети към продукта и ще се използва за Еконт"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              ref={(el) => {
+                                priceRefs.current[item.row_key] = el;
+                              }}
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={item.unit_price}
+                              onChange={(e) =>
+                                setItem(i, "unit_price", e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                e.preventDefault();
+                                // Enter in Цена → jump to Отст. % на СЪЩИЯ ред.
+                                focusAndSelect(
+                                  discountRefs.current[item.row_key],
+                                );
+                              }}
+                              className={`w-28 ${
+                                noPrice
+                                  ? "border-orange-400"
+                                  : belowCost
+                                    ? "border-amber-500 text-amber-700"
+                                    : ""
+                              }`}
+                              disabled={!item.product_id}
+                              title={
+                                belowCost
+                                  ? `Под доставната цена (${formatCurrency(item.cost_price)})`
+                                  : undefined
+                              }
+                            />
+                            {noPrice && (
+                              <div className="text-xs text-orange-500 mt-0.5">
+                                задай цена
+                              </div>
+                            )}
+                            {!noPrice && belowCost && (
+                              <div className="text-[10px] text-amber-700 mt-0.5 whitespace-nowrap">
+                                ⚠ под ДЦ: {formatCurrency(item.cost_price)}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              ref={(el) => {
+                                discountRefs.current[item.row_key] = el;
+                              }}
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="100"
+                              value={item.discount_percent}
+                              onChange={(e) =>
+                                setItem(i, "discount_percent", e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                e.preventDefault();
+                                const nextRow = items[i + 1];
+                                if (nextRow) {
+                                  focusAndSelect(
+                                    qtyRefs.current[nextRow.row_key],
+                                  );
+                                  return;
+                                }
+                                // Last row — auto-add if filled. Отстъпката
+                                // е optional — не я включваме в "is filled"
+                                // проверката.
+                                if (
+                                  item.product_id &&
+                                  Number(item.quantity) > 0 &&
+                                  Number(item.unit_price) > 0
+                                ) {
+                                  addItemAndFocus();
+                                } else {
+                                  focusAndSelect(qtyRefs.current[item.row_key]);
+                                }
+                              }}
+                              className={`w-20 ${discount > 0 ? "border-blue-400 text-blue-700" : ""}`}
+                              disabled={!item.product_id}
+                              placeholder="0"
+                            />
+                          </TableCell>
+                          <TableCell className="font-medium text-sm">
+                            {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    type="button"
+                                    disabled={!item.product_id}
+                                    className={`p-1 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                                      item.line_status === "paid_not_taken"
+                                        ? "text-amber-600 hover:bg-amber-100"
+                                        : item.line_status === "awaiting"
+                                          ? "text-gray-600 hover:bg-gray-100"
+                                          : "text-gray-300 hover:text-gray-600 hover:bg-gray-50"
+                                    }`}
+                                    title="Маркирай реда като платена невзета или на изчакване"
+                                  >
+                                    {item.line_status === "paid_not_taken" ? (
+                                      <span className="text-base leading-none">
+                                        💰
+                                      </span>
+                                    ) : item.line_status === "awaiting" ? (
+                                      <span className="text-base leading-none">
+                                        ⏳
+                                      </span>
+                                    ) : (
+                                      <Tag className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      setLineStatus(item.row_key, "normal")
+                                    }
+                                    className={
+                                      item.line_status === "normal"
+                                        ? "font-medium"
+                                        : ""
+                                    }
+                                  >
+                                    📦 Нормална
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      setLineStatus(
+                                        item.row_key,
+                                        "paid_not_taken",
+                                      )
+                                    }
+                                    className={
+                                      item.line_status === "paid_not_taken"
+                                        ? "font-medium text-amber-700"
+                                        : ""
+                                    }
+                                  >
+                                    💰 Платена невзета
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      setLineStatus(item.row_key, "awaiting")
+                                    }
+                                    className={
+                                      item.line_status === "awaiting"
+                                        ? "font-medium text-gray-700"
+                                        : ""
+                                    }
+                                  >
+                                    ⏳ На изчакване
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                              <button
+                                type="button"
+                                onClick={() => removeItem(i)}
+                                className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={addItem}
+                type="button"
+              >
+                + Добави артикул
+              </Button>
+              {totalItemsWeight > 0 && (
+                <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  <Package className="h-4 w-4" />
+                  <span>
+                    Общо тегло:{" "}
+                    <span className="font-semibold">
+                      {(
+                        Math.round(totalItemsWeight * 100) / 100
+                      ).toLocaleString("bg-BG", {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      кг
+                    </span>
+                  </span>
                 </div>
               )}
             </div>
+
             <div className="space-y-1.5">
-              <Label>Дата на доставка</Label>
-              <Input
-                ref={dateInputRef}
-                type="date"
-                value={form.delivery_date}
-                min={today}
-                placeholder="дд.мм.гггг"
+              <Label>Бележки</Label>
+              <Textarea
+                value={form.notes}
                 onChange={(e) =>
-                  setForm((f) => ({ ...f, delivery_date: e.target.value }))
+                  setForm((f) => ({ ...f, notes: e.target.value }))
                 }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    focusProductSearch(items[0]?.row_key);
-                  }
-                }}
+                rows={2}
               />
             </div>
+
+            {authToken && (
+              <EcontShippingPicker
+                value={{
+                  econt_delivery_type: form.econt_delivery_type,
+                  econt_receiver_name: form.econt_receiver_name,
+                  econt_receiver_phone: form.econt_receiver_phone,
+                  econt_city: form.econt_city,
+                  econt_post_code: form.econt_post_code || undefined,
+                  econt_office_code: form.econt_office_code || undefined,
+                  econt_office_name: form.econt_office_name || undefined,
+                  econt_street: form.econt_street || undefined,
+                  econt_street_num: form.econt_street_num || undefined,
+                  econt_weight: form.econt_weight,
+                  econt_cod_amount: form.econt_cod_amount,
+                  econt_payer: form.econt_payer,
+                  econt_has_cod: form.econt_has_cod,
+                  econt_shipment_description:
+                    form.econt_shipment_description || undefined,
+                  econt_shipment_date: form.econt_shipment_date || undefined,
+                }}
+                onChange={(patch) =>
+                  setForm((f) => ({
+                    ...f,
+                    ...(patch as Partial<typeof f>),
+                  }))
+                }
+                token={authToken}
+                defaultOpen={false}
+                defaultCodAmount={orderTotal}
+              />
+            )}
           </div>
 
-          <div className="space-y-2">
-            <Label>Артикули</Label>
-            <div className="border rounded-lg overflow-x-auto">
-              <Table className="min-w-[1000px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="min-w-[320px]">Продукт</TableHead>
-                    <TableHead className="w-24">Наличност</TableHead>
-                    <TableHead className="w-28">Количество</TableHead>
-                    <TableHead className="w-24">Кг</TableHead>
-                    <TableHead className="w-32">Ед. цена</TableHead>
-                    <TableHead className="w-20">Отст. %</TableHead>
-                    <TableHead className="w-28">Сума</TableHead>
-                    <TableHead className="w-12"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((item, i) => {
-                    const qty = Number(item.quantity) || 0;
-                    const price = Number(item.unit_price) || 0;
-                    const discount = Number(item.discount_percent) || 0;
-                    const lineTotal = qty * price * (1 - discount / 100);
-                    const availableStock = getEffectiveStock(item);
-                    // Only flag overstock on normal lines; paid-not-taken
-                    // and awaiting lines opt out of the red warning bg.
-                    const overStock =
-                      item.line_status === "normal" &&
-                      item.product_id &&
-                      availableStock >= 0 &&
-                      qty > availableStock;
-                    const noPrice = item.product_id && !price;
-                    // Effective price (post-discount) — used за below-cost
-                    // проверката, за да хващаме и случая "цена 10лв при 20%
-                    // отстъпка дава 8лв < ДЦ 9лв".
-                    const effectivePrice = price * (1 - discount / 100);
-                    const belowCost =
-                      item.product_id &&
-                      effectivePrice > 0 &&
-                      item.cost_price > 0 &&
-                      effectivePrice < item.cost_price;
-                    return (
-                      <TableRow
-                        key={item.row_key}
-                        className={
-                          item.line_status === "paid_not_taken"
-                            ? "bg-amber-50"
-                            : item.line_status === "awaiting"
-                              ? "bg-gray-50"
-                              : overStock
-                                ? "bg-red-50"
-                                : belowCost
-                                  ? "bg-amber-50"
-                                  : ""
-                        }
-                      >
-                        <TableCell>
-                          {item.product_id ? (
-                            <div className="flex items-center gap-2">
-                              <Package className="h-4 w-4 text-gray-400 shrink-0" />
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
-                                  <span>{item.product_name}</span>
-                                  {item.line_status === "paid_not_taken" && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
-                                      💰 Платена невзета
-                                    </span>
-                                  )}
-                                  {item.line_status === "awaiting" && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
-                                      ⏳ На изчакване
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-xs text-gray-400">
-                                  {item.unit}
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            <ProductSearchBoundary key={`psb-${item.row_key}`}>
-                              <ProductSearch
-                                ref={(h) => {
-                                  productSearchRefs.current[item.row_key] = h;
-                                }}
-                                partnerId={form.partner_id}
-                                onSelect={(p) => handleProductSelect(i, p)}
-                                disabled={!form.partner_id}
-                              />
-                            </ProductSearchBoundary>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {item.product_id ? (
-                            <span
-                              className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
-                            >
-                              {availableStock}
-                            </span>
-                          ) : (
-                            "—"
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              qtyRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            min="0.001"
-                            step="0.001"
-                            value={item.quantity}
-                            onChange={(e) =>
-                              setItem(i, "quantity", e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                focusAndSelect(priceRefs.current[item.row_key]);
-                              }
-                            }}
-                            className={`w-24 ${overStock ? "border-red-400 text-red-600" : ""}`}
-                            disabled={!item.product_id}
-                          />
-                          {overStock && (
-                            <div className="text-xs text-red-500 mt-0.5">
-                              max {availableStock}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={item.weight_kg}
-                            onChange={(e) =>
-                              setItem(i, "weight_kg", e.target.value)
-                            }
-                            className="w-20"
-                            disabled={!item.product_id}
-                            placeholder="0"
-                            title="Тегло (кг) — ще се запамети към продукта и ще се използва за Еконт"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              priceRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={item.unit_price}
-                            onChange={(e) =>
-                              setItem(i, "unit_price", e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key !== "Enter") return;
-                              e.preventDefault();
-                              // Enter in Цена → jump to Отст. % на СЪЩИЯ ред.
-                              focusAndSelect(
-                                discountRefs.current[item.row_key],
-                              );
-                            }}
-                            className={`w-28 ${
-                              noPrice
-                                ? "border-orange-400"
-                                : belowCost
-                                  ? "border-amber-500 text-amber-700"
-                                  : ""
-                            }`}
-                            disabled={!item.product_id}
-                            title={
-                              belowCost
-                                ? `Под доставната цена (${formatCurrency(item.cost_price)})`
-                                : undefined
-                            }
-                          />
-                          {noPrice && (
-                            <div className="text-xs text-orange-500 mt-0.5">
-                              задай цена
-                            </div>
-                          )}
-                          {!noPrice && belowCost && (
-                            <div className="text-[10px] text-amber-700 mt-0.5 whitespace-nowrap">
-                              ⚠ под ДЦ: {formatCurrency(item.cost_price)}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              discountRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            step="0.1"
-                            min="0"
-                            max="100"
-                            value={item.discount_percent}
-                            onChange={(e) =>
-                              setItem(i, "discount_percent", e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key !== "Enter") return;
-                              e.preventDefault();
-                              const nextRow = items[i + 1];
-                              if (nextRow) {
-                                focusAndSelect(
-                                  qtyRefs.current[nextRow.row_key],
-                                );
-                                return;
-                              }
-                              // Last row — auto-add if filled. Отстъпката
-                              // е optional — не я включваме в "is filled"
-                              // проверката.
-                              if (
-                                item.product_id &&
-                                Number(item.quantity) > 0 &&
-                                Number(item.unit_price) > 0
-                              ) {
-                                addItemAndFocus();
-                              } else {
-                                focusAndSelect(qtyRefs.current[item.row_key]);
-                              }
-                            }}
-                            className={`w-20 ${discount > 0 ? "border-blue-400 text-blue-700" : ""}`}
-                            disabled={!item.product_id}
-                            placeholder="0"
-                          />
-                        </TableCell>
-                        <TableCell className="font-medium text-sm">
-                          {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  type="button"
-                                  disabled={!item.product_id}
-                                  className={`p-1 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                                    item.line_status === "paid_not_taken"
-                                      ? "text-amber-600 hover:bg-amber-100"
-                                      : item.line_status === "awaiting"
-                                        ? "text-gray-600 hover:bg-gray-100"
-                                        : "text-gray-300 hover:text-gray-600 hover:bg-gray-50"
-                                  }`}
-                                  title="Маркирай реда като платена невзета или на изчакване"
-                                >
-                                  {item.line_status === "paid_not_taken" ? (
-                                    <span className="text-base leading-none">
-                                      💰
-                                    </span>
-                                  ) : item.line_status === "awaiting" ? (
-                                    <span className="text-base leading-none">
-                                      ⏳
-                                    </span>
-                                  ) : (
-                                    <Tag className="h-4 w-4" />
-                                  )}
-                                </button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    setLineStatus(item.row_key, "normal")
-                                  }
-                                  className={
-                                    item.line_status === "normal"
-                                      ? "font-medium"
-                                      : ""
-                                  }
-                                >
-                                  📦 Нормална
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    setLineStatus(
-                                      item.row_key,
-                                      "paid_not_taken",
-                                    )
-                                  }
-                                  className={
-                                    item.line_status === "paid_not_taken"
-                                      ? "font-medium text-amber-700"
-                                      : ""
-                                  }
-                                >
-                                  💰 Платена невзета
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    setLineStatus(item.row_key, "awaiting")
-                                  }
-                                  className={
-                                    item.line_status === "awaiting"
-                                      ? "font-medium text-gray-700"
-                                      : ""
-                                  }
-                                >
-                                  ⏳ На изчакване
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            <button
-                              type="button"
-                              onClick={() => removeItem(i)}
-                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+          {/* Order total */}
+          <div className="border-t pt-3 shrink-0">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-gray-500">
+                {validItems.length} артикул{validItems.length !== 1 ? "а" : ""}
+              </span>
+              <span className="text-lg font-bold">
+                Общо: {formatCurrency(orderTotal)}
+              </span>
             </div>
-            <Button variant="outline" size="sm" onClick={addItem} type="button">
-              + Добави артикул
-            </Button>
-            {totalItemsWeight > 0 && (
-              <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
-                <Package className="h-4 w-4" />
-                <span>
-                  Общо тегло:{" "}
-                  <span className="font-semibold">
-                    {(Math.round(totalItemsWeight * 100) / 100).toLocaleString(
-                      "bg-BG",
-                      { minimumFractionDigits: 1, maximumFractionDigits: 2 },
-                    )}{" "}
-                    кг
-                  </span>
+            {awaitingTotal > 0 && (
+              // Awaiting items live on the parent for visibility but their
+              // value never lands on the invoice or the cashier's "to
+              // collect" total — it'll be charged on a separate
+              // transaction once the goods arrive (the spawned child
+              // order). Show it as a discreet sub-line so the cashier
+              // knows what's promised but not yet pay-able.
+              <div className="flex items-center justify-end gap-2 mb-2 text-xs text-gray-500">
+                <span>⏳ На изчакване (отделна сделка):</span>
+                <span className="font-medium text-gray-700">
+                  {formatCurrency(awaitingTotal)}
                 </span>
               </div>
             )}
-          </div>
 
-          <div className="space-y-1.5">
-            <Label>Бележки</Label>
-            <Textarea
-              value={form.notes}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, notes: e.target.value }))
-              }
-              rows={2}
-            />
-          </div>
-
-          {authToken && (
-            <EcontShippingPicker
-              value={{
-                econt_delivery_type: form.econt_delivery_type,
-                econt_receiver_name: form.econt_receiver_name,
-                econt_receiver_phone: form.econt_receiver_phone,
-                econt_city: form.econt_city,
-                econt_office_code: form.econt_office_code || undefined,
-                econt_office_name: form.econt_office_name || undefined,
-                econt_street: form.econt_street || undefined,
-                econt_street_num: form.econt_street_num || undefined,
-                econt_weight: form.econt_weight,
-                econt_cod_amount: form.econt_cod_amount,
-                econt_payer: form.econt_payer,
-                econt_has_cod: form.econt_has_cod,
-                econt_shipment_description:
-                  form.econt_shipment_description || undefined,
-                econt_shipment_date: form.econt_shipment_date || undefined,
-              }}
-              onChange={(patch) =>
-                setForm((f) => ({
-                  ...f,
-                  ...(patch as Partial<typeof f>),
-                }))
-              }
-              token={authToken}
-              defaultOpen={false}
-              defaultCodAmount={orderTotal}
-            />
-          )}
-        </div>
-
-        {/* Order total */}
-        <div className="border-t pt-3 shrink-0">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-500">
-              {validItems.length} артикул{validItems.length !== 1 ? "а" : ""}
-            </span>
-            <span className="text-lg font-bold">
-              Общо: {formatCurrency(orderTotal)}
-            </span>
-          </div>
-          {awaitingTotal > 0 && (
-            // Awaiting items live on the parent for visibility but their
-            // value never lands on the invoice or the cashier's "to
-            // collect" total — it'll be charged on a separate
-            // transaction once the goods arrive (the spawned child
-            // order). Show it as a discreet sub-line so the cashier
-            // knows what's promised but not yet pay-able.
-            <div className="flex items-center justify-end gap-2 mb-2 text-xs text-gray-500">
-              <span>⏳ На изчакване (отделна сделка):</span>
-              <span className="font-medium text-gray-700">
-                {formatCurrency(awaitingTotal)}
-              </span>
-            </div>
-          )}
-
-          {hasStockIssues && !confirmOverstock && (
-            <div className="flex items-start gap-2 p-2 bg-orange-50 border border-orange-200 rounded text-sm text-orange-700 mb-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <div>
-                <div className="font-medium mb-1">
-                  Внимание: Недостатъчна наличност!
-                </div>
-                <div className="mb-2">
-                  Следните артикули надвишават наличното количество:
-                </div>
-                <ul className="list-disc list-inside space-y-0.5">
-                  {validItems
-                    .filter(
-                      (i) =>
-                        getEffectiveStock(i) >= 0 &&
-                        Number(i.quantity) > getEffectiveStock(i),
-                    )
-                    .map((i, idx) => (
-                      <li key={idx}>
-                        {i.product_name}: налични {getEffectiveStock(i)},
-                        поръчани {i.quantity}
-                      </li>
-                    ))}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {hasStockIssues && confirmOverstock && (
-            <div className="flex items-start gap-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800 mb-2">
-              <CheckCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>
-                Потвърдено — поръчката ще бъде създадена въпреки недостатъчната
-                наличност.
-              </span>
-            </div>
-          )}
-
-          {hasBelowCost && (
-            <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800 mb-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <div>
-                <div className="font-medium mb-1">
-                  Внимание: продажба под доставната цена!
-                </div>
-                <div className="mb-1">
-                  Следните артикули са с цена под ДЦ (губиш пари на всеки бр.):
-                </div>
-                <ul className="list-disc list-inside space-y-0.5">
-                  {belowCostItems.map((i, idx) => {
-                    const qty = Number(i.quantity) || 0;
-                    const loss = (i.cost_price - Number(i.unit_price)) * qty;
-                    return (
-                      <li key={idx}>
-                        {i.product_name}: продаваш на{" "}
-                        {formatCurrency(Number(i.unit_price))}, ДЦ{" "}
-                        {formatCurrency(i.cost_price)} (загуба{" "}
-                        {formatCurrency(loss)})
-                      </li>
-                    );
-                  })}
-                </ul>
-                {!canOverrideBelowCost && (
-                  <div className="mt-2 font-medium text-red-700">
-                    Свържи се с admin за одобрение — само admin може да пуска
-                    поръчки под доставна цена.
+            {hasStockIssues && !confirmOverstock && (
+              <div className="flex items-start gap-2 p-2 bg-orange-50 border border-orange-200 rounded text-sm text-orange-700 mb-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-medium mb-1">
+                    Внимание: Недостатъчна наличност!
                   </div>
-                )}
+                  <div className="mb-2">
+                    Следните артикули надвишават наличното количество:
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {validItems
+                      .filter(
+                        (i) =>
+                          getEffectiveStock(i) >= 0 &&
+                          Number(i.quantity) > getEffectiveStock(i),
+                      )
+                      .map((i, idx) => (
+                        <li key={idx}>
+                          {i.product_name}: налични {getEffectiveStock(i)},
+                          поръчани {i.quantity}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {hasStockIssues && confirmOverstock && (
+              <div className="flex items-start gap-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800 mb-2">
+                <CheckCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>
+                  Потвърдено — поръчката ще бъде създадена въпреки
+                  недостатъчната наличност.
+                </span>
+              </div>
+            )}
+
+            {hasBelowCost && (
+              <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800 mb-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-medium mb-1">
+                    Внимание: продажба под доставната цена!
+                  </div>
+                  <div className="mb-1">
+                    Следните артикули са с цена под ДЦ (губиш пари на всеки
+                    бр.):
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {belowCostItems.map((i, idx) => {
+                      const qty = Number(i.quantity) || 0;
+                      const loss = (i.cost_price - Number(i.unit_price)) * qty;
+                      return (
+                        <li key={idx}>
+                          {i.product_name}: продаваш на{" "}
+                          {formatCurrency(Number(i.unit_price))}, ДЦ{" "}
+                          {formatCurrency(i.cost_price)} (загуба{" "}
+                          {formatCurrency(loss)})
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {!canOverrideBelowCost && (
+                    <div className="mt-2 font-medium text-red-700">
+                      Свържи се с admin за одобрение — само admin може да пуска
+                      поръчки под доставна цена.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {errorMsg && <ErrorMessage message={errorMsg} />}
+
+            <DialogFooter className="gap-2">
+              <Button variant="outline" onClick={onClose}>
+                {orderCreated ? "Затвори" : "Отказ"}
+              </Button>
+              {!orderCreated && hasStockIssues && !confirmOverstock && (
+                <Button
+                  variant="destructive"
+                  onClick={() => setConfirmOverstock(true)}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                  Потвърди въпреки липсата
+                </Button>
+              )}
+              {!orderCreated && (
+                <Button
+                  variant="outline"
+                  onClick={() => void submitCreateOrder({ asQuoted: true })}
+                  disabled={!canSubmit || mutation.isPending}
+                  className="border-amber-500 text-amber-700 hover:bg-amber-50"
+                  title="Запази без изваждане от наличности и отвори PDF на офертата"
+                >
+                  <FileText className="h-4 w-4" />
+                  Запази като оферта
+                </Button>
+              )}
+              {!orderCreated && (!hasStockIssues || confirmOverstock) && (
+                <Button
+                  onClick={() => void submitCreateOrder()}
+                  disabled={!canSubmit}
+                >
+                  {mutation.isPending ? (
+                    <>
+                      <Spinner size="sm" />
+                      Запазване...
+                    </>
+                  ) : (
+                    "Създай поръчка"
+                  )}
+                </Button>
+              )}
+              {orderCreated && (
+                <span className="text-sm text-green-600 flex items-center gap-1">
+                  <CheckCircle className="h-4 w-4" />
+                  Поръчката е създадена
+                </span>
+              )}
+            </DialogFooter>
+          </div>
+        </DialogContent>
+        {customerMode === "legal" && form.partner_id && (
+          <PartnerHistoryDrawer
+            open={historyOpen}
+            onOpenChange={setHistoryOpen}
+            partnerId={form.partner_id}
+            partnerName={
+              partners.find((p) => String(p.id) === form.partner_id)?.name ?? ""
+            }
+            currentProductIds={
+              new Set(
+                items
+                  .map((i) => Number(i.product_id))
+                  .filter((id) => Number.isFinite(id) && id > 0),
+              )
+            }
+            onAddItem={(hi) => addHistoryItems([hi])}
+            onRepeatOrder={(his) => addHistoryItems(his)}
+          />
+        )}
+        <OversellConfirmDialog
+          open={!!pendingOversell}
+          items={pendingOversell?.items ?? []}
+          onCancel={() => setPendingOversell(null)}
+          onConfirm={() => {
+            const proceed = pendingOversell?.proceed;
+            setPendingOversell(null);
+            proceed?.();
+          }}
+        />
+      </Dialog>
+
+      <Dialog
+        open={newFirmOpen}
+        onOpenChange={(o) => {
+          setNewFirmOpen(o);
+          if (!o) resetNewFirm();
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Нова фирма</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <div>
+              <Label>ЕИК *</Label>
+              <Input
+                autoFocus
+                value={newFirm.eik}
+                onChange={(e) =>
+                  setNewFirm((p) => ({ ...p, eik: e.target.value }))
+                }
+                placeholder="9–13 цифри (auto-fill от Търговски регистър)"
+              />
+              {newFirmEikLoading && (
+                <p className="text-[11px] text-blue-600 mt-1">
+                  🔎 Търся фирмата в Търговски регистър...
+                </p>
+              )}
+              {newFirmEikAutoFilled && !newFirmEikLoading && (
+                <p className="text-[11px] text-emerald-600 mt-1">
+                  ✓ Данните са попълнени автоматично
+                </p>
+              )}
+            </div>
+            <div>
+              <Label>Име *</Label>
+              <Input
+                value={newFirm.name}
+                onChange={(e) =>
+                  setNewFirm((p) => ({ ...p, name: e.target.value }))
+                }
+                placeholder="напр. Фирма Х ЕООД"
+              />
+            </div>
+            <div>
+              <Label>ДДС №</Label>
+              <Input
+                value={newFirm.vat_number}
+                onChange={(e) =>
+                  setNewFirm((p) => ({ ...p, vat_number: e.target.value }))
+                }
+              />
+            </div>
+            <div>
+              <Label>Адрес</Label>
+              <Input
+                value={newFirm.address}
+                onChange={(e) =>
+                  setNewFirm((p) => ({ ...p, address: e.target.value }))
+                }
+              />
+            </div>
+            <div>
+              <Label>Град</Label>
+              <Input
+                value={newFirm.city}
+                onChange={(e) =>
+                  setNewFirm((p) => ({ ...p, city: e.target.value }))
+                }
+              />
+            </div>
+            <div>
+              <Label>МОЛ</Label>
+              <Input
+                value={newFirm.contact_person}
+                placeholder="Управител / материално отговорно лице"
+                onChange={(e) =>
+                  setNewFirm((p) => ({ ...p, contact_person: e.target.value }))
+                }
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label>Телефон</Label>
+                <Input
+                  value={newFirm.phone}
+                  onChange={(e) =>
+                    setNewFirm((p) => ({ ...p, phone: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <Label>E-mail</Label>
+                <Input
+                  value={newFirm.email}
+                  onChange={(e) =>
+                    setNewFirm((p) => ({ ...p, email: e.target.value }))
+                  }
+                />
               </div>
             </div>
-          )}
-
-          {errorMsg && <ErrorMessage message={errorMsg} />}
-
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={onClose}>
-              {orderCreated ? "Затвори" : "Отказ"}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setNewFirmOpen(false);
+                resetNewFirm();
+              }}
+              disabled={newFirmSaving}
+            >
+              Отказ
             </Button>
-            {!orderCreated && hasStockIssues && !confirmOverstock && (
-              <Button
-                variant="destructive"
-                onClick={() => setConfirmOverstock(true)}
-              >
-                <AlertTriangle className="h-4 w-4" />
-                Потвърди въпреки липсата
-              </Button>
-            )}
-            {!orderCreated && (
-              <Button
-                variant="outline"
-                onClick={() => void submitCreateOrder({ asQuoted: true })}
-                disabled={!canSubmit || mutation.isPending}
-                className="border-amber-500 text-amber-700 hover:bg-amber-50"
-                title="Запази без изваждане от наличности и отвори PDF на офертата"
-              >
-                <FileText className="h-4 w-4" />
-                Запази като оферта
-              </Button>
-            )}
-            {!orderCreated && (!hasStockIssues || confirmOverstock) && (
-              <Button
-                onClick={() => void submitCreateOrder()}
-                disabled={!canSubmit}
-              >
-                {mutation.isPending ? (
-                  <>
-                    <Spinner size="sm" />
-                    Запазване...
-                  </>
-                ) : (
-                  "Създай поръчка"
-                )}
-              </Button>
-            )}
-            {orderCreated && (
-              <span className="text-sm text-green-600 flex items-center gap-1">
-                <CheckCircle className="h-4 w-4" />
-                Поръчката е създадена
-              </span>
-            )}
+            <Button
+              onClick={submitNewFirm}
+              disabled={newFirmSaving || !newFirm.name.trim()}
+            >
+              {newFirmSaving ? "Запазвам…" : "Запази и избери"}
+            </Button>
           </DialogFooter>
-        </div>
-      </DialogContent>
-      {customerMode === "legal" && form.partner_id && (
-        <PartnerHistoryDrawer
-          open={historyOpen}
-          onOpenChange={setHistoryOpen}
-          partnerId={form.partner_id}
-          partnerName={
-            partners.find((p) => String(p.id) === form.partner_id)?.name ?? ""
-          }
-          currentProductIds={
-            new Set(
-              items
-                .map((i) => Number(i.product_id))
-                .filter((id) => Number.isFinite(id) && id > 0),
-            )
-          }
-          onAddItem={(hi) => addHistoryItems([hi])}
-          onRepeatOrder={(his) => addHistoryItems(his)}
-        />
-      )}
-      {/* The split-action props (onReduceToAvailable / onSplitToPaidNotTaken /
-          onSplitToAwaiting) used to surface "Намали до наличност / Платена
-          невзета / На изчакване" buttons inside this confirm dialog. Now
-          superseded by the per-row tag dropdown in CreateOrderModal — the
-          cashier picks the line state on the row itself, so the dialog only
-          needs to confirm "yes, push the normal lines into negative". */}
-      <OversellConfirmDialog
-        open={!!pendingOversell}
-        items={pendingOversell?.items ?? []}
-        onCancel={() => setPendingOversell(null)}
-        onConfirm={() => {
-          const proceed = pendingOversell?.proceed;
-          setPendingOversell(null);
-          proceed?.();
-        }}
-      />
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -5135,13 +5794,13 @@ export function Orders() {
         setStatusFilter(next); // pending / quoted / … / "" (Всички)
     }
   };
-
   // Per-column text filters
   const [filters, setFilters] = useState({
     order_number: "",
     partner: "",
     invoice: "",
     stock_dispatch: "",
+    warranty: "",
     shipment: "",
     article: "",
   });
@@ -5255,6 +5914,10 @@ export function Orders() {
       }
       // Stock dispatch
       if (!matchField(order.stock_dispatch_number, filters.stock_dispatch))
+        return false;
+      // Warranty — only orders that already had a warranty card issued
+      // (warranty_number is non-null) match. Format WR-NNNNNNN.
+      if (!matchField((order as any).warranty_number, filters.warranty))
         return false;
       // Shipment number — Econt tracking ID. Backend already filters
       // server-side via `?shipment_number=...`, but the client-side
@@ -5379,8 +6042,8 @@ export function Orders() {
   });
 
   // Migration 072 — flip an awaiting child order back to active when the
-  // promised stock arrives. Backend bumps order_date to today so the row
-  // jumps into the day's "Поръчки" view ready for invoicing.
+  // promised stock arrives. Backend bumps order_date to today so the
+  // row jumps into the day's "Поръчки" view ready for invoicing.
   const markArrivedMutation = useMutation({
     // Empty body — pass `{}` so axios still sends the request with the
     // application/json content-type that Fastify expects (otherwise it
@@ -5707,76 +6370,87 @@ export function Orders() {
         </div>
       </div>
 
-      {/* Per-column search filters */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+      {/* Per-column search filters — compact, fit on a single row at lg+ */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-1.5">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
           <Input
             value={filters.order_number}
             onChange={(e) =>
               setFilters((f) => ({ ...f, order_number: e.target.value }))
             }
             placeholder="№ поръчка"
-            className="pl-8 h-9 text-sm"
+            className="pl-7 h-8 text-xs"
           />
         </div>
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
           <Input
             value={filters.partner}
             onChange={(e) =>
               setFilters((f) => ({ ...f, partner: e.target.value }))
             }
             placeholder="Партньор"
-            className="pl-8 h-9 text-sm"
+            className="pl-7 h-8 text-xs"
           />
         </div>
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
           <Input
             value={filters.invoice}
             onChange={(e) =>
               setFilters((f) => ({ ...f, invoice: e.target.value }))
             }
             placeholder="№ фактура"
-            className="pl-8 h-9 text-sm"
+            className="pl-7 h-8 text-xs"
           />
         </div>
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
           <Input
             value={filters.stock_dispatch}
             onChange={(e) =>
               setFilters((f) => ({ ...f, stock_dispatch: e.target.value }))
             }
-            placeholder="Стокова разписка"
-            className="pl-8 h-9 text-sm"
+            placeholder="Ст. разписка"
+            className="pl-7 h-8 text-xs"
+          />
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
+          <Input
+            value={filters.warranty}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, warranty: e.target.value }))
+            }
+            placeholder="№ гаранция"
+            className="pl-7 h-8 text-xs"
           />
         </div>
         {/* Shipment-number search — paste an Econt tracking ID from the
             email and the matching order pops up. Backend match is
             ILIKE on econt_shipment_number, so partial codes work too. */}
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
           <Input
             value={filters.shipment}
             onChange={(e) =>
               setFilters((f) => ({ ...f, shipment: e.target.value }))
             }
             placeholder="№ товарителница"
-            className="pl-8 h-9 text-sm"
+            className="pl-7 h-8 text-xs"
           />
         </div>
         {/* Article search — finds orders containing this product (snapshot match) */}
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
           <Input
             value={filters.article}
             onChange={(e) =>
               setFilters((f) => ({ ...f, article: e.target.value }))
             }
             placeholder="Артикул"
-            className="pl-8 h-9 text-sm"
+            className="pl-7 h-8 text-xs"
           />
         </div>
       </div>
@@ -6113,12 +6787,16 @@ export function Orders() {
                       </TableCell>
                       {/* Плащане badge — green/amber/slate/red derived from
                           paid_amount vs total_amount + the COD-shipment
-                          flag. Cancelled orders short-circuit to a dash so
-                          the user doesn't read "Неплатена" on a void row. */}
+                          flag. Cancelled and quoted orders short-circuit to
+                          a dash — quotations carry no payment obligation
+                          until they're converted to a real order. */}
                       <TableCell>
                         {(() => {
                           const o = order as any;
-                          if (order.status === "cancelled") {
+                          if (
+                            order.status === "cancelled" ||
+                            order.status === "quoted"
+                          ) {
                             return (
                               <span className="text-gray-400 text-sm">—</span>
                             );

@@ -84,6 +84,57 @@ describe("POST /econt/calculate", () => {
     expect(sentBody.label.services.cdCurrency).toBe("BGN");
   });
 
+  it("does NOT divide by 1.95583 when Econt returns currency=EUR", async () => {
+    // Real Econt response shape: account is configured for EUR, so totalPrice
+    // arrives in EUR already. The pre-2026-05 code blindly divided by the
+    // BGN rate, halving the displayed price (24.42 EUR → 12.11 EUR).
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        label: { totalPrice: 24.42, currency: "EUR" },
+      }),
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/econt/calculate",
+      payload: {
+        receiverCity: "Добрич",
+        receiverOfficeCode: "9305",
+        weight: 15,
+        codAmount: 286.32,
+        servicesPayer: "RECEIVER",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.price).toBe(24.42);
+    expect(body.priceBGN).toBeCloseTo(47.76, 1);
+  });
+
+  it("forwards servicesPayer=RECEIVER to Econt as paymentReceiverMethod", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ label: { totalPrice: 0, currency: "EUR" } }),
+    });
+    const app = await buildApp();
+    await app.inject({
+      method: "POST",
+      url: "/econt/calculate",
+      payload: {
+        receiverCity: "София",
+        receiverOfficeCode: "1",
+        weight: 5,
+        servicesPayer: "RECEIVER",
+      },
+    });
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.label.paymentReceiverMethod).toBe("cash");
+    expect(sent.label.paymentReceiverAmount).toBe(100);
+    expect(sent.label.paymentReceiverAmountIsPercent).toBe(true);
+    expect(sent.label.paymentSenderMethod).toBeUndefined();
+  });
+
   it("uses receiverAddress when no office code is given", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

@@ -39,12 +39,17 @@ function formatDateBg(iso: string): string {
 const methodLabels: Record<string, string> = {
   cash: "В брой",
   bank: "Банков превод",
-  card: "Карта",
+  cod: "Наложен платеж",
+  pos: "ПОС",
 };
-const methodVariants: Record<string, "success" | "info" | "default"> = {
+const methodVariants: Record<
+  string,
+  "success" | "info" | "default" | "warning"
+> = {
   cash: "success",
   bank: "info",
-  card: "default",
+  cod: "warning",
+  pos: "default",
 };
 
 function exportCsv(payments: Payment[], tab: "invoice" | "razpiska") {
@@ -118,25 +123,37 @@ export function Payments() {
   });
 
   useEffect(() => {
+    let lastMinusAt = 0;
     const onKey = (e: KeyboardEvent) => {
-      const isCombo =
-        e.altKey &&
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        e.code === "KeyR";
-      if (!isCombo) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setRazpiskaUnlocked((prev) => {
-        const next = !prev;
-        if (next) {
-          sessionStorage.setItem("razpiska_tab_unlocked", "true");
-        } else {
-          sessionStorage.removeItem("razpiska_tab_unlocked");
-          setActiveTab("invoice");
-        }
-        return next;
-      });
+      const target = e.target as HTMLElement | null;
+      const isEditable =
+        !!target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (isEditable) return;
+
+      if (e.key === "-") {
+        lastMinusAt = Date.now();
+        return;
+      }
+      if ((e.key === "+" || e.key === "=") && Date.now() - lastMinusAt < 1500) {
+        lastMinusAt = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        setRazpiskaUnlocked((prev) => {
+          const next = !prev;
+          if (next) {
+            sessionStorage.setItem("razpiska_tab_unlocked", "true");
+          } else {
+            sessionStorage.removeItem("razpiska_tab_unlocked");
+            setActiveTab("invoice");
+          }
+          return next;
+        });
+        return;
+      }
+      lastMinusAt = 0;
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -199,7 +216,10 @@ export function Payments() {
     .filter((p) => p.payment_method === "cash")
     .reduce((s, p) => s + safeAmount(p.amount), 0);
   const bankTotal = payments
-    .filter((p) => p.payment_method === "bank" || p.payment_method === "card")
+    .filter((p) => p.payment_method === "bank")
+    .reduce((s, p) => s + safeAmount(p.amount), 0);
+  const posTotal = payments
+    .filter((p) => p.payment_method === "pos")
     .reduce((s, p) => s + safeAmount(p.amount), 0);
 
   return (
@@ -260,7 +280,7 @@ export function Payments() {
       {/* Summary */}
       <div className="summary-cards">
         {isSingleDay ? (
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
             <div className="rounded-xl bg-gray-50 border border-gray-200 p-4">
               <p className="text-sm text-gray-600">За деня</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
@@ -277,6 +297,12 @@ export function Payments() {
               <p className="text-sm text-blue-600">По банка</p>
               <p className="text-2xl font-bold text-blue-700 mt-1">
                 {formatCurrency(bankTotal)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-purple-50 border border-purple-200 p-4">
+              <p className="text-sm text-purple-600">ПОС</p>
+              <p className="text-2xl font-bold text-purple-700 mt-1">
+                {formatCurrency(posTotal)}
               </p>
             </div>
             <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
@@ -344,7 +370,8 @@ export function Payments() {
                 <option value="all">Всички</option>
                 <option value="bank">Банков превод</option>
                 <option value="cash">В брой</option>
-                <option value="card">Карта</option>
+                <option value="pos">ПОС</option>
+                <option value="cod">Наложен платеж</option>
               </Select>
             </div>
             <div className="space-y-1">

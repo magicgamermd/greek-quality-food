@@ -1127,7 +1127,8 @@ export function Invoices() {
                 >
                   <option value="bank">Банков превод</option>
                   <option value="cash">В брой</option>
-                  <option value="card">Карта</option>
+                  <option value="cod">Наложен платеж</option>
+                  <option value="pos">ПОС</option>
                 </select>
               </div>
 

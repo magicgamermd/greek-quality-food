@@ -17,6 +17,7 @@ export const PERMISSIONS = {
   SETTINGS_MANAGE: "settings.manage",
   BELOW_COST_OVERRIDE: "orders.below_cost_override",
   ORDERS_EDIT_AFTER_FULFILL: "orders.edit_after_fulfill",
+  PURCHASE_ORDERS_MANAGE: "purchase_orders.manage",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

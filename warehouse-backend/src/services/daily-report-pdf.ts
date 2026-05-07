@@ -47,6 +47,7 @@ const PAYMENT_LABEL_BG: Record<string, string> = {
   cash: "В брой",
   bank: "Банков превод",
   cod: "Наложен платеж",
+  pos: "ПОС",
 };
 
 // Short variants used inside the dense per-order table where column
@@ -55,7 +56,7 @@ const PAYMENT_LABEL_BG: Record<string, string> = {
 const PAYMENT_LABEL_SHORT_BG: Record<string, string> = {
   cash: "Кеш",
   bank: "Банка",
-  card: "Карта",
+  pos: "ПОС",
   cod: "НП",
 };
 
@@ -102,6 +103,13 @@ export interface DailyReportData {
       invoice_status: string | null;
       payment_status: "paid" | "partial" | "unpaid" | "cancelled";
     }>;
+  };
+  // Поръчки от деня без пълно плащане към края на деня. Информативен
+  // tally в footer-а на "Поръчки и плащания днес" — НЕ е в касовия
+  // total, отделна справка "колко висят".
+  unpaidToday: {
+    count: number;
+    total: number;
   };
   // "Очакван наложен платеж" — Econt COD shipments sent today whose
   // money is still in transit with the courier. Tracked separately so
@@ -193,15 +201,19 @@ export async function generateDailyReportPdf(
     doc.moveDown(0.8);
 
     // ── KPI strip ────────────────────────────────────────
-    // Four equally-sized cards: Получени общо · В брой · По банка/Карта
-    // · Наложен платеж (очакван). The last card is the new addition
-    // requested by МЕРТ-М — money already shipped via Econt that's
-    // still in transit with the courier.
+    // Five equally-sized cards: Получени общо · В брой · По банка · ПОС
+    // · Наложен платеж (очакван). POS now has its own card so the cashier
+    // can reconcile cash drawer / bank receipts / POS terminal totals
+    // independently. Money already shipped via Econt that's still in
+    // transit with the courier sits in the last (amber) card.
     const cashSum = data.payments.byMethod
       .filter((m) => m.method === "cash")
       .reduce((s, m) => s + m.sum, 0);
     const bankSum = data.payments.byMethod
-      .filter((m) => m.method === "bank" || m.method === "card")
+      .filter((m) => m.method === "bank")
+      .reduce((s, m) => s + m.sum, 0);
+    const posSum = data.payments.byMethod
+      .filter((m) => m.method === "pos")
       .reduce((s, m) => s + m.sum, 0);
 
     const kpiCards: Array<{
@@ -215,11 +227,8 @@ export async function generateDailyReportPdf(
         color: "#10b981", // emerald
       },
       { label: "В брой", value: fmtEur(cashSum), color: "#0f172a" },
-      {
-        label: "По банка / Карта",
-        value: fmtEur(bankSum),
-        color: "#0f172a",
-      },
+      { label: "По банка", value: fmtEur(bankSum), color: "#0f172a" },
+      { label: "ПОС", value: fmtEur(posSum), color: "#7c3aed" }, // violet
       {
         label: "Наложен платеж (очакван)",
         value: fmtEur(data.expectedCod.total),
@@ -393,38 +402,53 @@ export async function generateDailyReportPdf(
         .stroke();
       doc.moveDown(0.4);
 
-      // Footer summary block, right-aligned, three rows.
+      // Footer summary block, right-aligned. Cash / Bank / POS each
+      // get their own row so the cashier can reconcile against three
+      // independent receipt sources (drawer, bank statement, POS slip
+      // tape). "Общо" is the sum that hit the till today; "Неплатени
+      // днес" sits below it as an informational tally — it does NOT
+      // contribute to the total, just answers "колко висят".
       const summaryX = L + pageW - 220;
-      doc.font("Main").fontSize(9).fillColor("#0f172a");
-      doc.text("В брой:", summaryX, doc.y, { width: 130, align: "right" });
-      doc.font("MainBold").text(fmtEur(cashSum), summaryX + 130, doc.y - 11, {
-        width: 90,
-        align: "right",
-      });
-      doc.font("Main").text("По банка / Карта:", summaryX, doc.y, {
-        width: 130,
-        align: "right",
-      });
-      doc.font("MainBold").text(fmtEur(bankSum), summaryX + 130, doc.y - 11, {
-        width: 90,
-        align: "right",
-      });
+      const writeRow = (
+        label: string,
+        amount: number,
+        opts: { bold?: boolean; size?: number; color?: string } = {},
+      ) => {
+        const sz = opts.size ?? 9;
+        const color = opts.color ?? "#0f172a";
+        doc
+          .font(opts.bold ? "MainBold" : "Main")
+          .fontSize(sz)
+          .fillColor(color);
+        doc.text(label, summaryX, doc.y, { width: 130, align: "right" });
+        doc
+          .font("MainBold")
+          .fontSize(sz)
+          .text(fmtEur(amount), summaryX + 130, doc.y - sz - 2, {
+            width: 90,
+            align: "right",
+          });
+      };
+
+      writeRow("В брой:", cashSum);
+      writeRow("По банка:", bankSum);
+      writeRow("ПОС:", posSum);
       doc
         .moveTo(summaryX + 70, doc.y - 1)
         .lineTo(summaryX + 220, doc.y - 1)
         .lineWidth(0.4)
         .strokeColor("#94a3b8")
         .stroke();
-      doc
-        .font("MainBold")
-        .fontSize(10)
-        .text("Общо:", summaryX, doc.y, { width: 130, align: "right" });
-      doc
-        .font("MainBold")
-        .text(fmtEur(data.payments.total), summaryX + 130, doc.y - 12, {
-          width: 90,
-          align: "right",
-        });
+      writeRow("Общо:", data.payments.total, { bold: true, size: 10 });
+
+      // Информативно: неплатените от деня — поръчки от деня без пълно
+      // плащане към края на деня. Не влиза в касовия total — отделно
+      // tally за справка.
+      doc.moveDown(0.4);
+      writeRow("Неплатени от деня:", data.unpaidToday.total, {
+        color: "#b45309", // amber-700
+      });
+
       doc.font("Main").fontSize(9).fillColor("#0f172a");
     }
     doc.moveDown(0.8);

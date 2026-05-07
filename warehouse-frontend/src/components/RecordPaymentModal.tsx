@@ -381,7 +381,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
               <option value="cash">В брой</option>
               <option value="bank">Банков превод</option>
               <option value="cod">Наложен платеж</option>
-              <option value="card">Карта</option>
+              <option value="pos">ПОС</option>
             </Select>
             {form.payment_method === "cod" &&
               (() => {

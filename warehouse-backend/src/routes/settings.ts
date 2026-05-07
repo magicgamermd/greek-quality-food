@@ -32,6 +32,10 @@ const updateSettingsSchema = z.object({
   // control how transaction documents render. Booleans stay optional so
   // partial PATCH-style saves still work.
   show_bgn_on_invoice: z.boolean().optional(),
+  // CUPS queue name for the Zebra label printer (Econt waybills +
+  // stock-dispatch labels). When set, /print/zebra ships the PDF
+  // straight to that printer via `lp -d`.
+  zebra_printer_name: z.string().max(120).nullish(),
 });
 
 async function requireAuth(request: FastifyRequest) {
@@ -168,6 +172,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
           ["writeoff_commission_member1", body.writeoff_commission_member1],
           ["writeoff_commission_member2", body.writeoff_commission_member2],
           ["show_bgn_on_invoice", body.show_bgn_on_invoice],
+          ["zebra_printer_name", body.zebra_printer_name],
         ];
 
         for (const [field, value] of fields) {

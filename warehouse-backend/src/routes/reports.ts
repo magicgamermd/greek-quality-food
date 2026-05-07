@@ -528,6 +528,26 @@ async function assembleDailyReportData(
         };
       }),
     },
+    unpaidToday: (() => {
+      // Информативен tally в footer-а: поръчки от деня без пълно плащане
+      // към края на деня. Изключваме cancelled (нямат смисъл в "неплатени")
+      // и paid_not_taken/awaiting не променят логиката — статусът тук е
+      // payment_status (paid/partial/unpaid/cancelled), който се изчислява
+      // в paymentsRows блока по-горе. Сумираме remaining = total − paid.
+      let count = 0;
+      let total = 0;
+      for (const r of orderPaymentRows) {
+        const totalAmt = parseFloat(r.total_amount ?? 0);
+        const paid = parseFloat(r.paid_amount ?? 0);
+        if (r.status === "cancelled") continue;
+        const remaining = totalAmt - paid;
+        if (remaining > 0.001) {
+          count++;
+          total += remaining;
+        }
+      }
+      return { count, total };
+    })(),
     expectedCod: {
       count: expectedCodRows.length,
       total: expectedCodTotal,

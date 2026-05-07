@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Truck, ChevronDown, ChevronUp } from "lucide-react";
 import { WorkingDayPicker } from "@/components/ui/WorkingDayPicker";
@@ -132,13 +132,23 @@ export function EcontShippingPicker({
 
   // Mirror the matched postCode onto the form value so it travels with
   // /econt/calculate, /econt/shipment, and the order's persisted Econt
-  // payload. Effect runs only when the postCode actually changes; the
-  // guard avoids a write-loop with the parent's onChange.
+  // payload. Guarded with a ref because some parents don't memoize the
+  // onChange prop AND don't propagate `econt_post_code` back into the
+  // `value` prop — without the ref both conditions in the deps array
+  // (`value.econt_post_code !== cityPostCode` stays true forever; new
+  // `onChange` identity each render re-runs the effect) would loop.
+  const syncedPostCodeRef = useRef<string>("");
   useEffect(() => {
-    if (cityPostCode && value.econt_post_code !== cityPostCode) {
-      onChange({ econt_post_code: cityPostCode });
+    if (!cityPostCode) return;
+    const key = `${cityInput}|${cityPostCode}`;
+    if (syncedPostCodeRef.current === key) return;
+    if (value.econt_post_code === cityPostCode) {
+      syncedPostCodeRef.current = key;
+      return;
     }
-  }, [cityPostCode, value.econt_post_code, onChange]);
+    syncedPostCodeRef.current = key;
+    onChange({ econt_post_code: cityPostCode });
+  }, [cityPostCode, cityInput, value.econt_post_code, onChange]);
 
   const streetInput = value.econt_street ?? "";
   const debouncedStreet = useDebouncedValue(streetInput);

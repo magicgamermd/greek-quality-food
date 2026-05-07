@@ -210,6 +210,41 @@ export function EcontShipmentActions({
     }
   };
 
+  // Send the Econt waybill PDF directly to the configured Zebra printer
+  // via /print/zebra. Falls back gracefully when the printer name isn't
+  // set (the cashier can still use "Отвори PDF" for browser printing).
+  const printOnZebra = async () => {
+    let pdfUrl = order.econt_pdf_url;
+    if (!pdfUrl) {
+      try {
+        const r = await apiGet<{ pdfURL: string | null }>(
+          apiBaseUrl,
+          token,
+          `/econt/label-pdf/${order.econt_shipment_number}`,
+        );
+        pdfUrl = r.pdfURL ?? null;
+      } catch (err) {
+        toast.error((err as Error).message);
+        return;
+      }
+    }
+    if (!pdfUrl) {
+      toast.error("PDF на товарителницата не е намерен");
+      return;
+    }
+    try {
+      const r = await apiPost<{
+        ok: boolean;
+        printer?: string;
+        error?: string;
+      }>(apiBaseUrl, token, "/print/zebra", { pdf_url: pdfUrl });
+      if (r.ok) toast.success(`Изпратено към ${r.printer ?? "Zebra"}`);
+      else toast.error(r.error ?? "Грешка при печат");
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
   const openTracking = () => {
     if (order.econt_tracking_url) {
       window.open(order.econt_tracking_url, "_blank");
@@ -361,6 +396,14 @@ export function EcontShipmentActions({
               onClick={openPdf}
             >
               Отвори PDF
+            </button>
+            <button
+              type="button"
+              className="px-3 py-1.5 border rounded text-sm bg-blue-50 hover:bg-blue-100 border-blue-300 text-blue-800"
+              onClick={printOnZebra}
+              title="Принтирай на Zebra (без диалог)"
+            >
+              🖨 Принтирай
             </button>
             <button
               type="button"

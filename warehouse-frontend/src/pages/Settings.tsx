@@ -60,6 +60,8 @@ interface CompanySettings {
   fiscal_operator_password?: string;
   // Document toggles (migration 069+)
   show_bgn_on_invoice?: boolean;
+  // CUPS queue name for the Zebra label printer (waybills + stock dispatch)
+  zebra_printer_name?: string;
 }
 
 export function Settings() {
@@ -863,6 +865,31 @@ export function Settings() {
                       след преходния период, за да остане само EUR.
                     </p>
                   </div>
+                </div>
+
+                <div className="space-y-2 border-t pt-4">
+                  <Label htmlFor="zebra_printer_name" className="font-medium">
+                    Zebra принтер (товарителници + бележки от склад)
+                  </Label>
+                  <input
+                    id="zebra_printer_name"
+                    type="text"
+                    value={companyForm.zebra_printer_name || ""}
+                    onChange={(e) =>
+                      setCompanyForm((prev) => ({
+                        ...prev,
+                        zebra_printer_name: e.target.value,
+                      }))
+                    }
+                    placeholder="напр. Zebra_ZD420 (име на CUPS опашката)"
+                    className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    CUPS име на принтера (System Settings → Printers & Scanners
+                    → името под иконата). Когато е попълнено, товарителниците и
+                    стоковите разписки тръгват директно към тоя принтер без
+                    диалог. Празно → старото поведение (browser print).
+                  </p>
                 </div>
 
                 <div className="flex justify-end pt-2">

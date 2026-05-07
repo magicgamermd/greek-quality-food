@@ -21,6 +21,7 @@ import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { generateWarrantyCardPdf } from "../services/warranty-pdf.js";
 import { generateOfferPdf } from "../services/offer-pdf.js";
 import { generateProtocolPdf } from "../services/protocol-pdf.js";
+import { generatePackingLabelPdf } from "../services/packing-label-pdf.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -440,6 +441,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       invoice_number,
       stock_dispatch_number,
       commercial_document_number,
+      warranty_number,
       request_number,
       object_query,
       q,
@@ -566,6 +568,16 @@ export default async function orderRoutes(app: FastifyInstance) {
       params.push(`%${commercialDocNumber}%`);
     }
 
+    // Warranty number — only orders that already had a warranty card
+    // generated (warranty_issued_at IS NOT NULL) match. Format is
+    // WR-NNNNNNN, derived from order_number, so a partial like "0000012"
+    // or "WR-12" both work.
+    const warrantyNumber = normalizeOptionalText(warranty_number);
+    if (warrantyNumber) {
+      where += ` AND ${WARRANTY_NUMBER_SQL} ILIKE $${paramIdx++}`;
+      params.push(`%${warrantyNumber}%`);
+    }
+
     const requestNumber = normalizeOptionalText(request_number);
     if (requestNumber) {
       where += ` AND o.request_number ILIKE $${paramIdx++}`;
@@ -620,6 +632,7 @@ export default async function orderRoutes(app: FastifyInstance) {
           OR inv.invoice_number ILIKE $${paramIdx}
           OR ${STOCK_DISPATCH_NUMBER_SQL} ILIKE $${paramIdx}
           OR ${COMMERCIAL_DOC_NUMBER_SQL} ILIKE $${paramIdx}
+          OR ${WARRANTY_NUMBER_SQL} ILIKE $${paramIdx}
           OR o.request_number ILIKE $${paramIdx}
           OR ${ORDER_OBJECT_CODE_SQL} ILIKE $${paramIdx}
         )
@@ -654,6 +667,7 @@ export default async function orderRoutes(app: FastifyInstance) {
              COALESCE(ic.item_count, 0)::int AS item_count,
              ${STOCK_DISPATCH_NUMBER_SQL} AS stock_dispatch_number,
              ${COMMERCIAL_DOC_NUMBER_SQL} AS commercial_document_number,
+             ${WARRANTY_NUMBER_SQL} AS warranty_number,
              ${ORDER_OBJECT_NAME_SQL} AS object_name,
              ${ORDER_OBJECT_CODE_SQL} AS object_code,
              (o.invoice_id IS NOT NULL) AS invoiced,
@@ -3094,13 +3108,19 @@ export default async function orderRoutes(app: FastifyInstance) {
       const filename = `Стокова_разписка_${docNumber}${suffix}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
 
-      return reply
-        .header("Content-Type", "application/pdf")
-        .header(
-          "Content-Disposition",
-          `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
-        )
-        .send(stream);
+      return (
+        reply
+          .header("Content-Type", "application/pdf")
+          .header(
+            "Content-Disposition",
+            `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+          )
+          // Path on the backend filesystem so the frontend can ask
+          // /print/zebra to spool it without re-uploading the bytes.
+          .header("X-Pdf-Path", outputPath)
+          .header("Access-Control-Expose-Headers", "X-Pdf-Path")
+          .send(stream)
+      );
     },
   );
 
@@ -3196,12 +3216,12 @@ export default async function orderRoutes(app: FastifyInstance) {
       const offerNumber = `OF-${String(order.order_number || order.id).padStart(7, "0")}`;
       const company = await getCompanySettings();
 
-      const totalNet = items.reduce(
+      const totalGross = items.reduce(
         (sum: number, it: any) => sum + parseFloat(it.total_price || 0),
         0,
       );
-      const totalVat = totalNet * 0.2;
-      const totalGross = totalNet + totalVat;
+      const totalNet = totalGross / 1.2;
+      const totalVat = totalGross - totalNet;
 
       const pdfDir = path.resolve(process.cwd(), "data", "documents");
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
@@ -3258,27 +3278,142 @@ export default async function orderRoutes(app: FastifyInstance) {
   // Serial number = WR-<order_number padded to 7 digits>, so the warranty
   // can be traced back to the source order / invoice. All other fields are
   // filled by hand.
-  app.get<{ Params: { id: string } }>(
+  app.get<{
+    Params: { id: string };
+    Querystring: {
+      items?: string;
+      buyer_name?: string;
+      months?: string;
+    };
+  }>(
     "/:id/warranty-pdf",
     { preHandler: ordersManagePreHandler },
     async (request, reply) => {
       const id = Number(request.params.id);
-      const { rows } = await query(
-        "SELECT id, order_number FROM orders WHERE id = $1",
+      const { rows: orderRows } = await query(
+        `SELECT o.id, o.order_number, o.order_date, o.partner_id,
+                o.invoice_partner_id,
+                p.name AS partner_name, p.partner_type, p.eik AS partner_eik,
+                p.address AS partner_address, p.city AS partner_city,
+                ip.name AS invoice_partner_name, ip.eik AS invoice_partner_eik,
+                ip.address AS invoice_partner_address, ip.city AS invoice_partner_city
+           FROM orders o
+           JOIN partners p ON p.id = o.partner_id
+           LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
+          WHERE o.id = $1`,
         [id],
       );
-      if (!rows.length)
+      if (!orderRows.length)
         return reply.status(404).send({ error: "Order not found" });
 
-      const order = rows[0];
+      const order = orderRows[0];
       const serialNumber = `WR-${String(order.order_number || order.id).padStart(7, "0")}`;
+
+      // Optional comma-separated list of order_item ids — when present
+      // the warranty includes ONLY those lines, otherwise all items on
+      // the order. Lets the cashier issue a partial-coverage warranty
+      // (e.g. only durable goods, skipping the ones that don't carry it).
+      const itemIdsParam = (request.query.items ?? "").trim();
+      const itemIds = itemIdsParam
+        ? itemIdsParam
+            .split(",")
+            .map((s) => parseInt(s.trim(), 10))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        : [];
+
+      const itemsSql = itemIds.length
+        ? `SELECT id, name_bg_snapshot AS name_bg, sku_snapshot AS sku, quantity
+             FROM order_items
+            WHERE order_id = $1 AND id = ANY($2::int[])
+            ORDER BY id`
+        : `SELECT id, name_bg_snapshot AS name_bg, sku_snapshot AS sku, quantity
+             FROM order_items
+            WHERE order_id = $1
+            ORDER BY id`;
+      const { rows: items } = await query(
+        itemsSql,
+        itemIds.length ? [id, itemIds] : [id],
+      );
+      if (!items.length)
+        return reply
+          .status(400)
+          .send({ error: "Не са избрани артикули за гаранция." });
+
+      // Buyer resolution priority:
+      //   1. invoice_partner_id (override → company)  → use that partner's data
+      //   2. partner_type=individual + body buyer_name → use the override name
+      //   3. partner_type=legal_entity                 → partner.name
+      //   4. partner_type=individual without override  → 400 (require name)
+      const overrideBuyer = (request.query.buyer_name ?? "").trim();
+      let buyerName: string;
+      let buyerEik: string | null = null;
+      let buyerAddress: string | null = null;
+      if (order.invoice_partner_id && order.invoice_partner_name) {
+        buyerName = order.invoice_partner_name;
+        buyerEik = order.invoice_partner_eik ?? null;
+        buyerAddress = [
+          order.invoice_partner_city,
+          order.invoice_partner_address,
+        ]
+          .filter(Boolean)
+          .join(", ");
+      } else if (order.partner_type === "legal_entity") {
+        buyerName = order.partner_name;
+        buyerEik = order.partner_eik ?? null;
+        buyerAddress = [order.partner_city, order.partner_address]
+          .filter(Boolean)
+          .join(", ");
+      } else if (overrideBuyer) {
+        buyerName = overrideBuyer;
+      } else if (
+        order.partner_type === "individual" &&
+        order.partner_name !== "Физическо лице — краен потребител"
+      ) {
+        // Named individual partner row — use the partner data directly.
+        buyerName = order.partner_name;
+        buyerAddress = [order.partner_city, order.partner_address]
+          .filter(Boolean)
+          .join(", ");
+      } else {
+        return reply.status(400).send({
+          error:
+            "Гаранцията се издава на конкретно име. Подайте име на купувача.",
+          require_buyer_name: true,
+        });
+      }
+
+      const months = (() => {
+        const m = parseInt(request.query.months ?? "", 10);
+        return Number.isFinite(m) && m > 0 && m <= 120 ? m : 12;
+      })();
+
+      const company = await getCompanySettings();
 
       const pdfDir = path.resolve(process.cwd(), "data", "documents");
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
       const outputPath = path.join(pdfDir, `warranty-${id}.pdf`);
 
+      const stockDispatchNumber = `SR-${String(order.order_number || order.id).padStart(7, "0")}`;
       await generateWarrantyCardPdf({
         serial_number: serialNumber,
+        purchase_date: order.order_date.toISOString().slice(0, 10),
+        warranty_months: months,
+        buyer_name: buyerName,
+        buyer_eik: buyerEik || undefined,
+        buyer_address: buyerAddress || undefined,
+        seller: {
+          name: company.company_name,
+          eik: company.eik,
+          address: [company.city, company.address].filter(Boolean).join(", "),
+          phone: company.phone || undefined,
+        },
+        items: items.map((it: any) => ({
+          name_bg: it.name_bg,
+          sku: it.sku,
+          quantity: it.quantity,
+          unit: "бр",
+        })),
+        stock_dispatch_number: stockDispatchNumber,
         outputPath,
       });
 
@@ -3398,6 +3533,77 @@ export default async function orderRoutes(app: FastifyInstance) {
           `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
         )
         .send(stream);
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // GET /:id/packing-label-pdf — Бележка за пакетиране
+  // ════════════════════════════════════════════════════════════════════
+  // Internal A6 label that warehouse staff print and stick on the box
+  // while preparing the order — same printer as the Econt waybill, but
+  // generated locally so it works for pickup orders too.
+  app.get<{ Params: { id: string } }>(
+    "/:id/packing-label-pdf",
+    { preHandler: ordersManagePreHandler },
+    async (request, reply) => {
+      const id = Number(request.params.id);
+      const data = await loadOrderWithBatches(id);
+      if (!data) return reply.status(404).send({ error: "Order not found" });
+
+      const { order, items } = data;
+      const receiver = effectiveReceiver(order);
+
+      // Delivery line — Econt city/office or address, otherwise pickup.
+      // Plain text only, no emoji: Roboto has no emoji glyphs and would
+      // render them as tofu boxes on the printed label.
+      let deliveryLabel = "Вземане на място";
+      if (order.econt_city) {
+        if (order.econt_delivery_type === "address" && order.econt_street) {
+          deliveryLabel = `Еконт адрес: ${order.econt_city}, ${order.econt_street}${
+            order.econt_street_num ? ` №${order.econt_street_num}` : ""
+          }`;
+        } else if (order.econt_office_name) {
+          deliveryLabel = `Еконт офис: ${order.econt_city} — ${order.econt_office_name}`;
+        } else {
+          deliveryLabel = `Еконт: ${order.econt_city}`;
+        }
+      }
+
+      const pdfDir = path.resolve(process.cwd(), "data", "documents");
+      if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+      const outputPath = path.join(pdfDir, `packing-label-${id}.pdf`);
+
+      await generatePackingLabelPdf({
+        orderNumber: order.order_number ?? order.id,
+        partnerName: receiver.name || `Партньор #${order.partner_id}`,
+        preparedAt: new Date(),
+        items: items.map((it: any) => ({
+          name_bg: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
+          quantity: it.quantity,
+          unit: it.unit || "бр.",
+        })),
+        deliveryLabel,
+        notes: order.notes ?? null,
+        outputPath,
+      });
+
+      const stream = fs.createReadStream(outputPath);
+      const filename = `Бележка_поръчка_${order.order_number ?? order.id}.pdf`;
+      const encodedFilename = encodeURIComponent(filename);
+
+      return (
+        reply
+          .header("Content-Type", "application/pdf")
+          .header(
+            "Content-Disposition",
+            `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+          )
+          // Path on the backend filesystem so the frontend can ask
+          // /print/zebra to spool it without re-uploading the bytes.
+          .header("X-Pdf-Path", outputPath)
+          .header("Access-Control-Expose-Headers", "X-Pdf-Path")
+          .send(stream)
+      );
     },
   );
 }

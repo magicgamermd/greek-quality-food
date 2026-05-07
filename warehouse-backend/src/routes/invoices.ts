@@ -115,6 +115,21 @@ const createInvoiceSchema = z.object({
     .max(255)
     .optional()
     .transform((v) => (v && v.length > 0 ? v : null)),
+  // Optional EGN/ЕГН + address for a named individual receiver. Same
+  // mutual-exclusivity rules as client_display_name (cleared when an
+  // override partner is in effect).
+  client_display_egn: z
+    .string()
+    .trim()
+    .max(20)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
+  client_display_address: z
+    .string()
+    .trim()
+    .max(500)
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
   // Legal basis printed in the "Основание за сделката" line of the PDF
   // when the invoice is issued without VAT. Free text; empty → null.
   vat_exemption_reason: z
@@ -512,6 +527,14 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           partner?.partner_type === "individual"
             ? (body.client_display_name ?? null)
             : null;
+        let clientDisplayEgn: string | null =
+          partner?.partner_type === "individual"
+            ? (body.client_display_egn ?? null)
+            : null;
+        let clientDisplayAddress: string | null =
+          partner?.partner_type === "individual"
+            ? (body.client_display_address ?? null)
+            : null;
 
         // Batch D — partner override.
         //
@@ -538,6 +561,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           }
           invoicePartnerId = order.invoice_partner_id;
           clientDisplayName = null;
+          clientDisplayEgn = null;
+          clientDisplayAddress = null;
         } else if (body.partner_override) {
           if (partner?.partner_type !== "individual") {
             throw Object.assign(
@@ -558,6 +583,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             [invoicePartnerId, body.order_id],
           );
           clientDisplayName = null;
+          clientDisplayEgn = null;
+          clientDisplayAddress = null;
         }
 
         // Calculate totals — order_items.total_price is GROSS (price already
@@ -586,9 +613,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           `INSERT INTO invoices
            (invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross, include_vat,
-            client_display_name, payment_method,
-            vat_exemption_reason, invoice_note)
-         VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            client_display_name, client_display_egn, client_display_address,
+            payment_method, vat_exemption_reason, invoice_note)
+         VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING *`,
           [
             invoiceNumber,
@@ -599,6 +626,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             totalGross,
             body.include_vat,
             clientDisplayName,
+            clientDisplayEgn,
+            clientDisplayAddress,
             body.payment_method,
             body.vat_exemption_reason ?? null,
             body.invoice_note ?? null,
@@ -619,11 +648,17 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         const invoicesDir = path.resolve("uploads", "invoices");
         fs.mkdirSync(invoicesDir, { recursive: true });
 
-        // Re-fetch the partner row for the PDF when an override was used —
-        // otherwise the original `partner` (the individual) would be printed
-        // on the invoice instead of the company.
+        // Re-fetch the partner row for the PDF whenever the resolved
+        // invoice partner differs from the order's own partner. The override
+        // can land here via TWO paths — `body.partner_override` (legacy
+        // inline) OR `orders.invoice_partner_id` (persisted, set by
+        // PUT /orders/:id/invoice-partner before invoice issue, and
+        // surviving previous invoice deletions). Without this re-fetch,
+        // re-issuing a deleted invoice on a previously-overridden order
+        // would print the original individual on the PDF even though
+        // invoice.partner_id correctly points to the company.
         let invoicePartner = partner;
-        if (body.partner_override) {
+        if (invoicePartnerId !== order.partner_id) {
           const { rows } = await client.query(
             "SELECT * FROM partners WHERE id = $1",
             [invoicePartnerId],
@@ -719,10 +754,16 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           [order.id],
         );
 
+        // Use the invoice's own partner_id, not order.partner_id. When a
+        // partner override was applied at issuance (Batch D — individual
+        // order, invoice on a company), invoice.partner_id holds the
+        // company while order.partner_id is still the individual. Reading
+        // order.partner_id here would regenerate the PDF with the
+        // individual's data instead of the company's.
         const {
           rows: [partner],
         } = await client.query("SELECT * FROM partners WHERE id = $1", [
-          order.partner_id,
+          invoice.partner_id,
         ]);
 
         // Recalculate totals — order_items.total_price is GROSS (МЕРТ-М

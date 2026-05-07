@@ -24,6 +24,7 @@ import { Suppliers } from "@/pages/Suppliers";
 import { Invoices } from "@/pages/Invoices";
 import { Payments } from "@/pages/Payments";
 import { Analytics } from "@/pages/Analytics";
+import PurchaseOrders from "@/pages/PurchaseOrders";
 import { Settings } from "@/pages/Settings";
 import { OwnerAnalytics } from "@/pages/OwnerAnalytics";
 import { OwnerDashboard } from "@/pages/owner/OwnerDashboard";
@@ -245,6 +246,14 @@ function AppRoutes() {
           element={
             <ProtectedRoute allowedRoles={["admin"]}>
               <Analytics />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="purchase-orders"
+          element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <PurchaseOrders />
             </ProtectedRoute>
           }
         />

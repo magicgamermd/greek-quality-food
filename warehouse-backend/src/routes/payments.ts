@@ -12,7 +12,7 @@ const createPaymentSchema = z
     // the cashier records the payment with method=cod once the courier
     // confirms collection (orders.ts already aggregates SUM(amount) WHERE
     // payment_method='cod' into paid_cod_amount, so it must be writable).
-    payment_method: z.enum(["cash", "bank", "card", "cod"]).default("bank"),
+    payment_method: z.enum(["cash", "bank", "pos", "cod"]).default("bank"),
     bank_reference: z.string().optional(),
     paid_at: z.string().optional(), // ISO date
     matched_by_agent: z.boolean().default(false),

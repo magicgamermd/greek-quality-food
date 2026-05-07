@@ -302,7 +302,7 @@ export interface Payment {
   invoice_id?: number | null;
   order_id?: number | null;
   amount: number;
-  payment_method: "cash" | "bank" | "card";
+  payment_method: "cash" | "bank" | "pos" | "cod";
   paid_at: string;
   bank_reference?: string;
   matched_by_agent?: boolean;

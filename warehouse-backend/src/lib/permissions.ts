@@ -34,6 +34,8 @@ export const PERMISSIONS = {
   // Sales overrides (admin-only by default)
   BELOW_COST_OVERRIDE: "orders.below_cost_override",
   ORDERS_EDIT_AFTER_FULFILL: "orders.edit_after_fulfill",
+  // Procurement (admin-only by default — no role grants this)
+  PURCHASE_ORDERS_MANAGE: "purchase_orders.manage",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -194,6 +196,14 @@ export const PERMISSION_REGISTRY: Array<{
     group: "Счетоводство",
     label: "Делта Про експорт",
     description: "CP1251 експорт за счетоводна програма",
+  },
+  // Снабдяване
+  {
+    permission: PERMISSIONS.PURCHASE_ORDERS_MANAGE,
+    group: "Снабдяване",
+    label: "Заявки към доставчици",
+    description:
+      "Създаване и проследяване на заявки към доставчици (PDF за пращане)",
   },
   // Система
   {

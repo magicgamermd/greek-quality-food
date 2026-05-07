@@ -67,7 +67,7 @@ interface InvoiceData {
     total_gross: string | number;
     currency?: string | null;
     /** Payment method — defaults to "bank" if not set (most common for B2B) */
-    payment_method?: "cash" | "bank" | "cod" | null;
+    payment_method?: "cash" | "bank" | "cod" | "pos" | null;
     /** Optional override label — if set, used verbatim instead of mapping */
     payment_method_label?: string | null;
     /** ЗДДС чл. 114, ал. 1, т.12 — reason when VAT is not charged */
@@ -80,6 +80,10 @@ interface InvoiceData {
     transaction_basis?: string | null;
     /** Buyer name override for individual customers who want the invoice on a specific name */
     client_display_name?: string | null;
+    /** ЕГН of the named individual receiver (mutually exclusive with partner override) */
+    client_display_egn?: string | null;
+    /** Address of the named individual receiver (mutually exclusive with partner override) */
+    client_display_address?: string | null;
     /** Свободен текст към фактура (например "по проект X"), printed below totals */
     invoice_note?: string | null;
   };
@@ -525,23 +529,37 @@ function buildInvoicePartyFields(
   party: InvoiceData["partner"],
   company: InvoiceData["company"],
   clientDisplayName?: string | null,
+  clientDisplayEgn?: string | null,
+  clientDisplayAddress?: string | null,
 ): { buyerFields: InvoicePartyField[]; supplierFields: InvoicePartyField[] } {
-  const buyerAddressParts = [
-    party.city ? `гр. ${party.city}` : "",
-    party.address ? normalizeAddress(party.address) : "",
-  ].filter(Boolean);
-
   const isIndividualBuyer = party.partner_type === "individual";
+  // Individual receivers can override the address with a free-text one
+  // (e.g. retail customer with no partner row). Companies always use the
+  // partner row's stored address — overrides on legal entities are done
+  // by changing the receiving partner, not the address text.
+  const overrideAddr = (clientDisplayAddress ?? "").trim();
+  const buyerAddressParts =
+    isIndividualBuyer && overrideAddr.length > 0
+      ? [overrideAddr]
+      : [
+          party.city ? `гр. ${party.city}` : "",
+          party.address ? normalizeAddress(party.address) : "",
+        ].filter(Boolean);
+
   const buyerName =
     (clientDisplayName && clientDisplayName.trim().length > 0
       ? clientDisplayName.trim()
       : party.name) || "Физическо лице — краен потребител";
   const buyerLabel = isIndividualBuyer ? "Клиент:" : "МП:";
+  const overrideEgn = (clientDisplayEgn ?? "").trim();
 
   const buyerFields: InvoicePartyField[] = [
     { label: buyerLabel, value: buyerName, bold: true },
     ...(!isIndividualBuyer && party.eik
       ? [{ label: "ЕИК:", value: party.eik }]
+      : []),
+    ...(isIndividualBuyer && overrideEgn.length > 0
+      ? [{ label: "ЕГН:", value: overrideEgn }]
       : []),
     ...(!isIndividualBuyer && party.vat_number
       ? [{ label: "ДДС номер:", value: party.vat_number }]
@@ -716,6 +734,8 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       partner,
       co,
       data.invoice.client_display_name ?? null,
+      data.invoice.client_display_egn ?? null,
+      data.invoice.client_display_address ?? null,
     );
 
     const drawPageHeader = (
@@ -1135,7 +1155,9 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
           ? "В брой"
           : data.invoice.payment_method === "cod"
             ? "Наложен платеж"
-            : "Банков превод");
+            : data.invoice.payment_method === "pos"
+              ? "ПОС"
+              : "Банков превод");
       doc.font("MainBold").text(paymentLabel, L + 90, y, { width: 200 });
       y += 13;
 

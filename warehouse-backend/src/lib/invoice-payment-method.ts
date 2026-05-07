@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 
-export const INVOICE_PAYMENT_METHODS = ["cash", "bank", "cod"] as const;
+export const INVOICE_PAYMENT_METHODS = ["cash", "bank", "cod", "pos"] as const;
 
 export type InvoicePaymentMethod = (typeof INVOICE_PAYMENT_METHODS)[number];
 
@@ -16,6 +16,7 @@ export const INVOICE_PAYMENT_METHOD_LABELS: Record<
   cash: "В брой",
   bank: "Банков превод",
   cod: "Наложен платеж",
+  pos: "ПОС",
 };
 
 export const invoicePaymentMethodSchema = z
