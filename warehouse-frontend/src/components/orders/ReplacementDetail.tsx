@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Printer, PackageCheck, Ban } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { formatCurrency } from "@/lib/utils";
 import type { Order, OrderItem } from "@/types";
 
 /**
@@ -34,12 +35,10 @@ export interface ReplacementDetailProps {
   isBusy?: boolean;
 }
 
-function formatLeva(amount: number): string {
-  const abs = Math.abs(amount);
-  return `${abs.toLocaleString("bg-BG", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} лв`;
+// Display in EUR via the project-wide formatter (it converts BGN totals
+// to EUR using BGN_PER_EUR). Sign is rendered separately by callers.
+function formatAmount(amount: number): string {
+  return formatCurrency(Math.abs(amount));
 }
 
 function lineTotal(item: OrderItem): number {
@@ -89,10 +88,10 @@ function ItemsTable({
                 {it.unit ? ` ${it.unit}` : ""}
               </td>
               <td className="px-3 py-2 text-right">
-                {formatLeva(Number(it.unit_price) || 0)}
+                {formatAmount(Number(it.unit_price) || 0)}
               </td>
               <td className="px-3 py-2 text-right font-medium">
-                {formatLeva(lineTotal(it))}
+                {formatAmount(lineTotal(it))}
               </td>
             </tr>
           ))}
@@ -129,10 +128,10 @@ export function ReplacementDetail({
   const diff = giveSum - returnSum;
   const isZero = Math.abs(diff) < 0.005;
   const diffLabel = isZero
-    ? "0.00 лв (равно)"
+    ? `${formatCurrency(0)} (равно)`
     : diff > 0
-      ? `+${formatLeva(diff)} (клиент доплаща)`
-      : `−${formatLeva(diff)} (връщаме на клиент)`;
+      ? `+${formatAmount(diff)} (клиент доплаща)`
+      : `−${formatAmount(diff)} (връщаме на клиент)`;
 
   const partnerName =
     (order as any).invoice_partner_name ??
@@ -163,7 +162,7 @@ export function ReplacementDetail({
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-base font-semibold">🟢 Взема се</h3>
           <span className="text-sm text-gray-600">
-            Сума: <span className="font-semibold">{formatLeva(giveSum)}</span>
+            Сума: <span className="font-semibold">{formatAmount(giveSum)}</span>
           </span>
         </div>
         <ItemsTable items={giveItems} emptyText="Няма взети артикули" />
@@ -173,7 +172,8 @@ export function ReplacementDetail({
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-base font-semibold">🔴 Връща се</h3>
           <span className="text-sm text-gray-600">
-            Сума: <span className="font-semibold">{formatLeva(returnSum)}</span>
+            Сума:{" "}
+            <span className="font-semibold">{formatAmount(returnSum)}</span>
           </span>
         </div>
         <ItemsTable items={returnItems} emptyText="Няма върнати артикули" />

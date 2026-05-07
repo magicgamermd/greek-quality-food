@@ -82,13 +82,10 @@ function emptyLine(): ReplacementLineItem {
 }
 
 function formatLeva(amount: number): string {
-  // Replacement diffs are always shown in BGN (the cashier paying/refunding
-  // at the till works in лв, not the EUR-display formatCurrency uses).
-  const abs = Math.abs(amount);
-  return `${(Math.round(abs * 100) / 100).toLocaleString("bg-BG", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} лв`;
+  // Display diffs in EUR via the project-wide formatter (it handles the
+  // BGN→EUR conversion using BGN_PER_EUR). Sign is rendered separately
+  // by callers.
+  return formatCurrency(Math.abs(amount));
 }
 
 export function ReplacementForm({ partnerId, onChange }: ReplacementFormProps) {
@@ -173,7 +170,8 @@ function DiffBanner({ diff, isZero }: { diff: number; isZero: boolean }) {
         role="status"
         aria-live="polite"
       >
-        <span className="font-medium">0 лв</span> (равно — без плащане)
+        <span className="font-medium">{formatCurrency(0)}</span> (равно — без
+        плащане)
       </div>
     );
   }

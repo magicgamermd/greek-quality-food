@@ -80,8 +80,12 @@ export interface ReplacementPdfOrder {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+// Display amounts in EUR to match the rest of the project. Order totals
+// are stored in BGN; convert at format time using the project-wide rate.
+const BGN_PER_EUR = 1.95583;
 function formatBgn(amount: number): string {
-  return `${amount.toFixed(2)} лв`;
+  const eur = amount / BGN_PER_EUR;
+  return `${eur.toFixed(2)} EUR`;
 }
 
 function formatDate(date: Date): string {
