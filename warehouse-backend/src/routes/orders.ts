@@ -2074,8 +2074,40 @@ export default async function orderRoutes(app: FastifyInstance) {
         //   - 'paid_not_taken'  → customer already paid; allow inventory
         //                          to go negative (promised stock)
         //   - 'normal' (default) → standard pre-checked deduction
+        //
+        // Замяна (product replacement, spec 4.2): is_returning lines come
+        // BACK from the customer, so their stock movement is REVERSED —
+        // increment inventory instead of decrementing. No COGS snapshot
+        // for return lines (the original sale already accounted for cost).
         for (const item of items) {
           if (item.line_status === "awaiting") {
+            continue;
+          }
+          if (item.is_returning) {
+            // Return line — add stock back. Mirror deductProductStock's
+            // UPDATE shape (same table, same WHERE on the partial-unique
+            // row). If no inventory row exists yet for this product,
+            // create one starting at +qty (parallels the negative-row
+            // creation in deductProductStock).
+            const qty = parseFloat(item.quantity);
+            const { rowCount } = await client.query(
+              `UPDATE inventory
+                 SET quantity = quantity + $1,
+                     updated_at = NOW()
+               WHERE product_id = $2
+                 AND warehouse_id = 1
+                 AND batch_id IS NULL
+               RETURNING quantity`,
+              [qty, item.product_id],
+            );
+            if (!rowCount) {
+              await client.query(
+                `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+                 VALUES ($1, 1, $2, NULL)`,
+                [item.product_id, qty],
+              );
+            }
+            // Skip COGS snapshot for return lines.
             continue;
           }
           const allowNegative = item.line_status === "paid_not_taken";
