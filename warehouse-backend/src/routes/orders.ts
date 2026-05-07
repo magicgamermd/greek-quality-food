@@ -1314,6 +1314,23 @@ export default async function orderRoutes(app: FastifyInstance) {
             [notifMessage],
           );
 
+          // Замяна — secondary notification specifically for the
+          // packing screen (spec 4.7). Carries a structured payload so
+          // the UI can deep-link to the replacement order.
+          if (body.is_replacement) {
+            await client.query(
+              `INSERT INTO notifications (type, message, payload)
+               VALUES ('replacement_ready_for_packaging', $1, $2::jsonb)`,
+              [
+                `Замяна #${order.id} готова за пакетиране (${partner.name})`,
+                JSON.stringify({
+                  order_id: order.id,
+                  is_replacement: true,
+                }),
+              ],
+            );
+          }
+
           return {
             ...order,
             total_amount: totalAmount,
