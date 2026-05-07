@@ -108,6 +108,7 @@ import {
   ReplacementForm,
   type ReplacementFormState,
 } from "@/components/orders/ReplacementForm";
+import { ReplacementDetail } from "@/components/orders/ReplacementDetail";
 
 const statusLabels: Record<string, string> = {
   pending: "Чакаща",
@@ -936,6 +937,58 @@ function OrderDetailModal({
     },
   });
 
+  // Cancel a replacement (DELETE /orders/:id) — backend reverses the
+  // bidirectional stock movements and credits/debits the difference
+  // payment so the till + stock state both return to pre-замяна.
+  const cancelReplacementMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/orders/${id}`),
+    onSuccess: () => {
+      invalidateAllOrderRelated();
+      toast.success("Замяната е анулирана");
+      onClose();
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при анулиране на замяна",
+      );
+    },
+  });
+
+  // Print Стокова разписка за Замяна — fetches the PDF blob and opens it
+  // in a new tab. Same flow OrderDetailModal uses for the offer PDF.
+  const printReplacementRazpiska = async (orderId: number) => {
+    try {
+      const res = await api.get(`/orders/${orderId}/stock-dispatch-pdf`, {
+        responseType: "blob",
+      });
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err: any) {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при генериране на стокова разписка",
+      );
+    }
+  };
+
+  const handleCancelReplacement = async (orderId: number) => {
+    const ok = await confirm({
+      title: "Анулирай замяна",
+      description:
+        "Това ще върне склада в първоначалното състояние и ще анулира платената разлика. Сигурни ли сте?",
+      confirmText: "Анулирай",
+      cancelText: "Отказ",
+      variant: "danger",
+    });
+    if (!ok) return;
+    cancelReplacementMutation.mutate(orderId);
+  };
+
   const invoiceMutation = useMutation({
     mutationFn: (id: number) => {
       const payload: Record<string, unknown> = {
@@ -1343,297 +1396,323 @@ function OrderDetailModal({
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
-            {/* Header info */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 bg-gray-50 rounded-lg p-4">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Партньор</div>
-                <div className="font-medium text-sm">
-                  {/* Precedence:
+            {detail.is_replacement ? (
+              <ReplacementDetail
+                order={detail}
+                onPrintRazpiska={printReplacementRazpiska}
+                onSendToPacking={(id) => dispatchToWarehouseMutation.mutate(id)}
+                onCancel={handleCancelReplacement}
+                isBusy={
+                  dispatchToWarehouseMutation.isPending ||
+                  cancelReplacementMutation.isPending
+                }
+              />
+            ) : (
+              <>
+                {/* Header info */}
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 bg-gray-50 rounded-lg p-4">
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Партньор</div>
+                    <div className="font-medium text-sm">
+                      {/* Precedence:
                       1. `partnerOverride` — local state during the invoice
                          creation flow (shown immediately as the user picks).
                       2. `invoice_partner_name` — server-side persisted
                          override exposed by GET /orders/:id once the
                          invoice has been created and is still active.
                       3. Original partner. */}
-                  {partnerOverride
-                    ? partnerOverride.name
-                    : ((detail as any).invoice_partner_name ??
-                      detail.partner?.name ??
-                      detail.partner_name ??
-                      `#${detail.partner_id}`)}
-                </div>
-                {partnerOverride && partnerOverride.eik ? (
-                  <div className="text-[11px] text-gray-500 mt-0.5">
-                    ЕИК: {partnerOverride.eik}
+                      {partnerOverride
+                        ? partnerOverride.name
+                        : ((detail as any).invoice_partner_name ??
+                          detail.partner?.name ??
+                          detail.partner_name ??
+                          `#${detail.partner_id}`)}
+                    </div>
+                    {partnerOverride && partnerOverride.eik ? (
+                      <div className="text-[11px] text-gray-500 mt-0.5">
+                        ЕИК: {partnerOverride.eik}
+                      </div>
+                    ) : (detail as any).invoice_partner_eik ? (
+                      <div className="text-[11px] text-gray-500 mt-0.5">
+                        ЕИК: {(detail as any).invoice_partner_eik}
+                        <span className="ml-1 text-amber-600">
+                          (издадена на фирма)
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
-                ) : (detail as any).invoice_partner_eik ? (
-                  <div className="text-[11px] text-gray-500 mt-0.5">
-                    ЕИК: {(detail as any).invoice_partner_eik}
-                    <span className="ml-1 text-amber-600">
-                      (издадена на фирма)
-                    </span>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">
+                      Дата на поръчка
+                    </div>
+                    <div className="text-sm">
+                      {formatDate(detail.order_date)}
+                    </div>
                   </div>
-                ) : null}
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">
-                  Дата на поръчка
-                </div>
-                <div className="text-sm">{formatDate(detail.order_date)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">
-                  Дата на доставка
-                </div>
-                <div className="text-sm">
-                  {detail.delivery_date
-                    ? formatDate(detail.delivery_date)
-                    : "—"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Източник</div>
-                <Badge variant="secondary">{detail.source}</Badge>
-              </div>
-              {/* "Номер на заявка" + "Обект / магазин" intentionally
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">
+                      Дата на доставка
+                    </div>
+                    <div className="text-sm">
+                      {detail.delivery_date
+                        ? formatDate(detail.delivery_date)
+                        : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Източник</div>
+                    <Badge variant="secondary">{detail.source}</Badge>
+                  </div>
+                  {/* "Номер на заявка" + "Обект / магазин" intentionally
                   removed from the drawer header — МЕРТ-М doesn't issue
                   per-store requests, so both fields rendered "—" on
                   every order and just added visual noise. The data is
                   still kept on the order object for export/debug. */}
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Фактура</div>
-                <div className="text-sm">{invoiceLabel}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">
-                  Дата на фактура
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Фактура</div>
+                    <div className="text-sm">{invoiceLabel}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">
+                      Дата на фактура
+                    </div>
+                    <div className="text-sm">
+                      {detail.invoice_date
+                        ? formatDate(detail.invoice_date)
+                        : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Стокова №</div>
+                    <div className="text-sm">
+                      {detail.stock_dispatch_number || "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Гаранция №</div>
+                    <div className="text-sm">
+                      {detail.warranty_number || "—"}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-sm">
-                  {detail.invoice_date ? formatDate(detail.invoice_date) : "—"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Стокова №</div>
-                <div className="text-sm">
-                  {detail.stock_dispatch_number || "—"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Гаранция №</div>
-                <div className="text-sm">{detail.warranty_number || "—"}</div>
-              </div>
-            </div>
 
-            {hasAnnulledInvoice(detail) && (
-              <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-sm text-red-800 space-y-1">
-                <div>
-                  <span className="font-medium">Анулирана фактура:</span>{" "}
-                  <span className="font-mono">
-                    {detail.annulled_invoice_number ||
-                      (detail.annulled_invoice_id
-                        ? `#${detail.annulled_invoice_id}`
-                        : "—")}
-                  </span>
-                  {detail.annulled_invoice_at && (
-                    <span> · {formatDate(detail.annulled_invoice_at)}</span>
-                  )}
-                </div>
-                {detail.annulled_invoice_reason && (
-                  <div>Причина: {detail.annulled_invoice_reason}</div>
+                {hasAnnulledInvoice(detail) && (
+                  <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-sm text-red-800 space-y-1">
+                    <div>
+                      <span className="font-medium">Анулирана фактура:</span>{" "}
+                      <span className="font-mono">
+                        {detail.annulled_invoice_number ||
+                          (detail.annulled_invoice_id
+                            ? `#${detail.annulled_invoice_id}`
+                            : "—")}
+                      </span>
+                      {detail.annulled_invoice_at && (
+                        <span> · {formatDate(detail.annulled_invoice_at)}</span>
+                      )}
+                    </div>
+                    {detail.annulled_invoice_reason && (
+                      <div>Причина: {detail.annulled_invoice_reason}</div>
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
 
-            {detail.notes && (
-              <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-800">
-                <span className="font-medium">Бележки:</span> {detail.notes}
-              </div>
-            )}
+                {detail.notes && (
+                  <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-800">
+                    <span className="font-medium">Бележки:</span> {detail.notes}
+                  </div>
+                )}
 
-            {detail && authToken && (
-              <div className="flex items-start gap-2">
-                <div className="flex-1 min-w-0">
-                  <EcontShipmentActions
-                    order={detail}
-                    token={authToken}
-                    onOrderUpdated={() => {
-                      refetchDetail();
-                      qc.invalidateQueries({ queryKey: ["orders"] });
-                    }}
-                  />
-                </div>
-                {detail.status !== "cancelled" &&
-                  ((detail.status !== "fulfilled" &&
-                    detail.status !== "invoiced") ||
-                    canEditAfterFulfill) && (
-                    <Button
-                      variant="outline"
-                      onClick={() => setEditOpen(true)}
-                      className="shrink-0"
-                    >
-                      <Pencil className="h-4 w-4" />
-                      Редактирай артикули
-                    </Button>
-                  )}
-              </div>
-            )}
+                {detail && authToken && (
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <EcontShipmentActions
+                        order={detail}
+                        token={authToken}
+                        onOrderUpdated={() => {
+                          refetchDetail();
+                          qc.invalidateQueries({ queryKey: ["orders"] });
+                        }}
+                      />
+                    </div>
+                    {detail.status !== "cancelled" &&
+                      ((detail.status !== "fulfilled" &&
+                        detail.status !== "invoiced") ||
+                        canEditAfterFulfill) && (
+                        <Button
+                          variant="outline"
+                          onClick={() => setEditOpen(true)}
+                          className="shrink-0"
+                        >
+                          <Pencil className="h-4 w-4" />
+                          Редактирай артикули
+                        </Button>
+                      )}
+                  </div>
+                )}
 
-            {/* Items table */}
-            {detailLoading && (
-              <div className="flex items-center justify-center py-8">
-                <Spinner size="sm" />
-                <span className="ml-2 text-sm text-gray-500">
-                  Зареждане на артикули...
-                </span>
-              </div>
-            )}
-            <div className="border rounded-lg overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Продукт</TableHead>
-                    <TableHead className="w-24 text-right whitespace-nowrap">
-                      К-во
-                    </TableHead>
-                    <TableHead className="w-28 text-right whitespace-nowrap">
-                      Ед. цена
-                    </TableHead>
-                    <TableHead className="w-24 text-right whitespace-nowrap">
-                      Отстъпка
-                    </TableHead>
-                    <TableHead className="w-28 text-right whitespace-nowrap">
-                      Сума
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.length === 0 ? (
-                    <TableRow>
-                      <TableCell
-                        colSpan={5}
-                        className="text-center text-gray-400 py-6"
-                      >
-                        Няма артикули
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    items.map((item: any) => {
-                      const lineTotal =
-                        item.total_price ?? item.quantity * item.unit_price;
-                      const discountPct = parseFloat(
-                        item.discount_percent ?? 0,
-                      );
-                      const prodName =
-                        item.product?.name_bg ||
-                        item.product?.name_en ||
-                        item.name_bg ||
-                        item.name_en ||
-                        item.product?.sku ||
-                        item.sku ||
-                        `Продукт #${item.product_id}`;
-                      const lineStatus = item.line_status ?? "normal";
-                      const rowBg =
-                        lineStatus === "paid_not_taken"
-                          ? "bg-amber-50"
-                          : lineStatus === "awaiting"
-                            ? "bg-gray-50"
-                            : "";
-                      return (
-                        <TableRow key={item.id} className={rowBg}>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <Package className="h-4 w-4 text-gray-400 shrink-0" />
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
-                                  <span>{prodName}</span>
-                                  {lineStatus === "paid_not_taken" && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
-                                      💰 Платена невзета
-                                    </span>
-                                  )}
-                                  {lineStatus === "awaiting" && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
-                                      ⏳ Изчакване
-                                    </span>
-                                  )}
-                                </div>
-                                {(item.product?.sku || item.sku) && (
-                                  <div className="text-xs text-gray-400">
-                                    {item.product?.sku || item.sku}
-                                  </div>
-                                )}
-                                {lineStatus === "paid_not_taken" && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handoverMutation.mutate({
-                                        orderId: detail.id,
-                                        itemId: item.id,
-                                      })
-                                    }
-                                    disabled={handoverMutation.isPending}
-                                    className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                                    title="Маркирай като предадено (paid_not_taken → normal)"
-                                  >
-                                    ✓ Предадено
-                                  </button>
-                                )}
-                                {lineStatus === "awaiting" && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      confirmAwaitingMutation.mutate({
-                                        orderId: detail.id,
-                                        itemId: item.id,
-                                      })
-                                    }
-                                    disabled={confirmAwaitingMutation.isPending}
-                                    className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-gray-400 text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                                    title="Потвърди и извади от наличност (awaiting → normal). Ще откаже ако няма стока."
-                                  >
-                                    ✓ Потвърди
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right text-sm">
-                            {item.quantity}
-                          </TableCell>
-                          <TableCell className="text-right text-sm">
-                            {formatCurrency(item.unit_price)}
-                          </TableCell>
-                          <TableCell className="text-right text-sm">
-                            {discountPct > 0 ? (
-                              <span className="text-amber-600 font-medium">
-                                {discountPct.toFixed(2).replace(/\.?0+$/, "")}%
-                              </span>
-                            ) : (
-                              <span className="text-gray-300">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right text-sm font-medium">
-                            {formatCurrency(lineTotal)}
+                {/* Items table */}
+                {detailLoading && (
+                  <div className="flex items-center justify-center py-8">
+                    <Spinner size="sm" />
+                    <span className="ml-2 text-sm text-gray-500">
+                      Зареждане на артикули...
+                    </span>
+                  </div>
+                )}
+                <div className="border rounded-lg overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Продукт</TableHead>
+                        <TableHead className="w-24 text-right whitespace-nowrap">
+                          К-во
+                        </TableHead>
+                        <TableHead className="w-28 text-right whitespace-nowrap">
+                          Ед. цена
+                        </TableHead>
+                        <TableHead className="w-24 text-right whitespace-nowrap">
+                          Отстъпка
+                        </TableHead>
+                        <TableHead className="w-28 text-right whitespace-nowrap">
+                          Сума
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.length === 0 ? (
+                        <TableRow>
+                          <TableCell
+                            colSpan={5}
+                            className="text-center text-gray-400 py-6"
+                          >
+                            Няма артикули
                           </TableCell>
                         </TableRow>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                      ) : (
+                        items.map((item: any) => {
+                          const lineTotal =
+                            item.total_price ?? item.quantity * item.unit_price;
+                          const discountPct = parseFloat(
+                            item.discount_percent ?? 0,
+                          );
+                          const prodName =
+                            item.product?.name_bg ||
+                            item.product?.name_en ||
+                            item.name_bg ||
+                            item.name_en ||
+                            item.product?.sku ||
+                            item.sku ||
+                            `Продукт #${item.product_id}`;
+                          const lineStatus = item.line_status ?? "normal";
+                          const rowBg =
+                            lineStatus === "paid_not_taken"
+                              ? "bg-amber-50"
+                              : lineStatus === "awaiting"
+                                ? "bg-gray-50"
+                                : "";
+                          return (
+                            <TableRow key={item.id} className={rowBg}>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <Package className="h-4 w-4 text-gray-400 shrink-0" />
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
+                                      <span>{prodName}</span>
+                                      {lineStatus === "paid_not_taken" && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
+                                          💰 Платена невзета
+                                        </span>
+                                      )}
+                                      {lineStatus === "awaiting" && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
+                                          ⏳ Изчакване
+                                        </span>
+                                      )}
+                                    </div>
+                                    {(item.product?.sku || item.sku) && (
+                                      <div className="text-xs text-gray-400">
+                                        {item.product?.sku || item.sku}
+                                      </div>
+                                    )}
+                                    {lineStatus === "paid_not_taken" && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handoverMutation.mutate({
+                                            orderId: detail.id,
+                                            itemId: item.id,
+                                          })
+                                        }
+                                        disabled={handoverMutation.isPending}
+                                        className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                                        title="Маркирай като предадено (paid_not_taken → normal)"
+                                      >
+                                        ✓ Предадено
+                                      </button>
+                                    )}
+                                    {lineStatus === "awaiting" && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          confirmAwaitingMutation.mutate({
+                                            orderId: detail.id,
+                                            itemId: item.id,
+                                          })
+                                        }
+                                        disabled={
+                                          confirmAwaitingMutation.isPending
+                                        }
+                                        className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-gray-400 text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                                        title="Потвърди и извади от наличност (awaiting → normal). Ще откаже ако няма стока."
+                                      >
+                                        ✓ Потвърди
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right text-sm">
+                                {item.quantity}
+                              </TableCell>
+                              <TableCell className="text-right text-sm">
+                                {formatCurrency(item.unit_price)}
+                              </TableCell>
+                              <TableCell className="text-right text-sm">
+                                {discountPct > 0 ? (
+                                  <span className="text-amber-600 font-medium">
+                                    {discountPct
+                                      .toFixed(2)
+                                      .replace(/\.?0+$/, "")}
+                                    %
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-300">—</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right text-sm font-medium">
+                                {formatCurrency(lineTotal)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
 
-            {/* Total */}
-            <div className="flex justify-end">
-              <div className="bg-gray-50 rounded-lg px-6 py-3 text-right">
-                <div className="text-xs text-gray-500 mb-1">
-                  {items.length} артикул{items.length !== 1 ? "а" : ""}
+                {/* Total */}
+                <div className="flex justify-end">
+                  <div className="bg-gray-50 rounded-lg px-6 py-3 text-right">
+                    <div className="text-xs text-gray-500 mb-1">
+                      {items.length} артикул{items.length !== 1 ? "а" : ""}
+                    </div>
+                    <div className="text-lg font-bold">
+                      {formatCurrency(detail.total_amount || orderTotal)}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-lg font-bold">
-                  {formatCurrency(detail.total_amount || orderTotal)}
-                </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
 
           {/* ── Below-cost approval audit banner ── */}
