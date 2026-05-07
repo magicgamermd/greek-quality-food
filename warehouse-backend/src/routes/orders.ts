@@ -21,6 +21,7 @@ import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { generateWarrantyCardPdf } from "../services/warranty-pdf.js";
 import { generateOfferPdf } from "../services/offer-pdf.js";
 import { generateProtocolPdf } from "../services/protocol-pdf.js";
+import { isRazpiskaEligible } from "../constants/partners.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -904,35 +905,18 @@ export default async function orderRoutes(app: FastifyInstance) {
           }
 
           // Замяна (product exchange) is currently supported only for
-          // razpiska-eligible partners (no VAT). The partners table in
-          // this codebase carries `partner_type` ('individual' | 'customer'
-          // | etc) and `vat_number` (string, nullable). We treat:
-          //   - partner_type === 'individual'  → razpiska-eligible
-          //   - vat_number is NULL or empty    → razpiska-eligible (фирма без ДДС)
-          // Anything with a non-empty vat_number on a non-individual
-          // partner is treated as ДДС-регистриран and rejected for now.
-          // See spec section 4.1.
-          if (body.is_replacement) {
-            const vatNumber =
-              typeof partner.vat_number === "string"
-                ? partner.vat_number.trim()
-                : "";
-            const isRazpiskaEligible =
-              partner.partner_type === "individual" || vatNumber.length === 0;
-            if (!isRazpiskaEligible) {
-              throw Object.assign(
-                new Error(
-                  "Замяна за ДДС-фактуриран клиент още не е поддържана.",
-                ),
-                {
-                  statusCode: 400,
-                  payload: {
-                    error:
-                      "Замяна за ДДС-фактуриран клиент още не е поддържана.",
-                  },
+          // razpiska-eligible partners (no VAT). See spec section 4.1
+          // and isRazpiskaEligible() in constants/partners.ts.
+          if (body.is_replacement && !isRazpiskaEligible(partner)) {
+            throw Object.assign(
+              new Error("Замяна за ДДС-фактуриран клиент още не е поддържана."),
+              {
+                statusCode: 400,
+                payload: {
+                  error: "Замяна за ДДС-фактуриран клиент още не е поддържана.",
                 },
-              );
-            }
+              },
+            );
           }
 
           const requestNumber = normalizeOptionalText(body.request_number);
