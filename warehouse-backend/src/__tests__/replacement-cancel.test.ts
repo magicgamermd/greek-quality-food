@@ -243,4 +243,79 @@ describe("DELETE /orders/:id — cancel replacement order", () => {
       await app.close();
     }
   });
+
+  it("is idempotent: a second cancel does not double-mirror payment or stock", async () => {
+    // Race scenario: outer pre-transaction read sees status='fulfilled'
+    // (a parallel cancel hasn't committed yet), but by the time the
+    // FOR UPDATE lock acquires, the row's status is already 'cancelled'.
+    // The handler must short-circuit before reversing stock again or
+    // writing a second mirror payment row.
+    const orderId = 9202;
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes("SELECT id FROM orders WHERE id = $1")) {
+        return rows([{ id: orderId }]);
+      }
+      if (text.includes("INSERT INTO notifications")) {
+        return rows([]);
+      }
+      return rows([]);
+    });
+
+    // First (outer) FOR UPDATE call inside the existence-check
+    // transaction returns a fulfilled, not-yet-cancelled row.
+    // Second FOR UPDATE call (inside the work transaction) returns a
+    // row whose status flipped to 'cancelled' under us.
+    let forUpdateCallCount = 0;
+    const clientQuery = vi.fn().mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (
+        text.includes("FROM orders WHERE id = $1") &&
+        text.includes("FOR UPDATE")
+      ) {
+        forUpdateCallCount += 1;
+        if (forUpdateCallCount === 1) {
+          // outer transaction, before invoice_id check
+          return rows([
+            {
+              id: orderId,
+              status: "fulfilled",
+              is_replacement: true,
+              invoice_id: null,
+            },
+          ]);
+        }
+        // inner work transaction — race victim
+        return rows([
+          { id: orderId, status: "cancelled", is_replacement: true },
+        ]);
+      }
+      if (text.includes("UPDATE orders SET status")) return rows([]);
+      if (text.includes("INSERT INTO payments")) return rows([{ id: 1 }]);
+      return rows([]);
+    });
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/orders/${orderId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.alreadyCancelled).toBe(true);
+
+      // No mirror payment row was written.
+      expect(findPaymentInsert(clientQuery)).toBeUndefined();
+      // No inventory updates happened either.
+      expect(findInventoryUpdates(clientQuery)).toHaveLength(0);
+    } finally {
+      await app.close();
+    }
+  });
 });

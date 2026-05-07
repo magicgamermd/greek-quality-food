@@ -2642,14 +2642,23 @@ export default async function orderRoutes(app: FastifyInstance) {
         const result = await transaction(async (client) => {
           // Re-lock the order inside the cancel transaction to avoid races
           // against concurrent fulfill/invoice operations. Re-read the
-          // is_replacement flag from the locked row so the cancel branches
-          // off the freshest committed value.
+          // is_replacement flag and status from the locked row so the
+          // cancel branches off the freshest committed value AND we can
+          // detect a parallel cancel that already finished.
           const {
             rows: [locked],
           } = await client.query(
-            "SELECT id, is_replacement FROM orders WHERE id = $1 FOR UPDATE",
+            "SELECT id, is_replacement, status FROM orders WHERE id = $1 FOR UPDATE",
             [id],
           );
+
+          // Idempotency: if another cancel raced us and already flipped
+          // status to 'cancelled', skip stock reversal + mirror payment.
+          // Without this guard a double-cancel would reverse stock twice
+          // and write two mirror payment rows.
+          if (locked && locked.status === "cancelled") {
+            return { itemCount: 0, alreadyCancelled: true as const };
+          }
 
           // Return each item's quantity to inventory. MERT-M: no batches,
           // so we upsert on the partial unique index
@@ -2737,18 +2746,31 @@ export default async function orderRoutes(app: FastifyInstance) {
             [id],
           );
 
-          return items.length;
+          return { itemCount: items.length, alreadyCancelled: false as const };
         });
+
+        // Idempotent path: a parallel cancel already did the work; just
+        // return success without writing a duplicate notification.
+        if (result.alreadyCancelled) {
+          return {
+            message: "Order already cancelled.",
+            order_id: parseInt(id),
+            items_returned: 0,
+            alreadyCancelled: true,
+          };
+        }
 
         await query(
           `INSERT INTO notifications (type, message) VALUES ('order_cancelled', $1)`,
-          [`Поръчка #${id} е отменена. ${result} артикула върнати в склада.`],
+          [
+            `Поръчка #${id} е отменена. ${result.itemCount} артикула върнати в склада.`,
+          ],
         );
 
         return {
           message: "Order cancelled. Stock returned to inventory.",
           order_id: parseInt(id),
-          items_returned: result,
+          items_returned: result.itemCount,
         };
       }
 
