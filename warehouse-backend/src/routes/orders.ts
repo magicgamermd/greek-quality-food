@@ -477,6 +477,11 @@ export default async function orderRoutes(app: FastifyInstance) {
       // изчакване" view. Pass awaiting_only=true to flip the filter
       // and see ONLY them.
       awaiting_only,
+      // Product-replacement filter (spec 4.5). When set, narrows the
+      // list to either replacement or normal orders. Omitted = both.
+      // Accepts the strings "true"/"false" since query strings are
+      // strings; anything else is ignored.
+      is_replacement,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -549,6 +554,18 @@ export default async function orderRoutes(app: FastifyInstance) {
     if (shipmentNumber) {
       where += ` AND o.econt_shipment_number ILIKE $${paramIdx++}`;
       params.push(`%${shipmentNumber}%`);
+    }
+
+    // Замяна — replacement-only / normal-only filter (spec 4.5). The
+    // FE replacements view passes is_replacement=true so the customer
+    // can see all open exchanges; normal screens pass false to hide
+    // them from the regular orders feed.
+    if (is_replacement === "true") {
+      where += ` AND o.is_replacement = $${paramIdx++}`;
+      params.push(true);
+    } else if (is_replacement === "false") {
+      where += ` AND o.is_replacement = $${paramIdx++}`;
+      params.push(false);
     }
 
     const fromDate = normalizeOptionalText(date_from);
