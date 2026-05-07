@@ -217,7 +217,7 @@ async function assembleDailyReportData(
   // the invoice recipient, not the original cash-customer row.
   const { rows: orderRows } = await query(
     `SELECT o.id, o.order_number, COALESCE(ip.name, p.name) AS partner_name,
-            o.total_amount, o.status,
+            o.total_amount, o.status, o.is_replacement,
             i.payment_method, i.invoice_number, i.status AS invoice_status,
             o.econt_shipment_number, o.econt_cod_amount
        FROM orders o
@@ -318,6 +318,7 @@ async function assembleDailyReportData(
             o.order_date,
             o.total_amount::numeric AS total_amount,
             o.status,
+            o.is_replacement,
             COALESCE(ip.name, p.name) AS partner_name,
             i.payment_method,
             i.invoice_number,
@@ -333,7 +334,8 @@ async function assembleDailyReportData(
                               AND DATE(pmt.paid_at) <= $1
       WHERE DATE(o.order_date) = $1
       GROUP BY o.id, o.order_number, o.order_date, o.total_amount, o.status,
-               ip.name, p.name, i.payment_method, i.invoice_number, i.status
+               o.is_replacement, ip.name, p.name, i.payment_method,
+               i.invoice_number, i.status
       ORDER BY o.order_number ASC`,
     [date],
   );
@@ -525,9 +527,22 @@ async function assembleDailyReportData(
           invoice_number: r.invoice_number ?? null,
           invoice_status: r.invoice_status ?? null,
           payment_status: paymentStatus,
+          is_replacement: r.is_replacement === true,
         };
       }),
     },
+    // Replacement orders for the day — derived from the same orderRows
+    // query so partner_name + payment_method match the main orders
+    // table. Cancelled replacements are excluded so the "Замени" net
+    // diff reflects only active swaps.
+    replacements: orderRows
+      .filter((o: any) => o.is_replacement === true && o.status !== "cancelled")
+      .map((o: any) => ({
+        order_number: o.order_number ?? o.id,
+        partner_name: o.partner_name ?? "—",
+        total_amount: parseFloat(o.total_amount ?? 0),
+        payment_method: o.payment_method ?? null,
+      })),
     expectedCod: {
       count: expectedCodRows.length,
       total: expectedCodTotal,

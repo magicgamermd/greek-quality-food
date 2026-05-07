@@ -101,8 +101,20 @@ export interface DailyReportData {
       invoice_number: string | null;
       invoice_status: string | null;
       payment_status: "paid" | "partial" | "unpaid" | "cancelled";
+      is_replacement?: boolean;
     }>;
   };
+  // Replacement orders for the day — surfaced as their own section so
+  // the cashier sees the net cash diff (give − return) separately from
+  // regular orders. `total_amount` is signed: positive = customer owes
+  // us extra cash; negative = we owe customer cash back; zero = even
+  // swap. Source is the same orders.is_replacement flag used elsewhere.
+  replacements: Array<{
+    order_number: number;
+    partner_name: string;
+    total_amount: number; // signed: + / − / 0
+    payment_method: string | null;
+  }>;
   // "Очакван наложен платеж" — Econt COD shipments sent today whose
   // money is still in transit with the courier. Tracked separately so
   // the cashier can see the gap between cash in hand and money owed.
@@ -428,6 +440,127 @@ export async function generateDailyReportPdf(
       doc.font("Main").fontSize(9).fillColor("#0f172a");
     }
     doc.moveDown(0.8);
+
+    // ── Раздел 3a: Замени (Replacement orders) ─────────
+    // Replacement orders for the day with net cash diff. Signed totals:
+    // + customer owes us, − we owe customer, 0 even swap. Listed as a
+    // standalone block so the cashier sees the diff distinct from
+    // regular order revenue.
+    if (data.replacements.length > 0) {
+      sectionHeader(`🔄 ЗАМЕНИ (${data.replacements.length})`);
+      doc.font("Main").fontSize(9).fillColor("#0f172a");
+
+      const cols = [
+        { header: "№", w: 22, align: "right" as const },
+        { header: "Поръчка", w: 60, align: "left" as const },
+        {
+          header: "Партньор",
+          w: pageW - 22 - 60 - 60 - 80,
+          align: "left" as const,
+        },
+        { header: "Начин", w: 60, align: "left" as const },
+        { header: "Разлика", w: 80, align: "right" as const },
+      ];
+      const rowH = 14;
+      const headerY = doc.y;
+      let cx = L;
+      doc.font("MainBold").fontSize(8).fillColor("#475569");
+      for (const c of cols) {
+        doc.text(c.header, cx + 2, headerY, {
+          width: c.w - 4,
+          align: c.align,
+          lineBreak: false,
+        });
+        cx += c.w;
+      }
+      doc.y = headerY + rowH;
+      doc
+        .moveTo(L, doc.y - 2)
+        .lineTo(L + pageW, doc.y - 2)
+        .lineWidth(0.3)
+        .strokeColor("#cbd5e1")
+        .stroke();
+
+      // Format a signed amount in EUR with explicit + / − / "0.00 €"
+      // for an at-a-glance read of the net diff per replacement.
+      const fmtSignedEur = (n: number): string => {
+        if (Math.abs(n) < 0.005) return "0.00 €";
+        const abs = formatEurAmount(Math.abs(n)) + " €";
+        return n > 0 ? `+${abs}` : `−${abs}`;
+      };
+
+      doc.font("Main").fontSize(8.5).fillColor("#0f172a");
+      data.replacements.forEach((r, idx) => {
+        if (doc.y + rowH > doc.page.height - 60) {
+          doc.addPage();
+          doc.y = 40;
+        }
+        const rowY = doc.y;
+        const cells = [
+          String(idx + 1),
+          `#${r.order_number}`,
+          r.partner_name.length > 32
+            ? r.partner_name.slice(0, 30) + "…"
+            : r.partner_name,
+          r.payment_method
+            ? (PAYMENT_LABEL_SHORT_BG[r.payment_method] ?? r.payment_method)
+            : "—",
+          fmtSignedEur(r.total_amount),
+        ];
+        cx = L;
+        cells.forEach((val, i) => {
+          // Last column (Разлика) painted red — replacement diff is
+          // the headline number for this section.
+          if (i === cols.length - 1) {
+            doc.fillColor("#dc2626").font("MainBold");
+          }
+          doc.text(val, cx + 2, rowY, {
+            width: cols[i].w - 4,
+            align: cols[i].align,
+            lineBreak: false,
+            ellipsis: true,
+          });
+          if (i === cols.length - 1) {
+            doc.fillColor("#0f172a").font("Main");
+          }
+          cx += cols[i].w;
+        });
+        doc.y = rowY + rowH;
+      });
+      doc
+        .moveTo(L, doc.y)
+        .lineTo(L + pageW, doc.y)
+        .lineWidth(0.3)
+        .strokeColor("#cbd5e1")
+        .stroke();
+      doc.moveDown(0.3);
+
+      // Footer summary: count + net diff. Net = sum of signed totals.
+      const netDiff = data.replacements.reduce((s, r) => s + r.total_amount, 0);
+      const summaryX = L + pageW - 260;
+      doc.font("Main").fontSize(9).fillColor("#0f172a");
+      doc.text("Брой замени:", summaryX, doc.y, {
+        width: 160,
+        align: "right",
+      });
+      doc
+        .font("MainBold")
+        .text(String(data.replacements.length), summaryX + 160, doc.y - 11, {
+          width: 90,
+          align: "right",
+        });
+      doc.font("Main").text("Нетна разлика:", summaryX, doc.y, {
+        width: 160,
+        align: "right",
+      });
+      doc.font("MainBold").fillColor("#dc2626");
+      doc.text(fmtSignedEur(netDiff), summaryX + 160, doc.y - 11, {
+        width: 90,
+        align: "right",
+      });
+      doc.fillColor("#0f172a").font("Main").fontSize(9);
+      doc.moveDown(0.8);
+    }
 
     // ── Раздел 3b: Очакван наложен платеж ───────────────
     // Econt COD shipments dispatched today whose money is still in
