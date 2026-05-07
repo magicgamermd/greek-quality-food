@@ -3803,6 +3803,7 @@ function CreateOrderModal({
   const qc = useQueryClient();
   const { hasPermission } = usePermissions();
   const canOverrideBelowCost = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
+  const canCreateReplacement = hasPermission(PERMISSIONS.REPLACEMENT_CREATE);
   const today = isoDateToday();
   const anonymousIndividual = partners.find(
     (p) =>
@@ -4573,33 +4574,37 @@ function CreateOrderModal({
             >
               {isReplacement ? "🔄 НОВА ЗАМЯНА" : "Нова поръчка"}
             </DialogTitle>
-            <button
-              type="button"
-              disabled={!selectedPartner || !isSelectedPartnerRazpiskaEligible}
-              title={
-                !selectedPartner
-                  ? "Първо избери партньор"
-                  : !isSelectedPartnerRazpiskaEligible
-                    ? "Замяна за ДДС-фактуриран клиент ще бъде добавена в следваща итерация."
-                    : isReplacement
-                      ? "Излез от режим Замяна"
-                      : "Премини в режим Замяна"
-              }
-              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                isReplacement
-                  ? "bg-red-600 text-white hover:bg-red-700"
-                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-              } disabled:opacity-40 disabled:cursor-not-allowed`}
-              onClick={() => {
-                setIsReplacement((v) => {
-                  const next = !v;
-                  if (!next) setReplacementState(null);
-                  return next;
-                });
-              }}
-            >
-              🔄 Замяна
-            </button>
+            {canCreateReplacement && (
+              <button
+                type="button"
+                disabled={
+                  !selectedPartner || !isSelectedPartnerRazpiskaEligible
+                }
+                title={
+                  !selectedPartner
+                    ? "Първо избери партньор"
+                    : !isSelectedPartnerRazpiskaEligible
+                      ? "Замяна за ДДС-фактуриран клиент ще бъде добавена в следваща итерация."
+                      : isReplacement
+                        ? "Излез от режим Замяна"
+                        : "Премини в режим Замяна"
+                }
+                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                  isReplacement
+                    ? "bg-red-600 text-white hover:bg-red-700"
+                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                } disabled:opacity-40 disabled:cursor-not-allowed`}
+                onClick={() => {
+                  setIsReplacement((v) => {
+                    const next = !v;
+                    if (!next) setReplacementState(null);
+                    return next;
+                  });
+                }}
+              >
+                🔄 Замяна
+              </button>
+            )}
           </div>
           <p className="text-xs text-gray-400 mt-1">
             Tab/Enter между полетата · Ctrl+Enter за създаване

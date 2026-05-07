@@ -882,6 +882,21 @@ export default async function orderRoutes(app: FastifyInstance) {
       // touch the DB (cheap fail-fast). VAT-eligibility check needs the
       // partner row and runs inside the transaction below.
       if (body.is_replacement) {
+        // Gate replacement creation behind REPLACEMENT_CREATE. The outer
+        // ordersManagePreHandler only verifies ORDERS_MANAGE; this is a
+        // stricter check so roles can be configured to manage normal
+        // orders without being able to create замени.
+        const allowedReplacement = await hasPermission(
+          request.user as { id: string; role: string },
+          PERMISSIONS.REPLACEMENT_CREATE,
+        );
+        if (!allowedReplacement) {
+          return reply.code(403).send({
+            error: "Forbidden",
+            required_permission: PERMISSIONS.REPLACEMENT_CREATE,
+            message: "Нямаш разрешение за създаване на замяна.",
+          });
+        }
         const hasGive = body.items.some((it) => !it.is_returning);
         const hasReturn = body.items.some((it) => it.is_returning);
         if (!hasGive) {

@@ -11,6 +11,14 @@ vi.mock("../db.js", () => ({
   transaction: vi.fn(),
 }));
 
+vi.mock("../lib/redis.js", () => ({
+  getRedis: vi.fn(async () => ({
+    get: vi.fn(async () => null),
+    setex: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 0),
+  })),
+}));
+
 import { query, transaction } from "../db.js";
 
 const mockQuery = vi.mocked(query);
@@ -439,6 +447,67 @@ describe("POST /orders — replacement", () => {
       expect(res.json().error).toMatch(/ДДС/);
     } finally {
       await app.close();
+    }
+  });
+
+  it("rejects replacement create when user lacks REPLACEMENT_CREATE permission", async () => {
+    // Build a non-admin app: role 'sales' has ORDERS_MANAGE so the
+    // ordersManagePreHandler passes; but we revoke REPLACEMENT_CREATE
+    // via an override so the inner gate (added in this fix) trips.
+    const salesApp = Fastify();
+    salesApp.addHook("onRequest", async (request) => {
+      (request as any).user = {
+        id: "u-sales",
+        email: "sales@test.local",
+        role: "sales",
+      };
+      (request as any).jwtVerify = async () => (request as any).user;
+    });
+    await salesApp.register(orderRoutes, { prefix: "/orders" });
+
+    // getUserPermissions fires once per hasPermission call (redis is
+    // mocked to always-miss). First call: ORDERS_MANAGE check from
+    // ordersManagePreHandler. Second call: REPLACEMENT_CREATE check
+    // inside the route. Both read the same row.
+    const userRow = {
+      role: "sales",
+      overrides: [{ permission: "replacement.create", granted: false }],
+    };
+    mockQuery.mockResolvedValue(rows([userRow]));
+
+    try {
+      const res = await salesApp.inject({
+        method: "POST",
+        url: "/orders",
+        payload: {
+          partner_id: 1,
+          is_replacement: true,
+          items: [
+            {
+              product_id: 101,
+              quantity: 1,
+              unit_price: 230,
+              is_returning: false,
+            },
+            {
+              product_id: 102,
+              quantity: 1,
+              unit_price: 200,
+              is_returning: true,
+            },
+          ],
+          payment_method: "cash",
+        },
+      });
+
+      expect(res.statusCode).toBe(403);
+      const body = res.json();
+      expect(body.required_permission).toBe("replacement.create");
+      expect(body.message).toMatch(/Нямаш разрешение за създаване на замяна/);
+      // No transaction should have been opened — we rejected before DB work.
+      expect(mockTransaction).not.toHaveBeenCalled();
+    } finally {
+      await salesApp.close();
     }
   });
 });
