@@ -154,10 +154,11 @@ const createOrderSchema = z.object({
   // (is_returning=true), and the partner must be razpiska-eligible
   // (no VAT). See spec section 4.1.
   is_replacement: z.boolean().optional().default(false),
-  // Payment method for the difference. Accepted here so the create-
-  // order payload is shape-stable; payment row creation lives in a
-  // later task — this field is currently a passthrough.
-  payment_method: z.enum(["cash", "pos", "bank_transfer", "bank"]).optional(),
+  // Payment method for the difference on a replacement order.
+  // Drives the auto-inserted payments row (see Task 7). The codebase
+  // uses "bank" (not "bank_transfer") consistently — see
+  // lib/invoice-payment-method.ts.
+  payment_method: z.enum(["cash", "pos", "bank"]).optional(),
 });
 
 const updateStatusSchema = z.object({
@@ -1263,6 +1264,25 @@ export default async function orderRoutes(app: FastifyInstance) {
               total_amount: childResult.total,
               items: childResult.items,
             };
+          }
+
+          // Замяна — auto-record the signed difference into payments.
+          //   total > 0  → customer pays the difference (is_refund = false)
+          //   total < 0  → we refund the customer (is_refund = true)
+          //   total == 0 → no payment row written
+          // Spec section 4.3. amount is always stored as a positive value;
+          // the direction lives in is_refund.
+          if (body.is_replacement && body.payment_method && totalAmount !== 0) {
+            await client.query(
+              `INSERT INTO payments (order_id, amount, payment_method, is_refund, paid_at)
+               VALUES ($1, $2, $3, $4, NOW())`,
+              [
+                order.id,
+                Math.abs(totalAmount),
+                body.payment_method,
+                totalAmount < 0,
+              ],
+            );
           }
 
           // Notification — single line covers both the main and (if any)
