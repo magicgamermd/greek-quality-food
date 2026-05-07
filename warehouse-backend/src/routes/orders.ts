@@ -109,6 +109,11 @@ const orderItemSchema = z.object({
   // Batch F1: per-line state. Optional; defaults to 'normal' on the
   // backend side via orderLineStatusSchema's .default.
   line_status: orderLineStatusSchema.optional(),
+  // Замяна (product exchange) — when true, this line is being RETURNED
+  // by the customer in a replacement order. Only valid when the parent
+  // order has is_replacement=true. Sign-flips the contribution to
+  // total_amount and (later) the stock movement direction.
+  is_returning: z.boolean().optional().default(false),
 });
 
 const createOrderSchema = z.object({
@@ -143,6 +148,15 @@ const createOrderSchema = z.object({
   // time. Quoted orders skip stock validation and never deduct inventory
   // until they're moved to pending → confirmed.
   status: z.enum(["pending", "quoted"]).optional().default("pending"),
+  // Замяна (product exchange) — when true, the order must contain at
+  // least one give line (is_returning=false) AND one return line
+  // (is_returning=true), and the partner must be razpiska-eligible
+  // (no VAT). See spec section 4.1.
+  is_replacement: z.boolean().optional().default(false),
+  // Payment method for the difference. Accepted here so the create-
+  // order payload is shape-stable; payment row creation lives in a
+  // later task — this field is currently a passthrough.
+  payment_method: z.enum(["cash", "pos", "bank_transfer", "bank"]).optional(),
 });
 
 const updateStatusSchema = z.object({
@@ -844,6 +858,33 @@ export default async function orderRoutes(app: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = createOrderSchema.parse(request.body);
 
+      // Замяна validation — sanity check the payload shape before we
+      // touch the DB (cheap fail-fast). VAT-eligibility check needs the
+      // partner row and runs inside the transaction below.
+      if (body.is_replacement) {
+        const hasGive = body.items.some((it) => !it.is_returning);
+        const hasReturn = body.items.some((it) => it.is_returning);
+        if (!hasGive) {
+          return reply.code(400).send({
+            error:
+              "Замяната трябва да съдържа поне един артикул, който се дава на клиента.",
+          });
+        }
+        if (!hasReturn) {
+          return reply.code(400).send({
+            error:
+              "Замяната трябва да съдържа поне един артикул, който се връща от клиента.",
+          });
+        }
+      } else {
+        if (body.items.some((it) => it.is_returning)) {
+          return reply.code(400).send({
+            error:
+              "Поле is_returning е разрешено само в поръчки от тип замяна.",
+          });
+        }
+      }
+
       let oversell_items: OversellInfo[] = [];
 
       let result;
@@ -860,6 +901,38 @@ export default async function orderRoutes(app: FastifyInstance) {
             throw Object.assign(new Error("Partner not found"), {
               statusCode: 404,
             });
+          }
+
+          // Замяна (product exchange) is currently supported only for
+          // razpiska-eligible partners (no VAT). The partners table in
+          // this codebase carries `partner_type` ('individual' | 'customer'
+          // | etc) and `vat_number` (string, nullable). We treat:
+          //   - partner_type === 'individual'  → razpiska-eligible
+          //   - vat_number is NULL or empty    → razpiska-eligible (фирма без ДДС)
+          // Anything with a non-empty vat_number on a non-individual
+          // partner is treated as ДДС-регистриран and rejected for now.
+          // See spec section 4.1.
+          if (body.is_replacement) {
+            const vatNumber =
+              typeof partner.vat_number === "string"
+                ? partner.vat_number.trim()
+                : "";
+            const isRazpiskaEligible =
+              partner.partner_type === "individual" || vatNumber.length === 0;
+            if (!isRazpiskaEligible) {
+              throw Object.assign(
+                new Error(
+                  "Замяна за ДДС-фактуриран клиент още не е поддържана.",
+                ),
+                {
+                  statusCode: 400,
+                  payload: {
+                    error:
+                      "Замяна за ДДС-фактуриран клиент още не е поддържана.",
+                  },
+                },
+              );
+            }
           }
 
           const requestNumber = normalizeOptionalText(body.request_number);
@@ -920,8 +993,11 @@ export default async function orderRoutes(app: FastifyInstance) {
           // they're a pre-order placeholder until the goods arrive — so
           // exclude them from the oversell check. Otherwise we'd warn
           // "stock will go negative" for items that never touch stock.
+          // Returning items in a replacement order ADD to stock, so we
+          // also skip them — there's no "oversell" possible when goods
+          // are coming back in.
           const stockableItems = body.items.filter(
-            (i) => i.line_status !== "awaiting",
+            (i) => i.line_status !== "awaiting" && !i.is_returning,
           );
           const validationResult = await validateRequestedStock(
             client,
@@ -942,20 +1018,26 @@ export default async function orderRoutes(app: FastifyInstance) {
                 p.purchase_price != null ? parseFloat(p.purchase_price) : null,
             };
           }
-          const belowCostInput = body.items.map((it) => {
-            const prod = productMap.get(it.product_id) as any;
-            const resolved =
-              it.unit_price ??
-              priceMap.get(it.product_id) ??
-              (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
-              0;
-            return {
-              product_id: it.product_id,
-              quantity: it.quantity,
-              unit_price: resolved,
-              discount_percent: it.discount_percent ?? 0,
-            };
-          });
+          // Below-cost only matters for goods leaving the warehouse —
+          // is_returning lines come BACK from the customer, the unit_price
+          // there records the original sale value, not a fresh sell price,
+          // so comparing it to purchase_price is meaningless.
+          const belowCostInput = body.items
+            .filter((it) => !it.is_returning)
+            .map((it) => {
+              const prod = productMap.get(it.product_id) as any;
+              const resolved =
+                it.unit_price ??
+                priceMap.get(it.product_id) ??
+                (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+                0;
+              return {
+                product_id: it.product_id,
+                quantity: it.quantity,
+                unit_price: resolved,
+                discount_percent: it.discount_percent ?? 0,
+              };
+            });
           const belowCost = computeBelowCostItems(belowCostInput, costMap);
 
           let belowCostApprovedBy: string | null = null;
@@ -1063,16 +1145,21 @@ export default async function orderRoutes(app: FastifyInstance) {
                   2,
                 ),
               );
+              const isReturning = item.is_returning ?? false;
               if (item.line_status !== "awaiting") {
-                total += totalPrice;
+                // Замяна — returning lines subtract from the running
+                // total so the order's total_amount is the SIGNED
+                // difference (positive → customer pays the difference,
+                // negative → we refund). Spec section 4.1.
+                total += isReturning ? -totalPrice : totalPrice;
               }
               const {
                 rows: [orderItem],
               } = await client.query(
                 `INSERT INTO order_items
                    (order_id, product_id, quantity, unit_price, discount_percent, total_price,
-                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status, is_returning)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [
                   targetOrderId,
                   item.product_id,
@@ -1084,6 +1171,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                   prod.name_en,
                   prod.sku,
                   item.line_status ?? "normal",
+                  isReturning,
                 ],
               );
               inserted.push(orderItem);
@@ -1110,13 +1198,13 @@ export default async function orderRoutes(app: FastifyInstance) {
            econt_weight, econt_shipping_cost, econt_payer,
            econt_shipment_description, econt_shipment_date,
            below_cost_approved_by, below_cost_approved_at, below_cost_details,
-           status, order_number
+           status, is_replacement, order_number
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22,
                  $23, $24, $25,
-                 $26, nextval('order_number_seq'))
+                 $26, $27, nextval('order_number_seq'))
          RETURNING *`,
             [
               body.partner_id,
@@ -1147,6 +1235,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                 ? JSON.stringify(belowCostDetails)
                 : null,
               mainStatus,
+              body.is_replacement,
             ],
           );
 

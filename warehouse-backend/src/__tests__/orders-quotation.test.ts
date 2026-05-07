@@ -132,8 +132,12 @@ describe("Quotation flow", () => {
     );
     expect(insertOrders).toBeDefined();
     const params = insertOrders![1] as any[];
-    // body.status is the last param before order_number is generated.
-    expect(params[params.length - 1]).toBe("quoted");
+    // status sits in the params array; order_number is generated via
+    // nextval() inside the SQL, not passed as a parameter. After
+    // migration 077 the trailing slot belongs to is_replacement, so
+    // status is the next-to-last param.
+    expect(params).toContain("quoted");
+    expect(params[params.length - 2]).toBe("quoted");
   });
 
   it("POST /orders/:id/quote moves pending → quoted", async () => {
