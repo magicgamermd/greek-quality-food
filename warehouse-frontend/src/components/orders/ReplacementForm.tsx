@@ -21,7 +21,7 @@ import { formatCurrency } from "@/lib/utils";
  * the swap is even).
  */
 
-export type ReplacementPaymentMethod = "cash" | "pos" | "bank_transfer";
+export type ReplacementPaymentMethod = "cash" | "pos" | "bank";
 
 export interface ReplacementLineItem {
   product_id: number;
@@ -68,7 +68,7 @@ const PAYMENT_METHOD_OPTIONS: ReadonlyArray<{
 }> = [
   { value: "cash", label: "Брой" },
   { value: "pos", label: "POS" },
-  { value: "bank_transfer", label: "Превод" },
+  { value: "bank", label: "Превод" },
 ];
 
 function emptyLine(): ReplacementLineItem {
