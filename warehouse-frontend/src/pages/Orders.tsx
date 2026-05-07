@@ -135,6 +135,24 @@ function hasAnnulledInvoice(order: Pick<Order, "annulled_invoice_at">) {
   return Boolean(order.annulled_invoice_at);
 }
 
+/**
+ * Replacement orders carry a SIGNED total: positive when the customer must
+ * doplaci, negative when the shop refunds the difference, zero for an even
+ * swap. Backend stores it as |give − return| so we display the sign by
+ * inferring direction from the items, but here we just respect whatever
+ * sign the server sent — the row UI only needs the magnitude + a marker.
+ */
+function formatReplacementTotal(amount: number | null | undefined): string {
+  const n = Number(amount ?? 0);
+  if (Math.abs(n) < 0.005) return "0.00 лв";
+  const abs = Math.abs(n).toLocaleString("bg-BG", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  if (n > 0) return `+${abs} лв`;
+  return `−${abs} лв`;
+}
+
 interface OrderProduct {
   id: number;
   name_bg: string;
@@ -5257,6 +5275,13 @@ export function Orders() {
   // Econt filter pill — orders with a courier shipment + COD attached
   // (i.e. the cashier still owes the till money once Econt collects).
   const [hasCod, setHasCod] = useState(false);
+  // Replacement filter — three states: "all" (no filter), "only" (just замени),
+  // "exclude" (hide замени). Orders.tsx exposes only "all" / "only" via the
+  // pill toggle; the "exclude" branch is here so a future Settings could opt
+  // power-users out of seeing замени at all.
+  const [filterReplacement, setFilterReplacement] = useState<
+    "all" | "only" | "exclude"
+  >("all");
 
   // Single exclusive filter selector — clicking any chip clears all the
   // others. Earlier the status buttons were exclusive but the pills
@@ -5273,13 +5298,16 @@ export function Orders() {
         ? "awaiting"
         : hasCod
           ? "cod"
-          : statusFilter;
+          : filterReplacement === "only"
+            ? "replacement"
+            : statusFilter;
   const selectFilter = (next: string) => {
     setStatusFilter("");
     setBelowCostOnly(false);
     setHasPaidNotTaken(false);
     setHasAwaiting(false);
     setHasCod(false);
+    setFilterReplacement("all");
     if (next === activeFilter) return; // toggle off
     switch (next) {
       case "below_cost":
@@ -5293,6 +5321,9 @@ export function Orders() {
         break;
       case "cod":
         setHasCod(true);
+        break;
+      case "replacement":
+        setFilterReplacement("only");
         break;
       default:
         setStatusFilter(next); // pending / quoted / … / "" (Всички)
@@ -5340,6 +5371,7 @@ export function Orders() {
       hasPaidNotTaken,
       hasAwaiting,
       hasCod,
+      filterReplacement,
       debouncedArticle,
       debouncedShipment,
     ],
@@ -5353,6 +5385,9 @@ export function Orders() {
       // they're hidden from the main list and surface only via this filter.
       if (hasAwaiting) parts.push("awaiting_only=true");
       if (hasCod) parts.push("has_cod=true");
+      if (filterReplacement === "only") parts.push("is_replacement=true");
+      else if (filterReplacement === "exclude")
+        parts.push("is_replacement=false");
       if (debouncedArticle)
         parts.push(`article=${encodeURIComponent(debouncedArticle)}`);
       if (debouncedShipment)
@@ -5772,7 +5807,8 @@ export function Orders() {
               !belowCostOnly &&
               !hasPaidNotTaken &&
               !hasAwaiting &&
-              !hasCod
+              !hasCod &&
+              filterReplacement !== "only"
                 ? "bg-[#f97316] text-white"
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
@@ -5831,6 +5867,18 @@ export function Orders() {
           title="Покажи само поръчки с Еконт товарителница и наложен платеж"
         >
           🚚 Наложен платеж
+        </button>
+        {/* Замени filter — toggle "show only replacement orders" */}
+        <button
+          onClick={() => selectFilter("replacement")}
+          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            filterReplacement === "only"
+              ? "bg-red-600 text-white"
+              : "bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+          }`}
+          title="Покажи само замени"
+        >
+          🔄 Замени
         </button>
       </div>
 
@@ -6022,10 +6070,20 @@ export function Orders() {
                   filteredOrders.map((order) => (
                     <TableRow
                       key={order.id}
-                      className="cursor-pointer hover:bg-gray-50"
+                      className={`cursor-pointer hover:bg-gray-50 ${
+                        order.is_replacement ? "text-red-700" : ""
+                      }`}
                       onClick={() => setDetailOrder(order)}
                     >
                       <TableCell className="font-mono">
+                        {order.is_replacement && (
+                          <span
+                            className="mr-1 inline-flex items-center gap-0.5 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700"
+                            title="Замяна — двупосочно движение на стока"
+                          >
+                            🔄 ЗАМЯНА
+                          </span>
+                        )}
                         <HighlightMatch
                           text={String(order.order_number ?? order.id)}
                           query={filters.order_number}
@@ -6059,7 +6117,9 @@ export function Orders() {
                         {formatDate(order.order_date)}
                       </TableCell>
                       <TableCell className="font-medium text-right whitespace-nowrap">
-                        {formatCurrency(order.total_amount)}
+                        {order.is_replacement
+                          ? formatReplacementTotal(order.total_amount)
+                          : formatCurrency(order.total_amount)}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5 flex-wrap">
