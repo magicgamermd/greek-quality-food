@@ -5,10 +5,41 @@
 > Other `.md` files in the root are either historical (`docs/archive/`)
 > or scoped (e.g. `PRODUCTION-READINESS-REPORT-2026-04-22.md`).
 
-**Last updated:** 2026-05-05 (Econt calendar validation + price-bug diagnostic merged on main; Batch I also on main)
-**Active branch:** `main`
+**Last updated:** 2026-05-07 (Product replacement — "Замяна" — feature complete on `feature/MERTM-product-replacement`; pending final review + merge to main)
+**Active branch:** `feature/MERTM-product-replacement` (worktree at `.claude/worktrees/product-replacement/`)
 **Production readiness score:** 4/10 (per `PRODUCTION-READINESS-REPORT-2026-04-22.md`)
-**Active task:** Push to client (`./scripts/push-to-client.sh`) + collect Econt `[econt/calculate]` debug logs to confirm whether the same-price-for-office-vs-address report is an Econt API quirk or a state-leak in our payload.
+**Active task:** Final code review on the replacement branch, then merge to main and `./scripts/push-to-client.sh`. Earlier Econt diagnostic remains open as separate work-in-progress on `feature/MERTM-purchase-orders-redesign`.
+
+**Product replacement (Замяна) feature — COMPLETE (2026-05-07, 20 commits on `feature/MERTM-product-replacement`):**
+
+Feature lets a worker create an exchange order — customer brings back a previously bought item and takes a different one. The original razpiska is never touched; a new order with `is_replacement = true` carries both "give" and "return" lines, signed total, and an auto-generated payment row for the difference.
+
+- Spec: `docs/superpowers/specs/2026-05-07-product-replacement-design.md`
+- Plan: `docs/superpowers/plans/2026-05-07-product-replacement.md` (20 tasks, all delivered)
+- Migrations:
+  - `077_orders_replacement.sql` — `orders.is_replacement` + `order_items.is_returning` + partial index
+  - `078_payments_is_refund.sql` — `payments.is_refund` (cash-out flag for refund/cancel-mirror entries)
+- Backend (`warehouse-backend/src/routes/orders.ts` + helpers):
+  - POST /orders accepts replacement payload, validates ≥1 give + ≥1 return, blocks VAT-registered partners (deferred to next iteration)
+  - Signed total computed inside the create transaction; auto-inserted `payments` row (positive total → is_refund=false; negative → is_refund=true; zero → no row)
+  - POST /orders/:id/fulfill bidirectional stock movements (give -qty, return +qty); same-SKU warranty case nets to zero
+  - GET /orders accepts `?is_replacement=true|false` filter
+  - DELETE /orders/:id reverses both stock movements and inserts a mirror payment with flipped `is_refund` so the cash trail balances
+  - Notification `replacement_ready_for_packaging` emitted on create with payload `{order_id, is_replacement: true}`
+  - PDF generator `services/razpiska-replacement-pdf.ts` ("СТОКОВА РАЗПИСКА ЗА ЗАМЯНА") — pdfkit, Roboto, two coloured sections, signed difference, descriptive sentence, signatures
+  - New helper `isRazpiskaEligible(partner)` in `constants/partners.ts` (extracted to share across routes)
+  - New permission `REPLACEMENT_CREATE` granted to admin/accountant/warehouse/sales by default
+- Frontend (`warehouse-frontend/src/`):
+  - `Order.is_replacement` + `OrderItem.is_returning` types
+  - New component `components/orders/ReplacementForm.tsx` — toggle, two sections (green Взема се / red Връща се), live signed-diff banner, conditional payment-method picker (Брой / POS / Превод)
+  - `pages/Orders.tsx` — toggle "🔄 Замяна" inside the New Order form, disabled for VAT-registered partners with tooltip; submit branches between order/replacement payloads; "Създай замяна" button replaces "Създай поръчка" in replacement mode
+  - List view: filter pill "🔄 Замени"; replacement rows shown red with "🔄 ЗАМЯНА" label and signed total
+  - New component `components/orders/ReplacementDetail.tsx` — red title, two sections, signed footer, three actions (Печат / Към пакетиране / Анулирай with confirm)
+  - Partner history drawer (`PartnerHistoryDrawer.tsx`) — red badge "🔄 Замяна" on replacement rows, signed total
+- Daily report PDF (`services/daily-report-pdf.ts` + `routes/reports.ts`) — new "🔄 ЗАМЕНИ" section between orders/payments and expectedCod, with per-row table and a "Брой замени | Нетна разлика" footer (signed)
+- Tests: 23 new BE tests (replacement-create×8, payment×3, fulfill×2, filter×3, cancel×2, notification×2, pdf×3) — full BE suite **382 passing / 8 failing** (same 8 pre-existing failures: document-pdf, econt-update-shipment, invoices-partner-override ×4, orders-below-cost, orders-quotation — none related to this feature). Frontend `vite build` passes; `tsc --noEmit` clean.
+- **Out of scope (deferred to next iteration, per spec section 11):** invoice (ДДС-фактура) replacements, link to original order (`replaces_order_id`), warranty-protocol flow, return-only.
+- **Open items before merge:** (1) final cross-feature code review; (2) manual E2E pass on the local stack covering all 10 scenarios in plan task 20; (3) note that the worktree branch was created off `feature/MERTM-purchase-orders-redesign` HEAD, which carries uncommitted migrations 071/074/075/076 in the main checkout — those need to land on `main` before this branch can deploy cleanly (not a code conflict; just migration sequencing).
 
 **Econt calendar validation + price-bug diagnostic — COMPLETE (merged 2026-05-05 via `65c2f37`):**
 
