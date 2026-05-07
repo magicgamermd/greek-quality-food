@@ -274,6 +274,134 @@ describe("POST /orders — replacement", () => {
     }
   });
 
+  it("computes negative total when return > give", async () => {
+    setupReplacementMocks({
+      partner: { id: 1, partner_type: "individual" },
+      products: [
+        { id: 101, selling_price: "150" },
+        { id: 102, selling_price: "200" },
+      ],
+    });
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders",
+        payload: {
+          partner_id: 1,
+          is_replacement: true,
+          items: [
+            {
+              product_id: 101,
+              quantity: 1,
+              unit_price: 150,
+              is_returning: false,
+            },
+            {
+              product_id: 102,
+              quantity: 1,
+              unit_price: 200,
+              is_returning: true,
+            },
+          ],
+          payment_method: "cash",
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      // Signed total: give 150 - return 200 = -50 (we owe the customer)
+      expect(res.json().total_amount).toBe(-50);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("computes zero total when give == return", async () => {
+    setupReplacementMocks({
+      partner: { id: 1, partner_type: "individual" },
+      products: [
+        { id: 101, selling_price: "200" },
+        { id: 102, selling_price: "200" },
+      ],
+    });
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders",
+        payload: {
+          partner_id: 1,
+          is_replacement: true,
+          items: [
+            {
+              product_id: 101,
+              quantity: 1,
+              unit_price: 200,
+              is_returning: false,
+            },
+            {
+              product_id: 102,
+              quantity: 1,
+              unit_price: 200,
+              is_returning: true,
+            },
+          ],
+          // No payment_method needed when total == 0.
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().total_amount).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("handles multi-item totals on both sides", async () => {
+    setupReplacementMocks({
+      partner: { id: 1, partner_type: "individual" },
+      products: [
+        { id: 101, selling_price: "100" },
+        { id: 102, selling_price: "50" },
+      ],
+    });
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders",
+        payload: {
+          partner_id: 1,
+          is_replacement: true,
+          items: [
+            {
+              product_id: 101,
+              quantity: 2,
+              unit_price: 100,
+              is_returning: false,
+            },
+            {
+              product_id: 102,
+              quantity: 3,
+              unit_price: 50,
+              is_returning: true,
+            },
+          ],
+          payment_method: "cash",
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      // Signed total: give 2×100 − return 3×50 = 200 − 150 = 50
+      expect(res.json().total_amount).toBe(50);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects replacement for a VAT-registered partner", async () => {
     setupReplacementMocks({
       partner: { id: 1, partner_type: "customer", vat_number: "BG123456789" },
