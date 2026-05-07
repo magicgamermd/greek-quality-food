@@ -51,7 +51,7 @@
 
 ## 3. Database
 
-Една нова миграция: `076_orders_replacement.sql`
+Една нова миграция: `077_orders_replacement.sql`
 
 ```sql
 -- Замяна маркер на самата поръчка
@@ -81,7 +81,7 @@ ALTER TABLE order_items
 
 (Ако такъв cross-row CHECK не е поддържан в текущата Postgres конфигурация, заместваме с тригер `enforce_returning_only_in_replacement`.)
 
-И втора миграция: `077_payments_is_refund.sql`
+И втора миграция: `078_payments_is_refund.sql`
 
 ```sql
 ALTER TABLE payments
@@ -400,8 +400,8 @@ Toggle-ът се disable-ва, ако избраният партньор е Д�
 
 | File                         | Description                                                          |
 | ---------------------------- | -------------------------------------------------------------------- |
-| `076_orders_replacement.sql` | `orders.is_replacement` + `order_items.is_returning` + index + CHECK |
-| `077_payments_is_refund.sql` | `payments.is_refund` bool                                            |
+| `077_orders_replacement.sql` | `orders.is_replacement` + `order_items.is_returning` + index + CHECK |
+| `078_payments_is_refund.sql` | `payments.is_refund` bool                                            |
 
 ---
 
