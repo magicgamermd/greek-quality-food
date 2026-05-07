@@ -3298,20 +3298,13 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!data) return reply.status(404).send({ error: "Order not found" });
 
       const { order, items } = data;
-      if (
-        order.status !== "confirmed" &&
-        order.status !== "processing" &&
-        order.status !== "fulfilled" &&
-        order.status !== "invoiced"
-      ) {
-        return reply.status(400).send({
-          error:
-            "Стокова разписка може да се генерира само за потвърдени поръчки нататък",
-        });
-      }
 
       // Замяна (product replacement) → render the dual-section
       // "Стокова разписка за Замяна" template instead of the standard one.
+      // Replacement orders skip the standard "must be confirmed first"
+      // status gate: the cashier finalises замяна at the counter and
+      // wants the printed document immediately, regardless of whether
+      // the order has been formally moved to a later workflow stage.
       // The order's items already carry `is_returning` snapshots so the
       // PDF can split them into the give / return sections without a
       // second query. Total comes signed from the validated order
@@ -3379,6 +3372,20 @@ export default async function orderRoutes(app: FastifyInstance) {
             `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
           )
           .send(buf);
+      }
+
+      // Standard razpiska gate — non-replacement orders must be at
+      // confirmed status or later before a stock-dispatch slip prints.
+      if (
+        order.status !== "confirmed" &&
+        order.status !== "processing" &&
+        order.status !== "fulfilled" &&
+        order.status !== "invoiced"
+      ) {
+        return reply.status(400).send({
+          error:
+            "Стокова разписка може да се генерира само за потвърдени поръчки нататък",
+        });
       }
 
       // For invoiced orders, use the VAT setting from the invoice; otherwise use query param
