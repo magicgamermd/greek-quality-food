@@ -64,6 +64,17 @@ function parseNum(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function formatReplacementTotal(amount: number | null | undefined): string {
+  const n = Number(amount ?? 0);
+  if (Math.abs(n) < 0.005) return "0.00 лв";
+  const abs = Math.abs(n).toLocaleString("bg-BG", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  if (n > 0) return `+${abs} лв`;
+  return `−${abs} лв`;
+}
+
 interface HistoryPage {
   data: Order[];
   pagination: { page: number; limit: number; total: number };
@@ -270,21 +281,52 @@ function OrderCard({
     }));
   }, [detail]);
 
+  const isReplacement = order.is_replacement === true;
+
   return (
-    <div className="rounded-lg border border-gray-200 bg-white">
+    <div
+      className={`rounded-lg border bg-white ${
+        isReplacement ? "border-red-200" : "border-gray-200"
+      }`}
+    >
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="w-full px-4 py-3 flex items-start justify-between gap-3 text-left hover:bg-gray-50"
+        className={`w-full px-4 py-3 flex items-start justify-between gap-3 text-left hover:bg-gray-50 ${
+          isReplacement ? "text-red-700" : ""
+        }`}
       >
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-            <Package className="h-4 w-4 text-gray-400 shrink-0" />
+          <div
+            className={`flex items-center gap-2 text-sm font-semibold ${
+              isReplacement ? "text-red-700" : "text-gray-900"
+            }`}
+          >
+            <Package
+              className={`h-4 w-4 shrink-0 ${
+                isReplacement ? "text-red-400" : "text-gray-400"
+              }`}
+            />
             <span>
               #{order.order_number ?? order.id} · {formatDate(order.order_date)}
             </span>
           </div>
-          <div className="mt-1 flex items-center gap-2 text-xs">
+          <div className="mt-1 flex items-center gap-2 text-xs flex-wrap">
+            {isReplacement ? (
+              <span
+                className="inline-flex items-center gap-0.5 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700"
+                title="Замяна — двупосочно движение на стока"
+              >
+                🔄 Замяна
+              </span>
+            ) : (
+              <span
+                className="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-700"
+                title="Стандартна поръчка"
+              >
+                Поръчка
+              </span>
+            )}
             <span className={`px-2 py-0.5 rounded-full ${statusColor}`}>
               {statusLabel}
             </span>
@@ -295,8 +337,14 @@ function OrderCard({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-gray-900 whitespace-nowrap">
-            {formatCurrency(order.total_amount)}
+          <span
+            className={`text-sm font-semibold whitespace-nowrap ${
+              isReplacement ? "text-red-700" : "text-gray-900"
+            }`}
+          >
+            {isReplacement
+              ? formatReplacementTotal(order.total_amount)
+              : formatCurrency(order.total_amount)}
           </span>
           {expanded ? (
             <ChevronUp className="h-4 w-4 text-gray-400" />

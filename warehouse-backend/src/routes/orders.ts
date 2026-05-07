@@ -17,11 +17,13 @@ import {
   generateStockDispatchPdf,
   generateCommercialDocPdf,
 } from "../services/document-pdf.js";
+import { renderReplacementPdf } from "../services/razpiska-replacement-pdf.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { generateWarrantyCardPdf } from "../services/warranty-pdf.js";
 import { generateOfferPdf } from "../services/offer-pdf.js";
 import { generateProtocolPdf } from "../services/protocol-pdf.js";
 import { generatePackingLabelPdf } from "../services/packing-label-pdf.js";
+import { isRazpiskaEligible } from "../constants/partners.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -110,6 +112,11 @@ const orderItemSchema = z.object({
   // Batch F1: per-line state. Optional; defaults to 'normal' on the
   // backend side via orderLineStatusSchema's .default.
   line_status: orderLineStatusSchema.optional(),
+  // Замяна (product exchange) — when true, this line is being RETURNED
+  // by the customer in a replacement order. Only valid when the parent
+  // order has is_replacement=true. Sign-flips the contribution to
+  // total_amount and (later) the stock movement direction.
+  is_returning: z.boolean().optional().default(false),
 });
 
 const createOrderSchema = z.object({
@@ -144,6 +151,16 @@ const createOrderSchema = z.object({
   // time. Quoted orders skip stock validation and never deduct inventory
   // until they're moved to pending → confirmed.
   status: z.enum(["pending", "quoted"]).optional().default("pending"),
+  // Замяна (product exchange) — when true, the order must contain at
+  // least one give line (is_returning=false) AND one return line
+  // (is_returning=true), and the partner must be razpiska-eligible
+  // (no VAT). See spec section 4.1.
+  is_replacement: z.boolean().optional().default(false),
+  // Payment method for the difference on a replacement order.
+  // Drives the auto-inserted payments row (see Task 7). The codebase
+  // uses "bank" (not "bank_transfer") consistently — see
+  // lib/invoice-payment-method.ts.
+  payment_method: z.enum(["cash", "pos", "bank"]).optional(),
 });
 
 const updateStatusSchema = z.object({
@@ -463,6 +480,11 @@ export default async function orderRoutes(app: FastifyInstance) {
       // изчакване" view. Pass awaiting_only=true to flip the filter
       // and see ONLY them.
       awaiting_only,
+      // Product-replacement filter (spec 4.5). When set, narrows the
+      // list to either replacement or normal orders. Omitted = both.
+      // Accepts the strings "true"/"false" since query strings are
+      // strings; anything else is ignored.
+      is_replacement,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -535,6 +557,18 @@ export default async function orderRoutes(app: FastifyInstance) {
     if (shipmentNumber) {
       where += ` AND o.econt_shipment_number ILIKE $${paramIdx++}`;
       params.push(`%${shipmentNumber}%`);
+    }
+
+    // Замяна — replacement-only / normal-only filter (spec 4.5). The
+    // FE replacements view passes is_replacement=true so the customer
+    // can see all open exchanges; normal screens pass false to hide
+    // them from the regular orders feed.
+    if (is_replacement === "true") {
+      where += ` AND o.is_replacement = $${paramIdx++}`;
+      params.push(true);
+    } else if (is_replacement === "false") {
+      where += ` AND o.is_replacement = $${paramIdx++}`;
+      params.push(false);
     }
 
     const fromDate = normalizeOptionalText(date_from);
@@ -858,6 +892,48 @@ export default async function orderRoutes(app: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = createOrderSchema.parse(request.body);
 
+      // Замяна validation — sanity check the payload shape before we
+      // touch the DB (cheap fail-fast). VAT-eligibility check needs the
+      // partner row and runs inside the transaction below.
+      if (body.is_replacement) {
+        // Gate replacement creation behind REPLACEMENT_CREATE. The outer
+        // ordersManagePreHandler only verifies ORDERS_MANAGE; this is a
+        // stricter check so roles can be configured to manage normal
+        // orders without being able to create замени.
+        const allowedReplacement = await hasPermission(
+          request.user as { id: string; role: string },
+          PERMISSIONS.REPLACEMENT_CREATE,
+        );
+        if (!allowedReplacement) {
+          return reply.code(403).send({
+            error: "Forbidden",
+            required_permission: PERMISSIONS.REPLACEMENT_CREATE,
+            message: "Нямаш разрешение за създаване на замяна.",
+          });
+        }
+        const hasGive = body.items.some((it) => !it.is_returning);
+        const hasReturn = body.items.some((it) => it.is_returning);
+        if (!hasGive) {
+          return reply.code(400).send({
+            error:
+              "Замяната трябва да съдържа поне един артикул, който се дава на клиента.",
+          });
+        }
+        if (!hasReturn) {
+          return reply.code(400).send({
+            error:
+              "Замяната трябва да съдържа поне един артикул, който се връща от клиента.",
+          });
+        }
+      } else {
+        if (body.items.some((it) => it.is_returning)) {
+          return reply.code(400).send({
+            error:
+              "Поле is_returning е разрешено само в поръчки от тип замяна.",
+          });
+        }
+      }
+
       let oversell_items: OversellInfo[] = [];
 
       let result;
@@ -874,6 +950,21 @@ export default async function orderRoutes(app: FastifyInstance) {
             throw Object.assign(new Error("Partner not found"), {
               statusCode: 404,
             });
+          }
+
+          // Замяна (product exchange) is currently supported only for
+          // razpiska-eligible partners (no VAT). See spec section 4.1
+          // and isRazpiskaEligible() in constants/partners.ts.
+          if (body.is_replacement && !isRazpiskaEligible(partner)) {
+            throw Object.assign(
+              new Error("Замяна за ДДС-фактуриран клиент още не е поддържана."),
+              {
+                statusCode: 400,
+                payload: {
+                  error: "Замяна за ДДС-фактуриран клиент още не е поддържана.",
+                },
+              },
+            );
           }
 
           const requestNumber = normalizeOptionalText(body.request_number);
@@ -934,8 +1025,11 @@ export default async function orderRoutes(app: FastifyInstance) {
           // they're a pre-order placeholder until the goods arrive — so
           // exclude them from the oversell check. Otherwise we'd warn
           // "stock will go negative" for items that never touch stock.
+          // Returning items in a replacement order ADD to stock, so we
+          // also skip them — there's no "oversell" possible when goods
+          // are coming back in.
           const stockableItems = body.items.filter(
-            (i) => i.line_status !== "awaiting",
+            (i) => i.line_status !== "awaiting" && !i.is_returning,
           );
           const validationResult = await validateRequestedStock(
             client,
@@ -956,20 +1050,26 @@ export default async function orderRoutes(app: FastifyInstance) {
                 p.purchase_price != null ? parseFloat(p.purchase_price) : null,
             };
           }
-          const belowCostInput = body.items.map((it) => {
-            const prod = productMap.get(it.product_id) as any;
-            const resolved =
-              it.unit_price ??
-              priceMap.get(it.product_id) ??
-              (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
-              0;
-            return {
-              product_id: it.product_id,
-              quantity: it.quantity,
-              unit_price: resolved,
-              discount_percent: it.discount_percent ?? 0,
-            };
-          });
+          // Below-cost only matters for goods leaving the warehouse —
+          // is_returning lines come BACK from the customer, the unit_price
+          // there records the original sale value, not a fresh sell price,
+          // so comparing it to purchase_price is meaningless.
+          const belowCostInput = body.items
+            .filter((it) => !it.is_returning)
+            .map((it) => {
+              const prod = productMap.get(it.product_id) as any;
+              const resolved =
+                it.unit_price ??
+                priceMap.get(it.product_id) ??
+                (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+                0;
+              return {
+                product_id: it.product_id,
+                quantity: it.quantity,
+                unit_price: resolved,
+                discount_percent: it.discount_percent ?? 0,
+              };
+            });
           const belowCost = computeBelowCostItems(belowCostInput, costMap);
 
           let belowCostApprovedBy: string | null = null;
@@ -1077,16 +1177,21 @@ export default async function orderRoutes(app: FastifyInstance) {
                   2,
                 ),
               );
+              const isReturning = item.is_returning ?? false;
               if (item.line_status !== "awaiting") {
-                total += totalPrice;
+                // Замяна — returning lines subtract from the running
+                // total so the order's total_amount is the SIGNED
+                // difference (positive → customer pays the difference,
+                // negative → we refund). Spec section 4.1.
+                total += isReturning ? -totalPrice : totalPrice;
               }
               const {
                 rows: [orderItem],
               } = await client.query(
                 `INSERT INTO order_items
                    (order_id, product_id, quantity, unit_price, discount_percent, total_price,
-                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status, is_returning)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [
                   targetOrderId,
                   item.product_id,
@@ -1098,6 +1203,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                   prod.name_en,
                   prod.sku,
                   item.line_status ?? "normal",
+                  isReturning,
                 ],
               );
               inserted.push(orderItem);
@@ -1124,13 +1230,13 @@ export default async function orderRoutes(app: FastifyInstance) {
            econt_weight, econt_shipping_cost, econt_payer,
            econt_shipment_description, econt_shipment_date,
            below_cost_approved_by, below_cost_approved_at, below_cost_details,
-           status, order_number
+           status, is_replacement, order_number
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22,
                  $23, $24, $25,
-                 $26, nextval('order_number_seq'))
+                 $26, $27, nextval('order_number_seq'))
          RETURNING *`,
             [
               body.partner_id,
@@ -1161,6 +1267,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                 ? JSON.stringify(belowCostDetails)
                 : null,
               mainStatus,
+              body.is_replacement,
             ],
           );
 
@@ -1206,6 +1313,25 @@ export default async function orderRoutes(app: FastifyInstance) {
             };
           }
 
+          // Замяна — auto-record the signed difference into payments.
+          //   total > 0  → customer pays the difference (is_refund = false)
+          //   total < 0  → we refund the customer (is_refund = true)
+          //   total == 0 → no payment row written
+          // Spec section 4.3. amount is always stored as a positive value;
+          // the direction lives in is_refund.
+          if (body.is_replacement && body.payment_method && totalAmount !== 0) {
+            await client.query(
+              `INSERT INTO payments (order_id, amount, payment_method, is_refund, paid_at)
+               VALUES ($1, $2, $3, $4, NOW())`,
+              [
+                order.id,
+                Math.abs(totalAmount),
+                body.payment_method,
+                totalAmount < 0,
+              ],
+            );
+          }
+
           // Notification — single line covers both the main and (if any)
           // awaiting child so the user sees one toast in the bell.
           const notifMessage = awaitingChild
@@ -1217,6 +1343,23 @@ export default async function orderRoutes(app: FastifyInstance) {
             `INSERT INTO notifications (type, message) VALUES ('order_created', $1)`,
             [notifMessage],
           );
+
+          // Замяна — secondary notification specifically for the
+          // packing screen (spec 4.7). Carries a structured payload so
+          // the UI can deep-link to the replacement order.
+          if (body.is_replacement) {
+            await client.query(
+              `INSERT INTO notifications (type, message, payload)
+               VALUES ('replacement_ready_for_packaging', $1, $2::jsonb)`,
+              [
+                `Замяна #${order.id} готова за пакетиране (${partner.name})`,
+                JSON.stringify({
+                  order_id: order.id,
+                  is_replacement: true,
+                }),
+              ],
+            );
+          }
 
           return {
             ...order,
@@ -1995,8 +2138,40 @@ export default async function orderRoutes(app: FastifyInstance) {
         //   - 'paid_not_taken'  → customer already paid; allow inventory
         //                          to go negative (promised stock)
         //   - 'normal' (default) → standard pre-checked deduction
+        //
+        // Замяна (product replacement, spec 4.2): is_returning lines come
+        // BACK from the customer, so their stock movement is REVERSED —
+        // increment inventory instead of decrementing. No COGS snapshot
+        // for return lines (the original sale already accounted for cost).
         for (const item of items) {
           if (item.line_status === "awaiting") {
+            continue;
+          }
+          if (item.is_returning) {
+            // Return line — add stock back. Mirror deductProductStock's
+            // UPDATE shape (same table, same WHERE on the partial-unique
+            // row). If no inventory row exists yet for this product,
+            // create one starting at +qty (parallels the negative-row
+            // creation in deductProductStock).
+            const qty = parseFloat(item.quantity);
+            const { rowCount } = await client.query(
+              `UPDATE inventory
+                 SET quantity = quantity + $1,
+                     updated_at = NOW()
+               WHERE product_id = $2
+                 AND warehouse_id = 1
+                 AND batch_id IS NULL
+               RETURNING quantity`,
+              [qty, item.product_id],
+            );
+            if (!rowCount) {
+              await client.query(
+                `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+                 VALUES ($1, 1, $2, NULL)`,
+                [item.product_id, qty],
+              );
+            }
+            // Skip COGS snapshot for return lines.
             continue;
           }
           const allowNegative = item.line_status === "paid_not_taken";
@@ -2480,32 +2655,103 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (order.status === "fulfilled") {
         const result = await transaction(async (client) => {
           // Re-lock the order inside the cancel transaction to avoid races
-          // against concurrent fulfill/invoice operations.
-          await client.query("SELECT id FROM orders WHERE id = $1 FOR UPDATE", [
-            id,
-          ]);
+          // against concurrent fulfill/invoice operations. Re-read the
+          // is_replacement flag and status from the locked row so the
+          // cancel branches off the freshest committed value AND we can
+          // detect a parallel cancel that already finished.
+          const {
+            rows: [locked],
+          } = await client.query(
+            "SELECT id, is_replacement, status FROM orders WHERE id = $1 FOR UPDATE",
+            [id],
+          );
+
+          // Idempotency: if another cancel raced us and already flipped
+          // status to 'cancelled', skip stock reversal + mirror payment.
+          // Without this guard a double-cancel would reverse stock twice
+          // and write two mirror payment rows.
+          if (locked && locked.status === "cancelled") {
+            return { itemCount: 0, alreadyCancelled: true as const };
+          }
 
           // Return each item's quantity to inventory. MERT-M: no batches,
           // so we upsert on the partial unique index
           // inventory_product_warehouse_nobatch_uidx (product_id, warehouse_id)
           // WHERE batch_id IS NULL (added in migration 045).
+          //
+          // Замяна (product replacement, spec 4.4): for replacement orders
+          // we REVERSE the fulfill direction — give lines (is_returning=
+          // false) get their stock back (+qty) and return lines
+          // (is_returning=true) lose stock again (−qty), because the
+          // returned item is no longer ours to keep once the cancellation
+          // undoes the swap. Additionally we write a MIRROR payment row
+          // that flips is_refund of the original payment so the books
+          // net to zero.
           const { rows: items } = await client.query(
-            "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
+            "SELECT product_id, quantity, is_returning FROM order_items WHERE order_id = $1",
             [id],
           );
 
-          for (const item of items) {
-            const qty = parseFloat(item.quantity);
-            if (qty <= 0) continue;
+          if (locked.is_replacement) {
+            for (const item of items) {
+              const qty = parseFloat(item.quantity);
+              if (qty <= 0) continue;
+              // Reverse fulfill: give lines were decremented → re-add;
+              // return lines were incremented → re-deduct. The signed
+              // delta below is what we ADD to inventory.
+              const delta = item.is_returning ? -qty : qty;
+              const { rowCount } = await client.query(
+                `UPDATE inventory
+                   SET quantity = quantity + $1,
+                       updated_at = NOW()
+                 WHERE product_id = $2
+                   AND warehouse_id = 1
+                   AND batch_id IS NULL`,
+                [delta, item.product_id],
+              );
+              if (!rowCount) {
+                await client.query(
+                  `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+                   VALUES ($1, 1, $2, NULL)`,
+                  [item.product_id, delta],
+                );
+              }
+            }
 
-            await client.query(
-              `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
-             VALUES ($1, 1, $2, NULL)
-             ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
-             DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
-                           updated_at = NOW()`,
-              [item.product_id, qty],
+            // Mirror payment: flip is_refund on the original (oldest)
+            // payment row for this order. amount stays positive; only
+            // direction reverses. Skip silently if no payment was
+            // recorded (e.g. zero-total replacement).
+            const { rows: origPayments } = await client.query(
+              `SELECT amount, payment_method, is_refund
+                 FROM payments
+                WHERE order_id = $1
+                ORDER BY id ASC
+                LIMIT 1`,
+              [id],
             );
+            if (origPayments[0]) {
+              const orig = origPayments[0];
+              await client.query(
+                `INSERT INTO payments (order_id, amount, payment_method, is_refund, paid_at)
+                 VALUES ($1, $2, $3, $4, NOW())`,
+                [id, orig.amount, orig.payment_method, !orig.is_refund],
+              );
+            }
+          } else {
+            for (const item of items) {
+              const qty = parseFloat(item.quantity);
+              if (qty <= 0) continue;
+
+              await client.query(
+                `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+               VALUES ($1, 1, $2, NULL)
+               ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
+               DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                             updated_at = NOW()`,
+                [item.product_id, qty],
+              );
+            }
           }
 
           // Cancel the order
@@ -2514,18 +2760,31 @@ export default async function orderRoutes(app: FastifyInstance) {
             [id],
           );
 
-          return items.length;
+          return { itemCount: items.length, alreadyCancelled: false as const };
         });
+
+        // Idempotent path: a parallel cancel already did the work; just
+        // return success without writing a duplicate notification.
+        if (result.alreadyCancelled) {
+          return {
+            message: "Order already cancelled.",
+            order_id: parseInt(id),
+            items_returned: 0,
+            alreadyCancelled: true,
+          };
+        }
 
         await query(
           `INSERT INTO notifications (type, message) VALUES ('order_cancelled', $1)`,
-          [`Поръчка #${id} е отменена. ${result} артикула върнати в склада.`],
+          [
+            `Поръчка #${id} е отменена. ${result.itemCount} артикула върнати в склада.`,
+          ],
         );
 
         return {
           message: "Order cancelled. Stock returned to inventory.",
           order_id: parseInt(id),
-          items_returned: result,
+          items_returned: result.itemCount,
         };
       }
 
@@ -3049,6 +3308,77 @@ export default async function orderRoutes(app: FastifyInstance) {
           error:
             "Стокова разписка може да се генерира само за потвърдени поръчки нататък",
         });
+      }
+
+      // Замяна (product replacement) → render the dual-section
+      // "Стокова разписка за Замяна" template instead of the standard one.
+      // The order's items already carry `is_returning` snapshots so the
+      // PDF can split them into the give / return sections without a
+      // second query. Total comes signed from the validated order
+      // (positive = customer pays, negative = customer refunded).
+      // Payment method (cash/pos/bank) lives on a single `payments` row
+      // created at finalize-time — we look it up here so the PDF can show
+      // both the "Платено в …" / "Възстановено в …" line and the
+      // descriptive sentence's correct verb.
+      if (order.is_replacement) {
+        const docNumber =
+          order.order_number != null
+            ? String(order.order_number)
+            : `25-${String(order.id).padStart(6, "0")}`;
+        const partner = effectiveReceiver(order);
+
+        const { rows: paymentRows } = await query(
+          `SELECT payment_method
+             FROM payments
+            WHERE order_id = $1
+            ORDER BY paid_at DESC
+            LIMIT 1`,
+          [id],
+        );
+        const persistedMethod = paymentRows[0]?.payment_method as
+          | string
+          | undefined;
+        const paymentMethod:
+          | "cash"
+          | "pos"
+          | "bank"
+          | "bank_transfer"
+          | undefined =
+          persistedMethod === "cash" ||
+          persistedMethod === "pos" ||
+          persistedMethod === "bank" ||
+          persistedMethod === "bank_transfer"
+            ? persistedMethod
+            : undefined;
+
+        const buf = await renderReplacementPdf({
+          id: order.id,
+          number: docNumber,
+          date: new Date(order.order_date || order.created_at),
+          partner: {
+            name: partner.name || "—",
+            egn_or_eik: partner.eik || null,
+            address: partner.address || null,
+          },
+          items: items.map((i: any) => ({
+            product_name: i.name_bg || i.name_en || "—",
+            product_code: i.sku || "",
+            quantity: parseFloat(i.quantity),
+            unit_price: parseFloat(i.unit_price),
+            is_returning: i.is_returning === true,
+          })),
+          total: parseFloat(order.total_amount ?? 0),
+          payment_method: paymentMethod,
+        });
+        const filename = `Стокова_разписка_за_Замяна_${docNumber}.pdf`;
+        const encodedFilename = encodeURIComponent(filename);
+        return reply
+          .header("Content-Type", "application/pdf")
+          .header(
+            "Content-Disposition",
+            `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+          )
+          .send(buf);
       }
 
       // For invoiced orders, use the VAT setting from the invoice; otherwise use query param

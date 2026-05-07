@@ -22,3 +22,18 @@ export const ANONYMOUS_INDIVIDUAL_NAME =
 export function isIndividual(partnerType: string | null | undefined): boolean {
   return partnerType === PARTNER_TYPE_INDIVIDUAL;
 }
+
+/**
+ * A partner is razpiska-eligible (стокова разписка вместо фактура с ДДС) when
+ * they don't carry a VAT number — either an individual (физическо лице) or
+ * a non-VAT-registered legal entity. Used for product-replacement and other
+ * razpiska-only flows. See spec section 4.1.
+ */
+export function isRazpiskaEligible(partner: {
+  partner_type?: string | null;
+  vat_number?: string | null;
+}): boolean {
+  if (isIndividual(partner.partner_type ?? null)) return true;
+  const vat = (partner.vat_number ?? "").trim();
+  return vat.length === 0;
+}

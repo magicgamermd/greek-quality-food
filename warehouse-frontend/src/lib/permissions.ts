@@ -3,6 +3,7 @@ export const PERMISSIONS = {
   INVOICES_MANAGE: "invoices.manage",
   INVOICES_CANCEL: "invoices.cancel",
   RAZPISKA_MANAGE: "razpiska.manage",
+  REPLACEMENT_CREATE: "replacement.create",
   ECONT_MANAGE: "econt.manage",
   INVENTORY_VIEW: "inventory.view",
   INVENTORY_VIEW_PURCHASE_PRICE: "inventory.view_purchase_price",

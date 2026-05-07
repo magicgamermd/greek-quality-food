@@ -243,6 +243,9 @@ export interface Order {
   econt_shipment_number?: string | null;
   econt_tracking_url?: string | null;
   econt_pdf_url?: string | null;
+  // Product replacement — true when this order is a replacement (mixed
+  // give/return items). Backend computes total as |give − return|.
+  is_replacement?: boolean;
   // Search by article — populated by GET /orders?article=...
   matched_items?: Array<{
     name_bg: string;
@@ -265,6 +268,9 @@ export interface OrderItem {
   // Batch F1 — per-line state. Backend defaults to 'normal' so older
   // payloads stay backward-compatible.
   line_status?: "normal" | "paid_not_taken" | "awaiting";
+  // Product replacement — true when this line is being returned by the
+  // customer (negative direction), false/unset for normal "give" lines.
+  is_returning?: boolean;
 }
 
 export interface Invoice {
