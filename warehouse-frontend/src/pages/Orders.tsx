@@ -104,6 +104,10 @@ import {
   INVOICE_PAYMENT_METHOD_LABELS,
   type InvoicePaymentMethod,
 } from "@/lib/invoicePaymentMethod";
+import {
+  ReplacementForm,
+  type ReplacementFormState,
+} from "@/components/orders/ReplacementForm";
 
 const statusLabels: Record<string, string> = {
   pending: "Чакаща",
@@ -3745,6 +3749,12 @@ function CreateOrderModal({
     items: OversellItem[];
     proceed: () => void;
   } | null>(null);
+  // Product-replacement mode — when true, the body of the form is replaced
+  // with the two-section ReplacementForm (взема се / връща се). The toggle
+  // is gated on partner razpiska-eligibility (no VAT number, or individual).
+  const [isReplacement, setIsReplacement] = useState(false);
+  const [replacementState, setReplacementState] =
+    useState<ReplacementFormState | null>(null);
 
   // Keyboard-flow refs — Enter in qty jumps to price → (next row) qty,
   // so warehouse staff can key-fill a whole order from a single
@@ -3836,6 +3846,8 @@ function CreateOrderModal({
       setOrderCreated(false);
       setConfirmOverstock(false);
       setPendingOversell(null);
+      setIsReplacement(false);
+      setReplacementState(null);
       // Auto-land focus on партньор combobox so user can start typing
       // immediately — no mouse needed to begin a new order.
       queueMicrotask(() => partnerInputRef.current?.focus());
@@ -4046,6 +4058,36 @@ function CreateOrderModal({
     addItem();
   };
 
+  // Selected partner (if any) — used for the replacement-mode toggle gate.
+  // Replacement is only razpiska-eligible: individuals (no VAT) or non-VAT
+  // legal entities. Mirrors the backend isRazpiskaEligible helper.
+  const selectedPartner = useMemo(
+    () =>
+      form.partner_id
+        ? (partners.find((p) => String(p.id) === form.partner_id) ?? null)
+        : null,
+    [partners, form.partner_id],
+  );
+  const isSelectedPartnerRazpiskaEligible = useMemo(() => {
+    if (!selectedPartner) return false;
+    if ((selectedPartner as any).partner_type === "individual") return true;
+    const vat = (selectedPartner.vat_number ?? "").trim();
+    return vat.length === 0;
+  }, [selectedPartner]);
+  // If the user picks a VAT-registered partner after toggling замяна on,
+  // silently flip back to normal-order mode so we never submit a замяна
+  // payload for an ineligible partner.
+  useEffect(() => {
+    if (
+      isReplacement &&
+      selectedPartner &&
+      !isSelectedPartnerRazpiskaEligible
+    ) {
+      setIsReplacement(false);
+      setReplacementState(null);
+    }
+  }, [isReplacement, selectedPartner, isSelectedPartnerRazpiskaEligible]);
+
   const validItems = items.filter(
     (i) => i.product_id && Number(i.quantity) > 0,
   );
@@ -4117,6 +4159,39 @@ function CreateOrderModal({
     mutationFn: async (
       vars: { allow_below_cost?: boolean; asQuoted?: boolean } = {},
     ) => {
+      // Replacement mode — backend expects a different payload shape:
+      // is_replacement: true + items with is_returning flag + payment_method.
+      // No Еконт / no asQuoted / no below-cost handling for замяна.
+      if (isReplacement && replacementState) {
+        const replacementItems = [
+          ...replacementState.giveItems
+            .filter((i) => i.product_id && Number(i.quantity) > 0)
+            .map((i) => ({
+              product_id: Number(i.product_id),
+              quantity: Number(i.quantity),
+              unit_price: Number(i.unit_price) || undefined,
+              is_returning: false,
+            })),
+          ...replacementState.returnItems
+            .filter((i) => i.product_id && Number(i.quantity) > 0)
+            .map((i) => ({
+              product_id: Number(i.product_id),
+              quantity: Number(i.quantity),
+              unit_price: Number(i.unit_price) || undefined,
+              is_returning: true,
+            })),
+        ];
+        const res = await api.post("/orders", {
+          partner_id: Number(form.partner_id),
+          is_replacement: true,
+          items: replacementItems,
+          payment_method: replacementState.paymentMethod,
+          delivery_date: form.delivery_date || undefined,
+          notes: form.notes || undefined,
+        });
+        return res;
+      }
+
       const res = await api.post("/orders", {
         partner_id: Number(form.partner_id),
         delivery_date: form.delivery_date || undefined,
@@ -4222,11 +4297,24 @@ function CreateOrderModal({
     },
   });
 
-  const canSubmit =
-    form.partner_id &&
-    validItems.length > 0 &&
-    !mutation.isPending &&
-    !orderCreated;
+  // For замяна, validItems is irrelevant — items live in replacementState,
+  // and we require at least one give AND one return line.
+  const replacementHasGives = !!replacementState?.giveItems.some(
+    (i) => i.product_id && Number(i.quantity) > 0,
+  );
+  const replacementHasReturns = !!replacementState?.returnItems.some(
+    (i) => i.product_id && Number(i.quantity) > 0,
+  );
+  const canSubmit = isReplacement
+    ? !!form.partner_id &&
+      replacementHasGives &&
+      replacementHasReturns &&
+      !mutation.isPending &&
+      !orderCreated
+    : form.partner_id &&
+      validItems.length > 0 &&
+      !mutation.isPending &&
+      !orderCreated;
 
   // Compute which items will go negative. Uses the stock snapshotted at
   // product-pick time (item.stock), which matches what the server sees.
@@ -4327,6 +4415,13 @@ function CreateOrderModal({
   // explicitly confirmed the dialog.
   const submitCreateOrder = async ({ asQuoted = false } = {}) => {
     setErrorMsg("");
+    // Замяна skips below-cost / oversell / quoted guards — the backend
+    // owns the bidirectional stock movement and there is no "под cost"
+    // concept for a swap (it's a price-difference settlement).
+    if (isReplacement) {
+      mutation.mutate({});
+      return;
+    }
     if (hasBelowCost) {
       if (!canOverrideBelowCost) {
         setErrorMsg(
@@ -4375,7 +4470,40 @@ function CreateOrderModal({
         onKeyDown={handleDialogKeyDown}
       >
         <DialogHeader className="shrink-0">
-          <DialogTitle>Нова поръчка</DialogTitle>
+          <div className="flex items-center justify-between gap-2">
+            <DialogTitle
+              className={isReplacement ? "text-red-600 font-bold" : ""}
+            >
+              {isReplacement ? "🔄 НОВА ЗАМЯНА" : "Нова поръчка"}
+            </DialogTitle>
+            <button
+              type="button"
+              disabled={!selectedPartner || !isSelectedPartnerRazpiskaEligible}
+              title={
+                !selectedPartner
+                  ? "Първо избери партньор"
+                  : !isSelectedPartnerRazpiskaEligible
+                    ? "Замяна за ДДС-фактуриран клиент ще бъде добавена в следваща итерация."
+                    : isReplacement
+                      ? "Излез от режим Замяна"
+                      : "Премини в режим Замяна"
+              }
+              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                isReplacement
+                  ? "bg-red-600 text-white hover:bg-red-700"
+                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+              onClick={() => {
+                setIsReplacement((v) => {
+                  const next = !v;
+                  if (!next) setReplacementState(null);
+                  return next;
+                });
+              }}
+            >
+              🔄 Замяна
+            </button>
+          </div>
           <p className="text-xs text-gray-400 mt-1">
             Tab/Enter между полетата · Ctrl+Enter за създаване
           </p>
@@ -4507,385 +4635,409 @@ function CreateOrderModal({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label>Артикули</Label>
-            <div className="border rounded-lg overflow-x-auto">
-              <Table className="min-w-[1000px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="min-w-[320px]">Продукт</TableHead>
-                    <TableHead className="w-24">Наличност</TableHead>
-                    <TableHead className="w-28">Количество</TableHead>
-                    <TableHead className="w-24">Кг</TableHead>
-                    <TableHead className="w-32">Ед. цена</TableHead>
-                    <TableHead className="w-20">Отст. %</TableHead>
-                    <TableHead className="w-28">Сума</TableHead>
-                    <TableHead className="w-12"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((item, i) => {
-                    const qty = Number(item.quantity) || 0;
-                    const price = Number(item.unit_price) || 0;
-                    const discount = Number(item.discount_percent) || 0;
-                    const lineTotal = qty * price * (1 - discount / 100);
-                    const availableStock = getEffectiveStock(item);
-                    // Only flag overstock on normal lines; paid-not-taken
-                    // and awaiting lines opt out of the red warning bg.
-                    const overStock =
-                      item.line_status === "normal" &&
-                      item.product_id &&
-                      availableStock >= 0 &&
-                      qty > availableStock;
-                    const noPrice = item.product_id && !price;
-                    // Effective price (post-discount) — used за below-cost
-                    // проверката, за да хващаме и случая "цена 10лв при 20%
-                    // отстъпка дава 8лв < ДЦ 9лв".
-                    const effectivePrice = price * (1 - discount / 100);
-                    const belowCost =
-                      item.product_id &&
-                      effectivePrice > 0 &&
-                      item.cost_price > 0 &&
-                      effectivePrice < item.cost_price;
-                    return (
-                      <TableRow
-                        key={item.row_key}
-                        className={
-                          item.line_status === "paid_not_taken"
-                            ? "bg-amber-50"
-                            : item.line_status === "awaiting"
-                              ? "bg-gray-50"
-                              : overStock
-                                ? "bg-red-50"
-                                : belowCost
-                                  ? "bg-amber-50"
-                                  : ""
-                        }
-                      >
-                        <TableCell>
-                          {item.product_id ? (
-                            <div className="flex items-center gap-2">
-                              <Package className="h-4 w-4 text-gray-400 shrink-0" />
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
-                                  <span>{item.product_name}</span>
-                                  {item.line_status === "paid_not_taken" && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
-                                      💰 Платена невзета
-                                    </span>
-                                  )}
-                                  {item.line_status === "awaiting" && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
-                                      ⏳ На изчакване
-                                    </span>
-                                  )}
+          {isReplacement ? (
+            <ReplacementForm
+              partnerId={form.partner_id}
+              onChange={setReplacementState}
+            />
+          ) : (
+            <>
+              <div className="space-y-2">
+                <Label>Артикули</Label>
+                <div className="border rounded-lg overflow-x-auto">
+                  <Table className="min-w-[1000px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="min-w-[320px]">Продукт</TableHead>
+                        <TableHead className="w-24">Наличност</TableHead>
+                        <TableHead className="w-28">Количество</TableHead>
+                        <TableHead className="w-24">Кг</TableHead>
+                        <TableHead className="w-32">Ед. цена</TableHead>
+                        <TableHead className="w-20">Отст. %</TableHead>
+                        <TableHead className="w-28">Сума</TableHead>
+                        <TableHead className="w-12"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map((item, i) => {
+                        const qty = Number(item.quantity) || 0;
+                        const price = Number(item.unit_price) || 0;
+                        const discount = Number(item.discount_percent) || 0;
+                        const lineTotal = qty * price * (1 - discount / 100);
+                        const availableStock = getEffectiveStock(item);
+                        // Only flag overstock on normal lines; paid-not-taken
+                        // and awaiting lines opt out of the red warning bg.
+                        const overStock =
+                          item.line_status === "normal" &&
+                          item.product_id &&
+                          availableStock >= 0 &&
+                          qty > availableStock;
+                        const noPrice = item.product_id && !price;
+                        // Effective price (post-discount) — used за below-cost
+                        // проверката, за да хващаме и случая "цена 10лв при 20%
+                        // отстъпка дава 8лв < ДЦ 9лв".
+                        const effectivePrice = price * (1 - discount / 100);
+                        const belowCost =
+                          item.product_id &&
+                          effectivePrice > 0 &&
+                          item.cost_price > 0 &&
+                          effectivePrice < item.cost_price;
+                        return (
+                          <TableRow
+                            key={item.row_key}
+                            className={
+                              item.line_status === "paid_not_taken"
+                                ? "bg-amber-50"
+                                : item.line_status === "awaiting"
+                                  ? "bg-gray-50"
+                                  : overStock
+                                    ? "bg-red-50"
+                                    : belowCost
+                                      ? "bg-amber-50"
+                                      : ""
+                            }
+                          >
+                            <TableCell>
+                              {item.product_id ? (
+                                <div className="flex items-center gap-2">
+                                  <Package className="h-4 w-4 text-gray-400 shrink-0" />
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-medium truncate flex items-center gap-2 flex-wrap">
+                                      <span>{item.product_name}</span>
+                                      {item.line_status ===
+                                        "paid_not_taken" && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200 text-xs font-normal whitespace-nowrap">
+                                          💰 Платена невзета
+                                        </span>
+                                      )}
+                                      {item.line_status === "awaiting" && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-200 text-xs font-normal whitespace-nowrap">
+                                          ⏳ На изчакване
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-gray-400">
+                                      {item.unit}
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="text-xs text-gray-400">
-                                  {item.unit}
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            <ProductSearchBoundary key={`psb-${item.row_key}`}>
-                              <ProductSearch
-                                ref={(h) => {
-                                  productSearchRefs.current[item.row_key] = h;
+                              ) : (
+                                <ProductSearchBoundary
+                                  key={`psb-${item.row_key}`}
+                                >
+                                  <ProductSearch
+                                    ref={(h) => {
+                                      productSearchRefs.current[item.row_key] =
+                                        h;
+                                    }}
+                                    partnerId={form.partner_id}
+                                    onSelect={(p) => handleProductSelect(i, p)}
+                                    disabled={!form.partner_id}
+                                  />
+                                </ProductSearchBoundary>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {item.product_id ? (
+                                <span
+                                  className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
+                                >
+                                  {availableStock}
+                                </span>
+                              ) : (
+                                "—"
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                ref={(el) => {
+                                  qtyRefs.current[item.row_key] = el;
                                 }}
-                                partnerId={form.partner_id}
-                                onSelect={(p) => handleProductSelect(i, p)}
-                                disabled={!form.partner_id}
+                                type="number"
+                                min="0.001"
+                                step="0.001"
+                                value={item.quantity}
+                                onChange={(e) =>
+                                  setItem(i, "quantity", e.target.value)
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    focusAndSelect(
+                                      priceRefs.current[item.row_key],
+                                    );
+                                  }
+                                }}
+                                className={`w-24 ${overStock ? "border-red-400 text-red-600" : ""}`}
+                                disabled={!item.product_id}
                               />
-                            </ProductSearchBoundary>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {item.product_id ? (
-                            <span
-                              className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
-                            >
-                              {availableStock}
-                            </span>
-                          ) : (
-                            "—"
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              qtyRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            min="0.001"
-                            step="0.001"
-                            value={item.quantity}
-                            onChange={(e) =>
-                              setItem(i, "quantity", e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                focusAndSelect(priceRefs.current[item.row_key]);
-                              }
-                            }}
-                            className={`w-24 ${overStock ? "border-red-400 text-red-600" : ""}`}
-                            disabled={!item.product_id}
-                          />
-                          {overStock && (
-                            <div className="text-xs text-red-500 mt-0.5">
-                              max {availableStock}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={item.weight_kg}
-                            onChange={(e) =>
-                              setItem(i, "weight_kg", e.target.value)
-                            }
-                            className="w-20"
-                            disabled={!item.product_id}
-                            placeholder="0"
-                            title="Тегло (кг) — ще се запамети към продукта и ще се използва за Еконт"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              priceRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={item.unit_price}
-                            onChange={(e) =>
-                              setItem(i, "unit_price", e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key !== "Enter") return;
-                              e.preventDefault();
-                              // Enter in Цена → jump to Отст. % на СЪЩИЯ ред.
-                              focusAndSelect(
-                                discountRefs.current[item.row_key],
-                              );
-                            }}
-                            className={`w-28 ${
-                              noPrice
-                                ? "border-orange-400"
-                                : belowCost
-                                  ? "border-amber-500 text-amber-700"
-                                  : ""
-                            }`}
-                            disabled={!item.product_id}
-                            title={
-                              belowCost
-                                ? `Под доставната цена (${formatCurrency(item.cost_price)})`
-                                : undefined
-                            }
-                          />
-                          {noPrice && (
-                            <div className="text-xs text-orange-500 mt-0.5">
-                              задай цена
-                            </div>
-                          )}
-                          {!noPrice && belowCost && (
-                            <div className="text-[10px] text-amber-700 mt-0.5 whitespace-nowrap">
-                              ⚠ под ДЦ: {formatCurrency(item.cost_price)}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              discountRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            step="0.1"
-                            min="0"
-                            max="100"
-                            value={item.discount_percent}
-                            onChange={(e) =>
-                              setItem(i, "discount_percent", e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key !== "Enter") return;
-                              e.preventDefault();
-                              const nextRow = items[i + 1];
-                              if (nextRow) {
-                                focusAndSelect(
-                                  qtyRefs.current[nextRow.row_key],
-                                );
-                                return;
-                              }
-                              // Last row — auto-add if filled. Отстъпката
-                              // е optional — не я включваме в "is filled"
-                              // проверката.
-                              if (
-                                item.product_id &&
-                                Number(item.quantity) > 0 &&
-                                Number(item.unit_price) > 0
-                              ) {
-                                addItemAndFocus();
-                              } else {
-                                focusAndSelect(qtyRefs.current[item.row_key]);
-                              }
-                            }}
-                            className={`w-20 ${discount > 0 ? "border-blue-400 text-blue-700" : ""}`}
-                            disabled={!item.product_id}
-                            placeholder="0"
-                          />
-                        </TableCell>
-                        <TableCell className="font-medium text-sm">
-                          {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
+                              {overStock && (
+                                <div className="text-xs text-red-500 mt-0.5">
+                                  max {availableStock}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.weight_kg}
+                                onChange={(e) =>
+                                  setItem(i, "weight_kg", e.target.value)
+                                }
+                                className="w-20"
+                                disabled={!item.product_id}
+                                placeholder="0"
+                                title="Тегло (кг) — ще се запамети към продукта и ще се използва за Еконт"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                ref={(el) => {
+                                  priceRefs.current[item.row_key] = el;
+                                }}
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.unit_price}
+                                onChange={(e) =>
+                                  setItem(i, "unit_price", e.target.value)
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key !== "Enter") return;
+                                  e.preventDefault();
+                                  // Enter in Цена → jump to Отст. % на СЪЩИЯ ред.
+                                  focusAndSelect(
+                                    discountRefs.current[item.row_key],
+                                  );
+                                }}
+                                className={`w-28 ${
+                                  noPrice
+                                    ? "border-orange-400"
+                                    : belowCost
+                                      ? "border-amber-500 text-amber-700"
+                                      : ""
+                                }`}
+                                disabled={!item.product_id}
+                                title={
+                                  belowCost
+                                    ? `Под доставната цена (${formatCurrency(item.cost_price)})`
+                                    : undefined
+                                }
+                              />
+                              {noPrice && (
+                                <div className="text-xs text-orange-500 mt-0.5">
+                                  задай цена
+                                </div>
+                              )}
+                              {!noPrice && belowCost && (
+                                <div className="text-[10px] text-amber-700 mt-0.5 whitespace-nowrap">
+                                  ⚠ под ДЦ: {formatCurrency(item.cost_price)}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                ref={(el) => {
+                                  discountRefs.current[item.row_key] = el;
+                                }}
+                                type="number"
+                                step="0.1"
+                                min="0"
+                                max="100"
+                                value={item.discount_percent}
+                                onChange={(e) =>
+                                  setItem(i, "discount_percent", e.target.value)
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key !== "Enter") return;
+                                  e.preventDefault();
+                                  const nextRow = items[i + 1];
+                                  if (nextRow) {
+                                    focusAndSelect(
+                                      qtyRefs.current[nextRow.row_key],
+                                    );
+                                    return;
+                                  }
+                                  // Last row — auto-add if filled. Отстъпката
+                                  // е optional — не я включваме в "is filled"
+                                  // проверката.
+                                  if (
+                                    item.product_id &&
+                                    Number(item.quantity) > 0 &&
+                                    Number(item.unit_price) > 0
+                                  ) {
+                                    addItemAndFocus();
+                                  } else {
+                                    focusAndSelect(
+                                      qtyRefs.current[item.row_key],
+                                    );
+                                  }
+                                }}
+                                className={`w-20 ${discount > 0 ? "border-blue-400 text-blue-700" : ""}`}
+                                disabled={!item.product_id}
+                                placeholder="0"
+                              />
+                            </TableCell>
+                            <TableCell className="font-medium text-sm">
+                              {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button
+                                      type="button"
+                                      disabled={!item.product_id}
+                                      className={`p-1 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                                        item.line_status === "paid_not_taken"
+                                          ? "text-amber-600 hover:bg-amber-100"
+                                          : item.line_status === "awaiting"
+                                            ? "text-gray-600 hover:bg-gray-100"
+                                            : "text-gray-300 hover:text-gray-600 hover:bg-gray-50"
+                                      }`}
+                                      title="Маркирай реда като платена невзета или на изчакване"
+                                    >
+                                      {item.line_status === "paid_not_taken" ? (
+                                        <span className="text-base leading-none">
+                                          💰
+                                        </span>
+                                      ) : item.line_status === "awaiting" ? (
+                                        <span className="text-base leading-none">
+                                          ⏳
+                                        </span>
+                                      ) : (
+                                        <Tag className="h-4 w-4" />
+                                      )}
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      onClick={() =>
+                                        setLineStatus(item.row_key, "normal")
+                                      }
+                                      className={
+                                        item.line_status === "normal"
+                                          ? "font-medium"
+                                          : ""
+                                      }
+                                    >
+                                      📦 Нормална
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={() =>
+                                        setLineStatus(
+                                          item.row_key,
+                                          "paid_not_taken",
+                                        )
+                                      }
+                                      className={
+                                        item.line_status === "paid_not_taken"
+                                          ? "font-medium text-amber-700"
+                                          : ""
+                                      }
+                                    >
+                                      💰 Платена невзета
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={() =>
+                                        setLineStatus(item.row_key, "awaiting")
+                                      }
+                                      className={
+                                        item.line_status === "awaiting"
+                                          ? "font-medium text-gray-700"
+                                          : ""
+                                      }
+                                    >
+                                      ⏳ На изчакване
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
                                 <button
                                   type="button"
-                                  disabled={!item.product_id}
-                                  className={`p-1 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                                    item.line_status === "paid_not_taken"
-                                      ? "text-amber-600 hover:bg-amber-100"
-                                      : item.line_status === "awaiting"
-                                        ? "text-gray-600 hover:bg-gray-100"
-                                        : "text-gray-300 hover:text-gray-600 hover:bg-gray-50"
-                                  }`}
-                                  title="Маркирай реда като платена невзета или на изчакване"
+                                  onClick={() => removeItem(i)}
+                                  className="p-1 text-gray-400 hover:text-red-500 transition-colors"
                                 >
-                                  {item.line_status === "paid_not_taken" ? (
-                                    <span className="text-base leading-none">
-                                      💰
-                                    </span>
-                                  ) : item.line_status === "awaiting" ? (
-                                    <span className="text-base leading-none">
-                                      ⏳
-                                    </span>
-                                  ) : (
-                                    <Tag className="h-4 w-4" />
-                                  )}
+                                  <Trash2 className="h-4 w-4" />
                                 </button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    setLineStatus(item.row_key, "normal")
-                                  }
-                                  className={
-                                    item.line_status === "normal"
-                                      ? "font-medium"
-                                      : ""
-                                  }
-                                >
-                                  📦 Нормална
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    setLineStatus(
-                                      item.row_key,
-                                      "paid_not_taken",
-                                    )
-                                  }
-                                  className={
-                                    item.line_status === "paid_not_taken"
-                                      ? "font-medium text-amber-700"
-                                      : ""
-                                  }
-                                >
-                                  💰 Платена невзета
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    setLineStatus(item.row_key, "awaiting")
-                                  }
-                                  className={
-                                    item.line_status === "awaiting"
-                                      ? "font-medium text-gray-700"
-                                      : ""
-                                  }
-                                >
-                                  ⏳ На изчакване
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            <button
-                              type="button"
-                              onClick={() => removeItem(i)}
-                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-            <Button variant="outline" size="sm" onClick={addItem} type="button">
-              + Добави артикул
-            </Button>
-            {totalItemsWeight > 0 && (
-              <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
-                <Package className="h-4 w-4" />
-                <span>
-                  Общо тегло:{" "}
-                  <span className="font-semibold">
-                    {(Math.round(totalItemsWeight * 100) / 100).toLocaleString(
-                      "bg-BG",
-                      { minimumFractionDigits: 1, maximumFractionDigits: 2 },
-                    )}{" "}
-                    кг
-                  </span>
-                </span>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={addItem}
+                  type="button"
+                >
+                  + Добави артикул
+                </Button>
+                {totalItemsWeight > 0 && (
+                  <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                    <Package className="h-4 w-4" />
+                    <span>
+                      Общо тегло:{" "}
+                      <span className="font-semibold">
+                        {(
+                          Math.round(totalItemsWeight * 100) / 100
+                        ).toLocaleString("bg-BG", {
+                          minimumFractionDigits: 1,
+                          maximumFractionDigits: 2,
+                        })}{" "}
+                        кг
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="space-y-1.5">
-            <Label>Бележки</Label>
-            <Textarea
-              value={form.notes}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, notes: e.target.value }))
-              }
-              rows={2}
-            />
-          </div>
+              <div className="space-y-1.5">
+                <Label>Бележки</Label>
+                <Textarea
+                  value={form.notes}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, notes: e.target.value }))
+                  }
+                  rows={2}
+                />
+              </div>
 
-          {authToken && (
-            <EcontShippingPicker
-              value={{
-                econt_delivery_type: form.econt_delivery_type,
-                econt_receiver_name: form.econt_receiver_name,
-                econt_receiver_phone: form.econt_receiver_phone,
-                econt_city: form.econt_city,
-                econt_office_code: form.econt_office_code || undefined,
-                econt_office_name: form.econt_office_name || undefined,
-                econt_street: form.econt_street || undefined,
-                econt_street_num: form.econt_street_num || undefined,
-                econt_weight: form.econt_weight,
-                econt_cod_amount: form.econt_cod_amount,
-                econt_payer: form.econt_payer,
-                econt_has_cod: form.econt_has_cod,
-                econt_shipment_description:
-                  form.econt_shipment_description || undefined,
-                econt_shipment_date: form.econt_shipment_date || undefined,
-              }}
-              onChange={(patch) =>
-                setForm((f) => ({
-                  ...f,
-                  ...(patch as Partial<typeof f>),
-                }))
-              }
-              token={authToken}
-              defaultOpen={false}
-              defaultCodAmount={orderTotal}
-            />
+              {authToken && (
+                <EcontShippingPicker
+                  value={{
+                    econt_delivery_type: form.econt_delivery_type,
+                    econt_receiver_name: form.econt_receiver_name,
+                    econt_receiver_phone: form.econt_receiver_phone,
+                    econt_city: form.econt_city,
+                    econt_office_code: form.econt_office_code || undefined,
+                    econt_office_name: form.econt_office_name || undefined,
+                    econt_street: form.econt_street || undefined,
+                    econt_street_num: form.econt_street_num || undefined,
+                    econt_weight: form.econt_weight,
+                    econt_cod_amount: form.econt_cod_amount,
+                    econt_payer: form.econt_payer,
+                    econt_has_cod: form.econt_has_cod,
+                    econt_shipment_description:
+                      form.econt_shipment_description || undefined,
+                    econt_shipment_date: form.econt_shipment_date || undefined,
+                  }}
+                  onChange={(patch) =>
+                    setForm((f) => ({
+                      ...f,
+                      ...(patch as Partial<typeof f>),
+                    }))
+                  }
+                  token={authToken}
+                  defaultOpen={false}
+                  defaultCodAmount={orderTotal}
+                />
+              )}
+            </>
           )}
         </div>
 
@@ -4992,16 +5144,19 @@ function CreateOrderModal({
             <Button variant="outline" onClick={onClose}>
               {orderCreated ? "Затвори" : "Отказ"}
             </Button>
-            {!orderCreated && hasStockIssues && !confirmOverstock && (
-              <Button
-                variant="destructive"
-                onClick={() => setConfirmOverstock(true)}
-              >
-                <AlertTriangle className="h-4 w-4" />
-                Потвърди въпреки липсата
-              </Button>
-            )}
-            {!orderCreated && (
+            {!orderCreated &&
+              !isReplacement &&
+              hasStockIssues &&
+              !confirmOverstock && (
+                <Button
+                  variant="destructive"
+                  onClick={() => setConfirmOverstock(true)}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                  Потвърди въпреки липсата
+                </Button>
+              )}
+            {!orderCreated && !isReplacement && (
               <Button
                 variant="outline"
                 onClick={() => void submitCreateOrder({ asQuoted: true })}
@@ -5013,25 +5168,33 @@ function CreateOrderModal({
                 Запази като оферта
               </Button>
             )}
-            {!orderCreated && (!hasStockIssues || confirmOverstock) && (
-              <Button
-                onClick={() => void submitCreateOrder()}
-                disabled={!canSubmit}
-              >
-                {mutation.isPending ? (
-                  <>
-                    <Spinner size="sm" />
-                    Запазване...
-                  </>
-                ) : (
-                  "Създай поръчка"
-                )}
-              </Button>
-            )}
+            {!orderCreated &&
+              (isReplacement || !hasStockIssues || confirmOverstock) && (
+                <Button
+                  onClick={() => void submitCreateOrder()}
+                  disabled={!canSubmit}
+                  className={
+                    isReplacement ? "bg-red-600 hover:bg-red-700" : undefined
+                  }
+                >
+                  {mutation.isPending ? (
+                    <>
+                      <Spinner size="sm" />
+                      Запазване...
+                    </>
+                  ) : isReplacement ? (
+                    "Създай замяна"
+                  ) : (
+                    "Създай поръчка"
+                  )}
+                </Button>
+              )}
             {orderCreated && (
               <span className="text-sm text-green-600 flex items-center gap-1">
                 <CheckCircle className="h-4 w-4" />
-                Поръчката е създадена
+                {isReplacement
+                  ? "Замяната е създадена"
+                  : "Поръчката е създадена"}
               </span>
             )}
           </DialogFooter>
