@@ -127,7 +127,9 @@ DELETE FROM audit_events;
 DELETE FROM document_counters;
 DELETE FROM import_logs;
 
--- 7) Resetни sequence-ите (за да следващата поръчка/фактура започне от 1)
+-- 7) Resetни sequence-ите — както internal PK-ите, така и човек-четимите
+--    номера (order_number, invoice_number, stock_writeoff_doc_number),
+--    за да следващата поръчка/фактура/записка от склада започне от 1.
 ALTER SEQUENCE orders_id_seq RESTART WITH 1;
 ALTER SEQUENCE order_items_id_seq RESTART WITH 1;
 ALTER SEQUENCE invoices_id_seq RESTART WITH 1;
@@ -141,6 +143,11 @@ ALTER SEQUENCE razpiska_correction_items_id_seq RESTART WITH 1;
 ALTER SEQUENCE stock_writeoffs_id_seq RESTART WITH 1;
 ALTER SEQUENCE notifications_id_seq RESTART WITH 1;
 ALTER SEQUENCE audit_events_id_seq RESTART WITH 1;
+
+-- Човек-четими номера — тези се показват на клиента в UI / на документи
+ALTER SEQUENCE order_number_seq RESTART WITH 1;
+ALTER SEQUENCE invoice_number_seq RESTART WITH 1;
+ALTER SEQUENCE stock_writeoff_doc_seq RESTART WITH 1;
 
 -- 8) Финално състояние --------------------------------------------------------
 \echo
