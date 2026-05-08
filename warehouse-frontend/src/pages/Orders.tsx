@@ -1031,22 +1031,6 @@ function OrderDetailModal({
     fulfillMutation.mutate(orderId);
   }
 
-  const fiscalReceiptMutation = useMutation({
-    mutationFn: (id: number) => api.post("/fiscal/receipt", { order_id: id }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["orders"] });
-      qc.invalidateQueries({ queryKey: ["order-detail"] });
-      toast.success("Касовата бележка е принтирана");
-    },
-    onError: (err: any) => {
-      toast.error(
-        err?.response?.data?.error ??
-          err?.response?.data?.message ??
-          "Грешка при принтиране на касова бележка",
-      );
-    },
-  });
-
   const dispatchToWarehouseMutation = useMutation({
     mutationFn: (id: number) => api.post(`/orders/${id}/dispatch-to-warehouse`),
     onSuccess: () => {
@@ -7100,21 +7084,6 @@ export function Orders() {
     },
   });
 
-  const fiscalReceiptMutation = useMutation({
-    mutationFn: (id: number) => api.post("/fiscal/receipt", { order_id: id }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["orders"] });
-      toast.success("Касовата бележка е принтирана");
-    },
-    onError: (err: any) => {
-      toast.error(
-        err?.response?.data?.error ??
-          err?.response?.data?.message ??
-          "Грешка при принтиране на касова бележка",
-      );
-    },
-  });
-
   const regenerateInvoiceMutation = useMutation({
     mutationFn: (invoiceId: number) =>
       api.put(`/invoices/${invoiceId}/regenerate`),
@@ -8014,41 +7983,45 @@ export function Orders() {
                             </Button>
                           )}
 
-                          {/* Invoice — fulfilled without invoice */}
-                          {order.status === "fulfilled" &&
-                            !order.invoice_id && (
+                          {/* Запиши плащане — показваме иконка при неплатена
+                              поръчка (paid_amount < |total|). Cancelled и
+                              quoted пропускаме (нямат payment obligation),
+                              COD също — куриерът ще събере. Зам поръчките
+                              сравняват срещу |total| (refund-нати са с
+                              negative signed total). */}
+                          {(() => {
+                            const o = order as any;
+                            if (
+                              order.status === "cancelled" ||
+                              order.status === "quoted"
+                            )
+                              return null;
+                            if (o.has_cod_shipment === true) return null;
+                            const total = parseFloat(
+                              String(order.total_amount ?? 0),
+                            );
+                            const paid = parseFloat(String(o.paid_amount ?? 0));
+                            const billed = o.is_replacement
+                              ? Math.abs(total)
+                              : total;
+                            if (billed < 0.01) return null;
+                            if (paid >= billed - 0.01) return null;
+                            return (
                               <Button
                                 size="sm"
                                 variant="outline"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  invoiceMutation.mutate(order.id);
+                                  setPaymentOrder(order);
                                 }}
-                                disabled={invoiceMutation.isPending}
-                                title="Генерирай фактура"
-                                aria-label="Генерирай фактура"
+                                title="Запиши плащане"
+                                aria-label="Запиши плащане"
+                                className="text-orange-600 hover:bg-orange-50"
                               >
-                                <FileText className="h-3.5 w-3.5" />
+                                <CreditCard className="h-3.5 w-3.5" />
                               </Button>
-                            )}
-
-                          {/* Fiscal receipt */}
-                          {(order.status === "fulfilled" ||
-                            order.status === "invoiced") &&
-                            !order.receipt_printed && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  fiscalReceiptMutation.mutate(order.id);
-                                }}
-                                disabled={fiscalReceiptMutation.isPending}
-                                title="Фискален бон"
-                              >
-                                &#x1F9FE;
-                              </Button>
-                            )}
+                            );
+                          })()}
 
                           {/* Delete — only for pending, confirmed, processing */}
                           {order.status !== "cancelled" &&
