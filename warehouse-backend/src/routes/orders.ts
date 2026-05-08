@@ -355,6 +355,12 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (search) {
         // Split search into words so "Beef P" matches 'Beef "PASTRAMI"'.
         // Uses normalize_search() for Cyrillic↔Latin transliteration.
+        // SKU homoglyph fix: Microinvest export-ите дават SKU като
+        // "CHВЕ3045" с микс латиница + кирилски В Е (визуално еднакви
+        // букви). translate() с homoglyph map → ASCII еквиваленти.
+        // Mirror на /products endpoint-а.
+        const HOMOGLYPHS_FROM = "АВЕКМНОРСТХаверстх";
+        const HOMOGLYPHS_TO = "ABEKMHOPCTXaepctx";
         const words = search.trim().split(/\s+/).filter(Boolean);
         const wordClauses: string[] = [];
         for (const word of words) {
@@ -365,11 +371,13 @@ export default async function orderRoutes(app: FastifyInstance) {
               normalize_search(p.name_bg) ILIKE '%' || normalize_search($${paramIdx}) || '%'
               OR normalize_search(p.name_en) ILIKE '%' || normalize_search($${paramIdx}) || '%'
               OR p.sku ILIKE $${paramIdx + 1}
+              OR translate(p.sku, $${paramIdx + 2}, $${paramIdx + 3})
+                 ILIKE '%' || translate($${paramIdx}, $${paramIdx + 2}, $${paramIdx + 3}) || '%'
               OR p.brand ILIKE $${paramIdx + 1}
             )`,
           );
-          params.push(word, `%${escaped}%`);
-          paramIdx += 2;
+          params.push(word, `%${escaped}%`, HOMOGLYPHS_FROM, HOMOGLYPHS_TO);
+          paramIdx += 4;
         }
         if (wordClauses.length > 0) {
           where += ` AND (${wordClauses.join(" AND ")})`;
