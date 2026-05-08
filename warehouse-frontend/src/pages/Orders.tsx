@@ -3562,7 +3562,15 @@ function EditOrderItemsModal({
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  // Глобалната отстъпка може да се въвежда или като процент, или като
+  // фиксирана сума (€). Касиерът обикновено мисли в "колко да му сваля
+  // от сметката" — например клиент с обща сума 1080 € иска 81 € отстъпка.
+  // Пресмятаме процента: 81 / 1080 = 7.5%, и го прилагаме на всички
+  // редове чрез "Приложи на всички". `bulkDiscount` е каноничното
+  // състояние (процент) — `bulkDiscountAmount` е derived от него спрямо
+  // нетния pre-discount total на order-а.
   const [bulkDiscount, setBulkDiscount] = useState("");
+  const [bulkDiscountAmount, setBulkDiscountAmount] = useState("");
 
   const applyBulkDiscount = () => {
     const v = parseFloat(bulkDiscount);
@@ -3942,7 +3950,22 @@ function EditOrderItemsModal({
                   min="0"
                   max="100"
                   value={bulkDiscount}
-                  onChange={(e) => setBulkDiscount(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setBulkDiscount(v);
+                    const gross = items.reduce(
+                      (sum, it) =>
+                        sum +
+                        Number(it.quantity || 0) * Number(it.unit_price || 0),
+                      0,
+                    );
+                    const pct = parseFloat(v);
+                    if (!Number.isFinite(pct) || v === "" || gross <= 0) {
+                      setBulkDiscountAmount("");
+                    } else {
+                      setBulkDiscountAmount(((gross * pct) / 100).toFixed(2));
+                    }
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -3951,6 +3974,47 @@ function EditOrderItemsModal({
                   }}
                   placeholder="0"
                   className="w-20"
+                />
+                <Label
+                  htmlFor="bulk-discount-amt-edit"
+                  className="text-sm font-normal text-gray-600"
+                >
+                  или €:
+                </Label>
+                <Input
+                  id="bulk-discount-amt-edit"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={bulkDiscountAmount}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setBulkDiscountAmount(v);
+                    const gross = items.reduce(
+                      (sum, it) =>
+                        sum +
+                        Number(it.quantity || 0) * Number(it.unit_price || 0),
+                      0,
+                    );
+                    const amt = parseFloat(v);
+                    if (!Number.isFinite(amt) || v === "" || gross <= 0) {
+                      setBulkDiscount("");
+                    } else {
+                      const pct = Math.min(
+                        100,
+                        Math.max(0, (amt / gross) * 100),
+                      );
+                      setBulkDiscount(String(parseFloat(pct.toFixed(4))));
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      applyBulkDiscount();
+                    }
+                  }}
+                  placeholder="0.00"
+                  className="w-24"
                 />
                 <Button
                   type="button"
@@ -4518,7 +4582,11 @@ function CreateOrderModal({
   const [orderCreated, setOrderCreated] = useState(false);
   const [confirmOverstock, setConfirmOverstock] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Виж коментара в EditOrderItemsModal — bulkDiscount е канонично %,
+  // bulkDiscountAmount е удобство за касиера да въведе директно "колко
+  // лева да сваля". Двупосочна синх чрез pre-discount gross total.
   const [bulkDiscount, setBulkDiscount] = useState("");
+  const [bulkDiscountAmount, setBulkDiscountAmount] = useState("");
 
   const applyBulkDiscount = () => {
     const v = parseFloat(bulkDiscount);
@@ -5467,7 +5535,27 @@ function CreateOrderModal({
                         min="0"
                         max="100"
                         value={bulkDiscount}
-                        onChange={(e) => setBulkDiscount(e.target.value)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setBulkDiscount(v);
+                          // Sync към € — pre-discount gross на всички
+                          // непразни редове.
+                          const gross = items.reduce(
+                            (sum, it) =>
+                              sum +
+                              Number(it.quantity || 0) *
+                                Number(it.unit_price || 0),
+                            0,
+                          );
+                          const pct = parseFloat(v);
+                          if (!Number.isFinite(pct) || v === "" || gross <= 0) {
+                            setBulkDiscountAmount("");
+                          } else {
+                            setBulkDiscountAmount(
+                              ((gross * pct) / 100).toFixed(2),
+                            );
+                          }
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
                             e.preventDefault();
@@ -5476,6 +5564,54 @@ function CreateOrderModal({
                         }}
                         placeholder="0"
                         className="w-20"
+                      />
+                      <Label
+                        htmlFor="bulk-discount-amt-create"
+                        className="text-sm font-normal text-gray-600"
+                      >
+                        или €:
+                      </Label>
+                      <Input
+                        id="bulk-discount-amt-create"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={bulkDiscountAmount}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setBulkDiscountAmount(v);
+                          const gross = items.reduce(
+                            (sum, it) =>
+                              sum +
+                              Number(it.quantity || 0) *
+                                Number(it.unit_price || 0),
+                            0,
+                          );
+                          const amt = parseFloat(v);
+                          if (!Number.isFinite(amt) || v === "" || gross <= 0) {
+                            setBulkDiscount("");
+                          } else {
+                            // Cap-ваме до 100% (не може да сваляме повече
+                            // от стойността на сметката).
+                            const pct = Math.min(
+                              100,
+                              Math.max(0, (amt / gross) * 100),
+                            );
+                            // Използваме до 4 знака за minimal loss на
+                            // точност при apply-а; визуализацията на
+                            // input-а ползва % .toFixed(4) -> parseFloat
+                            // = чист number без trailing нули.
+                            setBulkDiscount(String(parseFloat(pct.toFixed(4))));
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            applyBulkDiscount();
+                          }
+                        }}
+                        placeholder="0.00"
+                        className="w-24"
                       />
                       <Button
                         type="button"

@@ -176,12 +176,14 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
     doc.y = Math.max(senderEnd, receiverEnd) + 12;
 
     // ── Items table ────────────────────────────────────────
+    // Per-line "Отст. %" колона е премахната — на печатния документ
+    // не се показва per-line отстъпка (виж invoice-pdf.ts за обяснение).
+    // Стока абсорбира освободените 60pt.
     const cols = [
       { header: "№", w: 24, align: "right" },
-      { header: "Стока", w: pageW - 24 - 50 - 70 - 60 - 80, align: "left" },
+      { header: "Стока", w: pageW - 24 - 50 - 70 - 80, align: "left" },
       { header: "Кол.", w: 50, align: "right" },
       { header: "Ед. цена", w: 70, align: "right" },
-      { header: "Отст. %", w: 60, align: "right" },
       { header: "Сума", w: 80, align: "right" },
     ];
     const headerY = doc.y;
@@ -206,18 +208,20 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
     doc.font("Main").fontSize(8.5).fillColor("#0f172a");
     data.items.forEach((it, idx) => {
       const y = doc.y;
+      const qty = toNum(it.quantity);
+      const lineTotal = toNum(it.total_price);
+      // Show effective post-discount unit price така че Цена×Кол =
+      // Сума на документа.
+      const effectivePrice = qty > 0 ? lineTotal / qty : toNum(it.unit_price);
       const cells = [
         String(idx + 1),
         it.name_bg || "—",
-        toNum(it.quantity).toLocaleString("bg-BG", {
+        qty.toLocaleString("bg-BG", {
           minimumFractionDigits: 0,
           maximumFractionDigits: 3,
         }),
-        fmtEur(toNum(it.unit_price)),
-        toNum(it.discount_percent) > 0
-          ? toNum(it.discount_percent).toFixed(0) + "%"
-          : "—",
-        fmtEur(toNum(it.total_price)),
+        fmtEur(effectivePrice),
+        fmtEur(lineTotal),
       ];
       cx = L;
       cells.forEach((val, i) => {

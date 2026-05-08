@@ -1445,19 +1445,16 @@ export async function generateStockDispatchPdf(
       const baseTotal = qty * price;
       const explicitTotal = toNum(item.total_price);
       const lineTotal = explicitTotal > 0 ? explicitTotal : baseTotal;
-      const inferredDiscount =
-        baseTotal > 0
-          ? Math.max(0, ((baseTotal - lineTotal) / baseTotal) * 100)
-          : 0;
-      const discount =
-        item.discount_percent != null
-          ? Math.max(0, toNum(item.discount_percent))
-          : inferredDiscount;
       subtotalEur += lineTotal;
 
-      // gross mode → display the stored price; net mode → strip VAT.
+      // На стокова разписка не показваме per-line отстъпка — само
+      // финалната цена (post-discount). За да съответства Цена×Кол =
+      // Стойност, "Цена" е effective post-discount unit price.
+      const effectivePrice = qty > 0 ? lineTotal / qty : price;
       const displayPrice =
-        pricingMode === "gross" ? price : price / vatMultiplier;
+        pricingMode === "gross"
+          ? effectivePrice
+          : effectivePrice / vatMultiplier;
       const displayLineTotal =
         pricingMode === "gross" ? lineTotal : lineTotal / vatMultiplier;
 
@@ -1469,19 +1466,18 @@ export async function generateStockDispatchPdf(
         formatQty(qty),
         formatEUR(displayPrice),
         (item.currency || "EUR").toUpperCase(),
-        formatDiscount(discount),
         formatEUR(displayLineTotal),
       ]);
     }
 
-    // Same rebalance pattern as стокова разписка — широк Код за
-    // 12-цифрените SKU, компактни числа, остатъкът за Стока.
+    // Per-line "Отстъпка" колона е премахната — клиентът вижда само
+    // финалната цена. Освободеният pt range (44pt) отива към Стока.
     const columns: TableColumn[] = [
       { header: "№", width: 22, align: "right" },
       { header: "Код", width: 60, align: "left" },
       {
         header: "Стока",
-        width: pageWidth - (22 + 60 + 38 + 42 + 50 + 36 + 44 + 48),
+        width: pageWidth - (22 + 60 + 38 + 42 + 50 + 36 + 48),
         align: "left",
         wrap: true,
       },
@@ -1489,7 +1485,6 @@ export async function generateStockDispatchPdf(
       { header: "Кол.", width: 42, align: "right" },
       { header: "Цена", width: 50, align: "right" },
       { header: "Валута", width: 36, align: "center" },
-      { header: "Отстъпка", width: 44, align: "right" },
       { header: "Ст-ст", width: 48, align: "right" },
     ];
 

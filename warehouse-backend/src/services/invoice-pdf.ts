@@ -675,23 +675,26 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     // побира 99 999,99 (~34pt при fontSize 7) с комфортен padding.
     // Целият остатък от page width отива към Стока, така продуктовите
     // имена се wrap-ват минимално.
-    // "Отст. %" колона е добавена между Цена и ДДС / Стойност. 36pt
-    // побира "100.0%" (~28pt при fontSize 7) с комфортен padding.
-    // Стока абсорбира намалението.
+    // "Отст. %" колона беше показвана между Цена и ДДС / Стойност, но
+    // според бизнес изискването на МЕРТ-М на печатния документ не се
+    // изписва per-line отстъпка — клиентът вижда само финалната цена
+    // (post-discount). Внедрено като част от "Обща отстъпка €" feature-а:
+    // касиерът въвежда "колко лева да сваля", системата разпределя като
+    // % per item, но сметката остава едноциф. Стока абсорбира освободения
+    // pt range.
     const colDefs: InvoiceTableColumn[] = showVat
       ? [
           { header: "№", w: 18, align: "center", wrap: false },
           { header: "Код", w: 56, align: "left", wrap: false },
           {
             header: "Стока",
-            w: pageW - 18 - 56 - 42 - 34 - 46 - 36 - 42 - 48,
+            w: pageW - 18 - 56 - 42 - 34 - 46 - 42 - 48,
             align: "left",
             wrap: true,
           },
           { header: "Мярка", w: 42, align: "left", wrap: false },
           { header: "Кол.", w: 34, align: "right", wrap: false },
           { header: "Цена", w: 46, align: "right", wrap: false },
-          { header: "Отст.%", w: 36, align: "right", wrap: false },
           {
             header: `ДДС ${vatRateLabel}%`,
             w: 42,
@@ -710,14 +713,13 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
           { header: "Код", w: 60, align: "left", wrap: false },
           {
             header: "Стока",
-            w: pageW - 18 - 60 - 44 - 36 - 50 - 36 - 52,
+            w: pageW - 18 - 60 - 44 - 36 - 50 - 52,
             align: "left",
             wrap: true,
           },
           { header: "Мярка", w: 44, align: "left", wrap: false },
           { header: "Кол.", w: 36, align: "right", wrap: false },
           { header: "Цена", w: 50, align: "right", wrap: false },
-          { header: "Отст.%", w: 36, align: "right", wrap: false },
           {
             header: "Стойност",
             w: 52,
@@ -927,19 +929,23 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       for (let idx = 0; idx < data.items.length; idx += 1) {
         const item = data.items[idx];
         const qty = toNum(item.quantity);
-        const grossPrice = toNum(item.unit_price);
         const grossTotal = toNum(item.total_price);
-        const price = grossPrice / vatDiv;
+        // Discount колоната е премахната → показваме EFFECTIVE цена
+        // (post-discount), за да съответства Цена × Кол = Стойност на
+        // печатния документ. Иначе клиент който прави бърза проверка ще
+        // види несъответствие (sticker price × qty ≠ показаната
+        // стойност). При qty=0 fallback-ваме към storage-натия unit_price
+        // — единствено за да не делим на 0; реално qty=0 не би стигнало
+        // до PDF-а.
+        const effectiveGrossPrice =
+          qty > 0 ? grossTotal / qty : toNum(item.unit_price);
+        const price = effectiveGrossPrice / vatDiv;
         const total = grossTotal / vatDiv;
         const description = item.name_bg || item.name_en;
         const unit = mapUnit(item.unit);
-        // Форматираме отстъпката компактно: 0 → "—" (видимо различно от
-        // реално 0% ако някой го въведе изрично), иначе "10%" или "12.5%".
-        const discountPct = toNum(item.discount_percent ?? 0);
-        const discountLabel =
-          discountPct > 0
-            ? `${Number.isInteger(discountPct) ? discountPct.toFixed(0) : discountPct.toFixed(1)}%`
-            : "—";
+        // Per-line discount колоната беше премахната — на печатния
+        // документ се показват само финалните цени (post-discount). Виж
+        // colDefs горе за обяснението.
         const values = showVat
           ? [
               String(idx + 1),
@@ -948,7 +954,6 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               unit,
               qty.toFixed(3),
               formatEur(price, sourceCurrency),
-              discountLabel,
               `${vatRateLabel}%`,
               formatEur(total, sourceCurrency),
             ]
@@ -959,7 +964,6 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               unit,
               qty.toFixed(3),
               formatEur(price, sourceCurrency),
-              discountLabel,
               formatEur(total, sourceCurrency),
             ];
 
