@@ -191,8 +191,9 @@ describe("POST /invoices partner_override", () => {
         q.sql.includes("INSERT INTO invoices"),
       );
       expect(invoiceInsert).toBeDefined();
-      // partner_id is the 2nd $-param in the INSERT
-      expect(invoiceInsert?.params?.[1]).toBe(99);
+      // partner_id is the 3rd $-param in the INSERT (after invoice_number,
+      // invoice_date_override).
+      expect(invoiceInsert?.params?.[2]).toBe(99);
 
       // No INSERT INTO partners — the existing partner_id was used as-is.
       const partnerInsert = txQueries.find((q) =>
@@ -234,13 +235,13 @@ describe("POST /invoices partner_override", () => {
       const invoiceInsert = txQueries.find((q) =>
         q.sql.includes("INSERT INTO invoices"),
       );
-      expect(invoiceInsert?.params?.[1]).toBe(77);
+      expect(invoiceInsert?.params?.[2]).toBe(77);
     } finally {
       await app.close();
     }
   });
 
-  it("inserts new partner with partner_type='company' when EIK is unknown", async () => {
+  it("inserts new partner with partner_type='legal_entity' when EIK is unknown", async () => {
     const { txQueries } = buildTxMock({
       partner: makeIndividualPartner(),
       eikLookup: undefined, // empty SELECT
@@ -272,8 +273,8 @@ describe("POST /invoices partner_override", () => {
         q.sql.includes("INSERT INTO partners"),
       );
       expect(partnerInsert).toBeDefined();
-      // partner_type='company' is hard-coded in the SQL string
-      expect(partnerInsert?.sql).toMatch(/'company'/);
+      // partner_type='legal_entity' is hard-coded in the SQL string
+      expect(partnerInsert?.sql).toMatch(/'legal_entity'/);
       expect(partnerInsert?.params).toEqual([
         "Нова Фирма ЕООД",
         "204711333",
@@ -282,13 +283,14 @@ describe("POST /invoices partner_override", () => {
         "София",
         "Иван",
         "0888",
+        null, // email — not supplied in the override payload
       ]);
 
       const invoiceInsert = txQueries.find((q) =>
         q.sql.includes("INSERT INTO invoices"),
       );
       // The freshly minted partner id (555) flows into the invoice.
-      expect(invoiceInsert?.params?.[1]).toBe(555);
+      expect(invoiceInsert?.params?.[2]).toBe(555);
     } finally {
       await app.close();
     }
@@ -339,8 +341,8 @@ describe("POST /invoices partner_override", () => {
       const invoiceInsert = txQueries.find((q) =>
         q.sql.includes("INSERT INTO invoices"),
       );
-      // client_display_name is the 7th $-param (index 6)
-      expect(invoiceInsert?.params?.[6]).toBeNull();
+      // client_display_name is the 8th $-param (index 7)
+      expect(invoiceInsert?.params?.[7]).toBeNull();
     } finally {
       await app.close();
     }

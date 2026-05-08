@@ -78,6 +78,7 @@ describe("POST /econt/update-shipment", () => {
             econt_city: "Пловдив",
             econt_street: null,
             econt_street_num: null,
+            econt_cod_amount: "100.00",
           },
         ],
       } as any)
@@ -108,7 +109,7 @@ describe("POST /econt/update-shipment", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.shipmentNumber).toBe("NEW2");
-    expect(body.codAmount).toBeCloseTo(120, 2); // 100 * 1.2 VAT
+    expect(body.codAmount).toBeCloseTo(100, 2); // total_price is gross — no VAT multiplier
     expect(body.weight).toBe(5);
 
     // Assert deleteLabels was called with the old number

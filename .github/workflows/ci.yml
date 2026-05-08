@@ -53,8 +53,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
-      - run: pip install -e .
-      - run: pytest -q
+      - run: pip install -e '.[test]'
+      - run: python -m pytest -q
 
   mobile-typecheck:
     name: Mobile Typecheck (${{ matrix.app }})

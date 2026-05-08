@@ -30,7 +30,7 @@ describe("GET /permissions/registry", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(Array.isArray(body)).toBe(true);
-      expect(body.length).toBe(18);
+      expect(body.length).toBe(19);
       const orders = body.find((p: any) => p.permission === "orders.manage");
       expect(orders).toMatchObject({
         permission: "orders.manage",

@@ -33,6 +33,11 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]

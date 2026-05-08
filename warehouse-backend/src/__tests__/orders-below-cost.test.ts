@@ -220,10 +220,10 @@ describe("POST /orders below-cost guard", () => {
     expect(String(insertCall![0])).toMatch(/below_cost_details/);
     // The audit values must be non-null in the bind params
     const params = insertCall![1] as any[];
-    expect(params[20]).toBe("u-admin"); // below_cost_approved_by
-    expect(params[21]).toBeInstanceOf(Date); // below_cost_approved_at
-    expect(typeof params[22]).toBe("string"); // below_cost_details (JSON)
-    expect(JSON.parse(params[22] as string)[0]).toMatchObject({
+    expect(params[22]).toBe("u-admin"); // below_cost_approved_by
+    expect(params[23]).toBeInstanceOf(Date); // below_cost_approved_at
+    expect(typeof params[24]).toBe("string"); // below_cost_details (JSON)
+    expect(JSON.parse(params[24] as string)[0]).toMatchObject({
       product_id: 1,
       effective_price: 5,
       purchase_price: 10,

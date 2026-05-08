@@ -154,12 +154,12 @@ describe("Quotation flow", () => {
     expect(JSON.parse(res.body)).toMatchObject({ id: 1, status: "quoted" });
   });
 
-  it("POST /orders/:id/quote rejects 400 when status != pending", async () => {
+  it("POST /orders/:id/quote rejects 400 when status is not quotable", async () => {
     mockTransaction.mockImplementationOnce(async (cb: any) =>
       cb({
         query: vi
           .fn()
-          .mockResolvedValueOnce(rows([{ id: 1, status: "confirmed" }])),
+          .mockResolvedValueOnce(rows([{ id: 1, status: "fulfilled" }])),
       }),
     );
     const res = await app.inject({ method: "POST", url: "/orders/1/quote" });
