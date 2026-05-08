@@ -94,13 +94,19 @@ function formatDate(iso: string): string {
   return `${m[3]}.${m[2]}.${m[1]}`;
 }
 
+// Премахва излишните decimal нули: "1.000" → "1", "2.500" → "2.5".
+// Гаранционните карти за durable goods (МЕРТ-М продава техника, не
+// насипни стоки) винаги имат integer quantity-та; "1.000 бр" объркваше
+// клиента (изглежда като 1000 бройки вместо 1).
+function formatQty(v: number | string): string {
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  if (!Number.isFinite(n)) return String(v);
+  return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/\.?0+$/, "");
+}
+
 function describeItem(it: WarrantyItem): string {
-  const qty =
-    typeof it.quantity === "number"
-      ? it.quantity.toString()
-      : String(it.quantity);
   const head = it.name_bg;
-  const tail = `${qty} ${it.unit || "бр"}`;
+  const tail = `${formatQty(it.quantity)} ${it.unit || "бр."}`;
   return `${head} — ${tail}`;
 }
 
@@ -155,8 +161,13 @@ export async function generateWarrantyCardPdf(
     color: black,
   });
 
-  // 4) Warranty months
-  page.drawText(String(data.warranty_months), {
+  // 4) Warranty months — добавяме "месеца" / "месец" суфикс, за да
+  //    е ясно за клиента че 12 е срок (а не например брой устройства).
+  const monthsLabel =
+    data.warranty_months === 1
+      ? `${data.warranty_months} месец`
+      : `${data.warranty_months} месеца`;
+  page.drawText(monthsLabel, {
     x: WARRANTY_MONTHS_POSITION.x,
     y: WARRANTY_MONTHS_POSITION.y,
     size: 10,
@@ -258,13 +269,18 @@ export async function generateWarrantyCardPdf(
         size: 9,
         font: fontRegular,
       });
-      cont.drawText(String(it.quantity), {
+      cont.drawText(formatQty(it.quantity), {
         x: 470,
         y,
         size: 9,
         font: fontRegular,
       });
-      cont.drawText(it.unit || "бр", { x: 510, y, size: 9, font: fontRegular });
+      cont.drawText(it.unit || "бр.", {
+        x: 510,
+        y,
+        size: 9,
+        font: fontRegular,
+      });
       y -= 14;
     }
   }
