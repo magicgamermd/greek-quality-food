@@ -1,6 +1,15 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Package, CheckCircle, Printer, Clock, FileText } from "lucide-react";
+import {
+  Package,
+  CheckCircle,
+  Printer,
+  Clock,
+  FileText,
+  ArrowDownLeft,
+  ArrowUpRight,
+  RefreshCcw,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { Order, OrderItem } from "@/types";
@@ -199,185 +208,361 @@ export function WarehousePacking() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {(orderDetails.length > 0 ? orderDetails : orders).map((order) => {
-          const items: OrderItem[] = order.items ?? [];
-          const checked = checkedItems[String(order.id)] || new Set();
-          const allChecked = items.length > 0 && checked.size === items.length;
+        {(orderDetails.length > 0 ? orderDetails : orders)
+          // Hide orders with no packable lines — orders where every item
+          // is `paid_not_taken` (already in customer hands) or `awaiting`
+          // (pre-order, goods haven't arrived) shouldn't appear here.
+          // Once a paid_not_taken line is handed over or an awaiting line
+          // is confirmed, it transitions to `normal` and the order pops
+          // back into the packing queue.
+          .filter((order) => {
+            const items: OrderItem[] = order.items ?? [];
+            if (items.length === 0) return true; // still loading details
+            return items.some(
+              (it) => (it.line_status ?? "normal") === "normal",
+            );
+          })
+          .map((order) => {
+            const allItems: OrderItem[] = order.items ?? [];
+            // Only "normal" lines are packed at this stage. paid_not_taken
+            // (already in customer hands) and awaiting (pre-order, not in
+            // stock yet) are surfaced as a small note below so the worker
+            // knows the order has more lines they shouldn't grab.
+            const items = allItems.filter(
+              (it) => (it.line_status ?? "normal") === "normal",
+            );
+            const skipped = allItems.filter(
+              (it) => (it.line_status ?? "normal") !== "normal",
+            );
+            const checked = checkedItems[String(order.id)] || new Set();
+            const allChecked =
+              items.length > 0 && checked.size === items.length;
+            const isReplacement = Boolean(order.is_replacement);
+            const giveItems = items.filter((i) => !i.is_returning);
+            const returnItems = items.filter((i) => Boolean(i.is_returning));
 
-          return (
-            <div
-              key={order.id}
-              className="bg-white rounded-2xl shadow-lg overflow-hidden"
-            >
-              <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xl font-bold text-gray-900">
-                      Поръчка #{order.id}
-                    </h2>
-                    <p className="text-base text-gray-600 mt-1">
-                      {order.partner?.name ??
-                        order.partner_name ??
-                        `Партньор #${order.partner_id}`}
+            return (
+              <div
+                key={order.id}
+                className="bg-white rounded-2xl shadow-lg overflow-hidden"
+              >
+                <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h2 className="text-xl font-bold text-gray-900">
+                          Поръчка #{order.order_number ?? order.id}
+                        </h2>
+                        {isReplacement && (
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                            <RefreshCcw className="h-3 w-3" />
+                            Замяна
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-base text-gray-600 mt-1">
+                        {order.partner?.name ??
+                          order.partner_name ??
+                          `Партньор #${order.partner_id}`}
+                      </p>
+                    </div>
+                    <div className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-medium">
+                      В обработка
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-6 py-4">
+                  {items.length === 0 ? (
+                    <p className="text-gray-400 text-center py-4">
+                      Зареждане на артикули...
                     </p>
-                  </div>
-                  <div className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-medium">
-                    В обработка
-                  </div>
-                </div>
-              </div>
-
-              <div className="px-6 py-4">
-                {items.length === 0 ? (
-                  <p className="text-gray-400 text-center py-4">
-                    Зареждане на артикули...
-                  </p>
-                ) : (
-                  <ul className="space-y-3">
-                    {items.map((item) => {
-                      const isChecked = checked.has(item.id);
-                      const prodName =
-                        item.name_bg ||
-                        item.product?.name_bg ||
-                        item.name_en ||
-                        item.product?.name_en ||
-                        `Продукт #${item.product_id}`;
-                      const unit = item.unit || item.product?.unit || "бр.";
-                      return (
-                        <li key={item.id}>
-                          <label className="flex items-center gap-3 cursor-pointer group">
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={() => toggleItem(order.id, item.id)}
-                              className="h-6 w-6 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
-                            />
-                            <div
-                              className={`flex-1 text-lg ${isChecked ? "line-through text-gray-400" : "text-gray-900"}`}
-                            >
-                              {prodName}
-                            </div>
-                            <span
-                              className={`text-lg font-bold ${isChecked ? "text-gray-400" : "text-gray-700"}`}
-                            >
-                              {item.quantity} {unit}
-                            </span>
-                          </label>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-
-              {waybillResult[order.id] && (
-                <div
-                  className={`mx-6 mt-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                    waybillResult[order.id].success
-                      ? "bg-green-100 text-green-800"
-                      : "bg-red-100 text-red-800"
-                  }`}
-                >
-                  {waybillResult[order.id].message}
-                </div>
-              )}
-
-              <div className="px-6 py-4 border-t border-gray-200 space-y-2">
-                <button
-                  onClick={() => handlePrintLabel(order.id)}
-                  disabled={printingLabelId === order.id}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-sky-100 hover:bg-sky-200 text-sky-800 rounded-xl text-base font-medium transition-colors disabled:opacity-60"
-                >
-                  {printingLabelId === order.id ? (
-                    <Spinner size="sm" />
+                  ) : isReplacement ? (
+                    <div className="space-y-4">
+                      <PackingItemSection
+                        label="Дай на клиента"
+                        accent="give"
+                        items={giveItems}
+                        checked={checked}
+                        onToggle={(itemId) => toggleItem(order.id, itemId)}
+                        emptyText="Няма артикули за даване"
+                      />
+                      <PackingItemSection
+                        label="Приеми обратно"
+                        accent="return"
+                        items={returnItems}
+                        checked={checked}
+                        onToggle={(itemId) => toggleItem(order.id, itemId)}
+                        emptyText="Няма артикули за връщане"
+                      />
+                    </div>
                   ) : (
-                    <FileText className="h-5 w-5" />
+                    <ul className="space-y-3">
+                      {items.map((item) => {
+                        const isChecked = checked.has(item.id);
+                        const prodName =
+                          item.name_bg ||
+                          item.product?.name_bg ||
+                          item.name_en ||
+                          item.product?.name_en ||
+                          `Продукт #${item.product_id}`;
+                        const unit = item.unit || item.product?.unit || "бр.";
+                        return (
+                          <li key={item.id}>
+                            <label className="flex items-center gap-3 cursor-pointer group">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => toggleItem(order.id, item.id)}
+                                className="h-6 w-6 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
+                              />
+                              <div
+                                className={`flex-1 text-lg ${isChecked ? "line-through text-gray-400" : "text-gray-900"}`}
+                              >
+                                {prodName}
+                              </div>
+                              <span
+                                className={`text-lg font-bold ${isChecked ? "text-gray-400" : "text-gray-700"}`}
+                              >
+                                {item.quantity} {unit}
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
                   )}
-                  Принтирай бележка
-                </button>
-                <div className="flex gap-3">
-                  {order.econt_city ? (
-                    <button
-                      onClick={async () => {
-                        if (order.econt_shipment_number) {
-                          if (order.econt_pdf_url) {
-                            window.open(order.econt_pdf_url, "_blank");
-                          } else {
-                            try {
-                              const res = await api.get(
-                                `/econt/label-pdf/${order.econt_shipment_number}`,
-                              );
-                              if (res.data?.pdfURL) {
-                                window.open(res.data.pdfURL, "_blank");
-                              } else {
+                  {skipped.length > 0 && (
+                    // Heads-up note so the worker doesn't grab lines that
+                    // are paid-but-already-with-customer (paid_not_taken)
+                    // or pre-order awaiting goods. Each line surfaces its
+                    // status word in Bulgarian.
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                      <div className="font-medium mb-1">
+                        Не пакетирай (още):
+                      </div>
+                      <ul className="space-y-0.5 text-xs">
+                        {skipped.map((it) => {
+                          const prodName =
+                            it.name_bg ||
+                            it.product?.name_bg ||
+                            it.name_en ||
+                            it.product?.name_en ||
+                            `Продукт #${it.product_id}`;
+                          const unit = it.unit || it.product?.unit || "бр.";
+                          const statusLabel =
+                            it.line_status === "paid_not_taken"
+                              ? "Платен — невзет"
+                              : it.line_status === "awaiting"
+                                ? "На изчакване (pre-order)"
+                                : it.line_status;
+                          return (
+                            <li
+                              key={it.id}
+                              className="flex items-center justify-between gap-2"
+                            >
+                              <span>
+                                {prodName} — {it.quantity} {unit}
+                              </span>
+                              <span className="font-medium">{statusLabel}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                {waybillResult[order.id] && (
+                  <div
+                    className={`mx-6 mt-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                      waybillResult[order.id].success
+                        ? "bg-green-100 text-green-800"
+                        : "bg-red-100 text-red-800"
+                    }`}
+                  >
+                    {waybillResult[order.id].message}
+                  </div>
+                )}
+
+                <div className="px-6 py-4 border-t border-gray-200 space-y-2">
+                  <button
+                    onClick={() => handlePrintLabel(order.id)}
+                    disabled={printingLabelId === order.id}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-sky-100 hover:bg-sky-200 text-sky-800 rounded-xl text-base font-medium transition-colors disabled:opacity-60"
+                  >
+                    {printingLabelId === order.id ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <FileText className="h-5 w-5" />
+                    )}
+                    Принтирай бележка
+                  </button>
+                  <div className="flex gap-3">
+                    {order.econt_city ? (
+                      <button
+                        onClick={async () => {
+                          if (order.econt_shipment_number) {
+                            if (order.econt_pdf_url) {
+                              window.open(order.econt_pdf_url, "_blank");
+                            } else {
+                              try {
+                                const res = await api.get(
+                                  `/econt/label-pdf/${order.econt_shipment_number}`,
+                                );
+                                if (res.data?.pdfURL) {
+                                  window.open(res.data.pdfURL, "_blank");
+                                } else {
+                                  window.open(
+                                    `https://www.econt.com/services/track-shipment/${order.econt_shipment_number}`,
+                                    "_blank",
+                                  );
+                                }
+                              } catch {
                                 window.open(
                                   `https://www.econt.com/services/track-shipment/${order.econt_shipment_number}`,
                                   "_blank",
                                 );
                               }
-                            } catch {
-                              window.open(
-                                `https://www.econt.com/services/track-shipment/${order.econt_shipment_number}`,
-                                "_blank",
-                              );
                             }
+                            setWaybillResult((prev) => ({
+                              ...prev,
+                              [order.id]: {
+                                success: true,
+                                message: `Товарителница: ${order.econt_shipment_number}`,
+                              },
+                            }));
+                            return;
                           }
-                          setWaybillResult((prev) => ({
-                            ...prev,
-                            [order.id]: {
-                              success: true,
-                              message: `Товарителница: ${order.econt_shipment_number}`,
-                            },
-                          }));
-                          return;
-                        }
-                        waybillMutation.mutate(order);
+                          waybillMutation.mutate(order);
+                        }}
+                        disabled={waybillMutation.isPending}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-base font-medium transition-colors"
+                      >
+                        {waybillMutation.isPending ? (
+                          <Spinner size="sm" />
+                        ) : (
+                          <Printer className="h-5 w-5" />
+                        )}
+                        Принтирай товарителница
+                      </button>
+                    ) : (
+                      <div className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-50 text-blue-700 rounded-xl text-base font-medium">
+                        🏪 Вземане на място
+                      </div>
+                    )}
+                    <button
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: `Потвърди изпращане на Поръчка #${order.id}?`,
+                          description:
+                            "Поръчката ще бъде маркирана като изпълнена и ще се отрази в склада.",
+                          confirmText: "Потвърди изпращане",
+                        });
+                        if (ok) fulfillMutation.mutate(order.id);
                       }}
-                      disabled={waybillMutation.isPending}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-base font-medium transition-colors"
+                      disabled={fulfillMutation.isPending}
+                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-base font-medium transition-colors ${
+                        allChecked
+                          ? "bg-orange-500 hover:bg-orange-600 text-white"
+                          : "bg-orange-200 hover:bg-orange-300 text-orange-800"
+                      }`}
                     >
-                      {waybillMutation.isPending ? (
+                      {fulfillMutation.isPending ? (
                         <Spinner size="sm" />
                       ) : (
-                        <Printer className="h-5 w-5" />
+                        <CheckCircle className="h-5 w-5" />
                       )}
-                      Принтирай товарителница
+                      Потвърди изпращане
                     </button>
-                  ) : (
-                    <div className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-50 text-blue-700 rounded-xl text-base font-medium">
-                      🏪 Вземане на място
-                    </div>
-                  )}
-                  <button
-                    onClick={async () => {
-                      const ok = await confirm({
-                        title: `Потвърди изпращане на Поръчка #${order.id}?`,
-                        description:
-                          "Поръчката ще бъде маркирана като изпълнена и ще се отрази в склада.",
-                        confirmText: "Потвърди изпращане",
-                      });
-                      if (ok) fulfillMutation.mutate(order.id);
-                    }}
-                    disabled={fulfillMutation.isPending}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-base font-medium transition-colors ${
-                      allChecked
-                        ? "bg-orange-500 hover:bg-orange-600 text-white"
-                        : "bg-orange-200 hover:bg-orange-300 text-orange-800"
-                    }`}
-                  >
-                    {fulfillMutation.isPending ? (
-                      <Spinner size="sm" />
-                    ) : (
-                      <CheckCircle className="h-5 w-5" />
-                    )}
-                    Потвърди изпращане
-                  </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
       </div>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*  PackingItemSection                                                    */
+/*                                                                        */
+/*  One labeled section inside a replacement order's packing card —       */
+/*  either "Дай на клиента" (give) or "Приеми обратно" (return). Lets     */
+/*  the worker see at a glance which items leave the warehouse and which  */
+/*  come back IN, so the same checklist UX works for both directions      */
+/*  without confusion.                                                    */
+/* ────────────────────────────────────────────────────────────────────── */
+function PackingItemSection({
+  label,
+  accent,
+  items,
+  checked,
+  onToggle,
+  emptyText,
+}: {
+  label: string;
+  accent: "give" | "return";
+  items: OrderItem[];
+  checked: Set<number>;
+  onToggle: (itemId: number) => void;
+  emptyText: string;
+}) {
+  const isGive = accent === "give";
+  const Icon = isGive ? ArrowDownLeft : ArrowUpRight;
+  const chipClass = isGive
+    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+    : "bg-rose-50 text-rose-700 border-rose-200";
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${chipClass}`}
+        >
+          <Icon className="h-3 w-3" />
+          {label}
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm italic text-gray-400 ml-1">{emptyText}</p>
+      ) : (
+        <ul className="space-y-3">
+          {items.map((item) => {
+            const isChecked = checked.has(item.id);
+            const prodName =
+              item.name_bg ||
+              item.product?.name_bg ||
+              item.name_en ||
+              item.product?.name_en ||
+              `Продукт #${item.product_id}`;
+            const unit = item.unit || item.product?.unit || "бр.";
+            return (
+              <li key={item.id}>
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => onToggle(item.id)}
+                    className="h-6 w-6 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
+                  />
+                  <div
+                    className={`flex-1 text-lg ${isChecked ? "line-through text-gray-400" : "text-gray-900"}`}
+                  >
+                    {prodName}
+                  </div>
+                  <span
+                    className={`text-lg font-bold ${isChecked ? "text-gray-400" : "text-gray-700"}`}
+                  >
+                    {item.quantity} {unit}
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

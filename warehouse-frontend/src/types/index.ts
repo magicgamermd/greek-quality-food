@@ -251,6 +251,15 @@ export interface Order {
     name_bg: string;
     sku: string | null;
   }>;
+  // Sum of all payments tied to this order (or its invoice). Populated by
+  // GET /orders endpoint via LEFT JOIN LATERAL on payments. Used to drive
+  // razpiska payment-status badges (paid / partial / unpaid).
+  paid_amount?: number;
+  paid_cod_amount?: number;
+  has_cod_shipment?: boolean;
+  // Effective receiver — when invoice is issued to a different (legal)
+  // partner, this is that partner's name; otherwise the order's partner.
+  invoice_partner_name?: string | null;
 }
 
 export interface OrderItem {

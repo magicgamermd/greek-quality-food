@@ -1,5 +1,12 @@
 import { useMemo } from "react";
-import { Printer, PackageCheck, Ban } from "lucide-react";
+import {
+  Printer,
+  PackageCheck,
+  Ban,
+  ArrowDownLeft,
+  ArrowUpRight,
+  RefreshCcw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
 import type { Order, OrderItem } from "@/types";
@@ -47,56 +54,85 @@ function lineTotal(item: OrderItem): number {
   return Math.round(qty * price * 100) / 100;
 }
 
-function ItemsTable({
+function ItemsSection({
+  title,
+  accent,
   items,
+  sectionTotal,
   emptyText,
 }: {
+  title: string;
+  accent: "give" | "return";
   items: OrderItem[];
+  sectionTotal: number;
   emptyText: string;
 }) {
-  if (items.length === 0) {
-    return (
-      <div className="rounded border border-dashed border-gray-200 p-3 text-sm italic text-gray-400">
-        {emptyText}
-      </div>
-    );
-  }
+  const isGive = accent === "give";
+  const Icon = isGive ? ArrowDownLeft : ArrowUpRight;
+  const chipClass = isGive
+    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+    : "bg-rose-50 text-rose-700 border border-rose-200";
+
   return (
-    <div className="overflow-x-auto rounded border border-gray-200">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50 text-xs text-gray-600">
-          <tr>
-            <th className="px-3 py-2 text-left font-medium">Продукт</th>
-            <th className="w-20 px-3 py-2 text-right font-medium">К-во</th>
-            <th className="w-28 px-3 py-2 text-right font-medium">Ед. цена</th>
-            <th className="w-28 px-3 py-2 text-right font-medium">Сума</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((it) => (
-            <tr key={it.id} className="border-t border-gray-100">
-              <td className="px-3 py-2">
-                <div className="font-medium">
-                  {it.name_bg ?? it.name_en ?? `#${it.product_id}`}
-                </div>
-                {it.sku && (
-                  <div className="text-xs text-gray-400">{it.sku}</div>
-                )}
-              </td>
-              <td className="px-3 py-2 text-right">
-                {Number(it.quantity).toLocaleString("bg-BG")}
-                {it.unit ? ` ${it.unit}` : ""}
-              </td>
-              <td className="px-3 py-2 text-right">
-                {formatAmount(Number(it.unit_price) || 0)}
-              </td>
-              <td className="px-3 py-2 text-right font-medium">
-                {formatAmount(lineTotal(it))}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="rounded-md border bg-white">
+      <div className="flex items-center justify-between gap-3 border-b bg-gray-50 px-3 py-2">
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${chipClass}`}
+        >
+          <Icon className="h-3 w-3" />
+          {title}
+        </span>
+        {items.length > 0 && (
+          <span className="text-sm text-gray-600">
+            Сума:{" "}
+            <span className="font-semibold">{formatAmount(sectionTotal)}</span>
+          </span>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <div className="px-3 py-3 text-sm italic text-gray-400">
+          {emptyText}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs text-gray-500">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">Продукт</th>
+                <th className="w-24 px-3 py-2 text-right font-medium">К-во</th>
+                <th className="w-28 px-3 py-2 text-right font-medium">
+                  Ед. цена
+                </th>
+                <th className="w-28 px-3 py-2 text-right font-medium">Сума</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.id} className="border-t border-gray-100">
+                  <td className="px-3 py-2">
+                    <div className="font-medium">
+                      {it.name_bg ?? it.name_en ?? `#${it.product_id}`}
+                    </div>
+                    {it.sku && (
+                      <div className="text-xs text-gray-400">{it.sku}</div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {Number(it.quantity).toLocaleString("bg-BG")}
+                    {it.unit ? ` ${it.unit}` : ""}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {formatAmount(Number(it.unit_price) || 0)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-medium">
+                    {formatAmount(lineTotal(it))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -149,35 +185,36 @@ export function ReplacementDetail({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xl font-bold text-red-600">
-          🔄 ЗАМЯНА #{order.order_number ?? order.id}
-        </h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-xl font-bold text-gray-900">
+            Поръчка #{order.order_number ?? order.id}
+          </h2>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+            <RefreshCcw className="h-3 w-3" />
+            Замяна
+          </span>
+        </div>
         <span className="text-sm text-gray-600">
           Партньор: <span className="font-medium">{partnerName}</span>
         </span>
       </div>
 
-      <div className="rounded-md border-l-4 border-green-500 bg-green-50/30 p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-base font-semibold">🟢 Взема се</h3>
-          <span className="text-sm text-gray-600">
-            Сума: <span className="font-semibold">{formatAmount(giveSum)}</span>
-          </span>
-        </div>
-        <ItemsTable items={giveItems} emptyText="Няма взети артикули" />
-      </div>
+      <ItemsSection
+        title="Взема се"
+        accent="give"
+        items={giveItems}
+        sectionTotal={giveSum}
+        emptyText="Няма взети артикули"
+      />
 
-      <div className="rounded-md border-l-4 border-red-500 bg-red-50/30 p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-base font-semibold">🔴 Връща се</h3>
-          <span className="text-sm text-gray-600">
-            Сума:{" "}
-            <span className="font-semibold">{formatAmount(returnSum)}</span>
-          </span>
-        </div>
-        <ItemsTable items={returnItems} emptyText="Няма върнати артикули" />
-      </div>
+      <ItemsSection
+        title="Връща се"
+        accent="return"
+        items={returnItems}
+        sectionTotal={returnSum}
+        emptyText="Няма върнати артикули"
+      />
 
       <div
         className={`rounded-md border p-3 text-sm ${

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Download,
@@ -12,10 +12,12 @@ import {
   Search,
   Banknote,
   ChevronDown,
+  FileText,
+  Receipt,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { toast } from "@/lib/toast";
-import type { Invoice } from "@/types";
+import type { Invoice, Order } from "@/types";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { Button } from "@/components/ui/button";
@@ -59,10 +61,18 @@ const documentTypeLabels: Record<string, string> = {
 
 export function Invoices() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFromUrl = searchParams.get("status") || "";
+  const viewFromUrl =
+    (searchParams.get("view") as "invoices" | "razpiska") || "invoices";
   const highlightNumber = searchParams.get("highlight") || "";
   const highlightId = searchParams.get("highlight_id");
+  // Document type tab — фактури vs стокови разписки. Razpiska view shows
+  // orders that have a stock-dispatch slip (goods given) but haven't been
+  // converted to an invoice yet. Lets the cashier track who took goods
+  // without paying so they can chase up the bill.
+  const [view, setView] = useState<"invoices" | "razpiska">(viewFromUrl);
   const [statusFilter, setStatusFilter] = useState(statusFromUrl);
   const [highlightedRowId, setHighlightedRowId] = useState<number | null>(null);
   const highlightRowRef = useRef<HTMLTableRowElement | null>(null);
@@ -129,6 +139,82 @@ export function Invoices() {
       });
     },
     refetchInterval: 30000,
+    enabled: view === "invoices",
+  });
+
+  // Razpiska view — orders that have a stock-dispatch slip (status
+  // processing/fulfilled) and haven't been converted to a фактура yet.
+  // Computes payment status from paid_amount vs total_amount the same
+  // way the orders endpoint does for the badge in Orders.tsx.
+  const {
+    data: razpiskaOrders = [],
+    isLoading: razpiskaLoading,
+    error: razpiskaError,
+  } = useQuery<Order[]>({
+    queryKey: [
+      "razpiska-orders",
+      debouncedSearch,
+      filters.date_from,
+      filters.date_to,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("limit", "200");
+      if (debouncedSearch.trim()) params.set("q", debouncedSearch.trim());
+      if (filters.date_from) params.set("date_from", filters.date_from);
+      if (filters.date_to) params.set("date_to", filters.date_to);
+      return api.get(`/orders?${params.toString()}`).then((r) => {
+        const d = r.data;
+        const rows: Order[] = Array.isArray(d)
+          ? d
+          : Array.isArray(d?.data)
+            ? d.data
+            : [];
+        // Filter to orders that have a razpiska (goods out) and aren't
+        // invoiced yet. Cancelled orders are excluded — the cashier
+        // doesn't need to chase those up.
+        return rows.filter(
+          (o) =>
+            !o.invoice_id &&
+            o.status !== "cancelled" &&
+            o.status !== "pending" &&
+            o.status !== "quoted" &&
+            !o.is_replacement,
+        );
+      });
+    },
+    refetchInterval: 30000,
+    enabled: view === "razpiska",
+  });
+
+  // Compute razpiska payment_status from numeric paid/total. Mirrors
+  // backend invoice payment_status semantics.
+  const razpiskaWithStatus = razpiskaOrders.map((o) => {
+    const total = Number(o.total_amount ?? 0);
+    const paid = Number(o.paid_amount ?? 0);
+    let payment_status: "paid" | "partial" | "unpaid" = "unpaid";
+    if (paid >= total - 0.005 && total > 0) payment_status = "paid";
+    else if (paid > 0.005) payment_status = "partial";
+    return {
+      ...o,
+      _payment_status: payment_status,
+      _paid: paid,
+      _total: total,
+    };
+  });
+
+  // Apply payment status filter for razpiska tab. Empty filter (Всички)
+  // shows all razpiska. "cancelled" / "storno" filters don't apply
+  // here — there's no КИ/анулиране flow for razpiska.
+  const filteredRazpiska = razpiskaWithStatus.filter((o) => {
+    if (
+      statusFilter === "" ||
+      statusFilter === "cancelled" ||
+      statusFilter === "storno"
+    ) {
+      return statusFilter === "" ? true : false;
+    }
+    return o._payment_status === statusFilter;
   });
 
   // Tab-specific filters applied on top of the backend response:
@@ -446,35 +532,105 @@ export function Invoices() {
         i.related_invoice_id === invoiceId && i.document_type === "credit_note",
     );
 
+  // Sum of unpaid razpiska totals — shown next to the title in razpiska
+  // tab, mirroring the "Неплатени: X лв" banner the invoices tab has.
+  const razpiskaUnpaidTotal = razpiskaWithStatus
+    .filter((o) => o._payment_status !== "paid")
+    .reduce((s, o) => s + Math.max(0, o._total - o._paid), 0);
+
+  // Status filter pill list — invoices have a Сторнирани/Анулирани pill
+  // pair, razpiska doesn't (no КИ/анулиране flow), so trim those out.
+  const statusFilters =
+    view === "invoices"
+      ? [
+          { value: "", label: "Всички" },
+          { value: "unpaid", label: "Неплатени" },
+          { value: "partial", label: "Частично платени" },
+          { value: "paid", label: "Платени" },
+          { value: "storno", label: "Сторнирани" },
+          { value: "cancelled", label: "Анулирани" },
+        ]
+      : [
+          { value: "", label: "Всички" },
+          { value: "unpaid", label: "Неплатени" },
+          { value: "partial", label: "Частично платени" },
+          { value: "paid", label: "Платени" },
+        ];
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Фактури</h1>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {view === "invoices" ? "Фактури" : "Стокови разписки"}
+          </h1>
           <p className="text-gray-500 text-sm mt-1">
-            Архив на издадените фактури и кредитни известия
+            {view === "invoices"
+              ? "Архив на издадените фактури и кредитни известия"
+              : "Стоки изнесени без фактура — следи кой не е платил"}
           </p>
         </div>
-        {totalUnpaid > 0 && (
+        {view === "invoices" && totalUnpaid > 0 && (
           <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">
             Неплатени:{" "}
             <span className="font-bold">{formatCurrency(totalUnpaid)}</span>
           </div>
         )}
+        {view === "razpiska" && razpiskaUnpaidTotal > 0 && (
+          <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">
+            Дължимо по разписки:{" "}
+            <span className="font-bold">
+              {formatCurrency(razpiskaUnpaidTotal)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Document type tabs (Фактури / Стокови разписки) */}
+      <div className="inline-flex rounded-lg border bg-gray-50 p-1">
+        <button
+          type="button"
+          onClick={() => {
+            setView("invoices");
+            const next = new URLSearchParams(searchParams);
+            next.delete("view");
+            setSearchParams(next, { replace: true });
+            setStatusFilter("");
+          }}
+          className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-md transition ${
+            view === "invoices"
+              ? "bg-white shadow text-gray-900"
+              : "text-gray-500 hover:text-gray-900"
+          }`}
+        >
+          <FileText className="h-4 w-4" />
+          Фактури
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setView("razpiska");
+            const next = new URLSearchParams(searchParams);
+            next.set("view", "razpiska");
+            setSearchParams(next, { replace: true });
+            setStatusFilter("");
+          }}
+          className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-md transition ${
+            view === "razpiska"
+              ? "bg-white shadow text-gray-900"
+              : "text-gray-500 hover:text-gray-900"
+          }`}
+        >
+          <Receipt className="h-4 w-4" />
+          Стокови разписки
+        </button>
       </div>
 
       {/* Status filter + search */}
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-4">
-          <div className="flex gap-2">
-            {[
-              { value: "", label: "Всички" },
-              { value: "unpaid", label: "Неплатени" },
-              { value: "partial", label: "Частично платени" },
-              { value: "paid", label: "Платени" },
-              { value: "storno", label: "Сторнирани" },
-              { value: "cancelled", label: "Анулирани" },
-            ].map((f) => (
+          <div className="flex gap-2 flex-wrap">
+            {statusFilters.map((f) => (
               <button
                 key={f.value}
                 onClick={() => setStatusFilter(f.value)}
@@ -563,376 +719,387 @@ export function Invoices() {
         </div>
       )}
 
-      <Card>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <LoadingOverlay />
-          ) : error ? (
-            <div className="p-4">
-              <ErrorMessage message="Грешка при зареждане" />
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Тип</TableHead>
-                  <TableHead>Номер</TableHead>
-                  <TableHead>Партньор</TableHead>
-                  <TableHead>Дата на фактура</TableHead>
-                  <TableHead>Нето</TableHead>
-                  <TableHead>ДДС</TableHead>
-                  <TableHead>Общо</TableHead>
-                  <TableHead>Плащане</TableHead>
-                  <TableHead>Изпращане</TableHead>
-                  <TableHead className="text-right">Действия</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoices.length === 0 ? (
+      {view === "razpiska" ? (
+        <RazpiskaTable
+          rows={filteredRazpiska}
+          isLoading={razpiskaLoading}
+          error={razpiskaError}
+          onOpenOrder={(id) => navigate(`/orders?highlight_id=${id}`)}
+        />
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            {isLoading ? (
+              <LoadingOverlay />
+            ) : error ? (
+              <div className="p-4">
+                <ErrorMessage message="Грешка при зареждане" />
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell
-                      colSpan={10}
-                      className="text-center text-gray-400 py-8"
-                    >
-                      Няма фактури
-                    </TableCell>
+                    <TableHead>Тип</TableHead>
+                    <TableHead>Номер</TableHead>
+                    <TableHead>Партньор</TableHead>
+                    <TableHead>Дата на фактура</TableHead>
+                    <TableHead>Нето</TableHead>
+                    <TableHead>ДДС</TableHead>
+                    <TableHead>Общо</TableHead>
+                    <TableHead>Плащане</TableHead>
+                    <TableHead>Изпращане</TableHead>
+                    <TableHead className="text-right">Действия</TableHead>
                   </TableRow>
-                ) : (
-                  invoices.map((inv) => {
-                    const isCancelled = inv.status === "cancelled";
-                    const isCreditNote = inv.document_type === "credit_note";
-                    const hasCN = Boolean(inv.credit_note_id);
-                    const isHighlighted = highlightedRowId === inv.id;
-
-                    return (
-                      <TableRow
-                        key={inv.id}
-                        ref={isHighlighted ? highlightRowRef : undefined}
-                        className={`transition-colors duration-500 ${
-                          isHighlighted
-                            ? "bg-amber-100 ring-2 ring-amber-400 ring-inset"
-                            : isCreditNote
-                              ? "bg-red-50/50"
-                              : isCancelled
-                                ? "bg-gray-100 opacity-70"
-                                : hasCN
-                                  ? "bg-orange-50"
-                                  : ""
-                        }`}
+                </TableHeader>
+                <TableBody>
+                  {invoices.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={10}
+                        className="text-center text-gray-400 py-8"
                       >
-                        <TableCell>
-                          <div className="flex flex-col gap-1">
-                            <Badge
-                              variant={
-                                inv.document_type === "credit_note"
-                                  ? "destructive"
-                                  : "secondary"
-                              }
-                              className="text-xs w-fit"
-                            >
-                              {inv.document_type === "credit_note"
-                                ? "КИ"
-                                : "Ф-ра"}
-                            </Badge>
-                            <span className="text-xs text-gray-500">
-                              {documentTypeLabels[
-                                inv.document_type ?? "invoice"
-                              ] ?? "Фактура"}
-                            </span>
-                            {isCreditNote && inv.related_invoice_id && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setFilters((f) => ({
-                                    ...f,
-                                    search: inv.related_invoice_number ?? "",
-                                  }));
-                                  setHighlightedRowId(inv.related_invoice_id!);
-                                }}
-                                className="text-xs text-red-700 hover:underline"
-                                title="Отиди към оригиналната фактура"
-                              >
-                                към фактура{" "}
-                                <span className="font-mono font-medium">
-                                  {inv.related_invoice_number ??
-                                    `#${inv.related_invoice_id}`}
-                                </span>
-                              </button>
-                            )}
-                            {hasCN && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setFilters((f) => ({
-                                    ...f,
-                                    search: inv.credit_note_number ?? "",
-                                  }));
-                                  setHighlightedRowId(inv.credit_note_id!);
-                                }}
-                                className="text-xs text-orange-700 hover:underline flex items-center gap-1 w-fit"
-                                title="Отвори кредитното известие"
-                              >
-                                <RotateCcw className="h-3 w-3" />
-                                Сторнирана с{" "}
-                                <span className="font-mono font-medium">
-                                  {inv.credit_note_number ??
-                                    `КИ-${inv.credit_note_id}`}
-                                </span>
-                              </button>
-                            )}
-                            {isCancelled && (
+                        Няма фактури
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    invoices.map((inv) => {
+                      const isCancelled = inv.status === "cancelled";
+                      const isCreditNote = inv.document_type === "credit_note";
+                      const hasCN = Boolean(inv.credit_note_id);
+                      const isHighlighted = highlightedRowId === inv.id;
+
+                      return (
+                        <TableRow
+                          key={inv.id}
+                          ref={isHighlighted ? highlightRowRef : undefined}
+                          className={`transition-colors duration-500 ${
+                            isHighlighted
+                              ? "bg-amber-100 ring-2 ring-amber-400 ring-inset"
+                              : isCreditNote
+                                ? "bg-red-50/50"
+                                : isCancelled
+                                  ? "bg-gray-100 opacity-70"
+                                  : hasCN
+                                    ? "bg-orange-50"
+                                    : ""
+                          }`}
+                        >
+                          <TableCell>
+                            <div className="flex flex-col gap-1">
                               <Badge
-                                variant="destructive"
+                                variant={
+                                  inv.document_type === "credit_note"
+                                    ? "destructive"
+                                    : "secondary"
+                                }
                                 className="text-xs w-fit"
                               >
-                                Анулирана
+                                {inv.document_type === "credit_note"
+                                  ? "КИ"
+                                  : "Ф-ра"}
                               </Badge>
-                            )}
-                            {inv.include_vat === false && (
+                              <span className="text-xs text-gray-500">
+                                {documentTypeLabels[
+                                  inv.document_type ?? "invoice"
+                                ] ?? "Фактура"}
+                              </span>
+                              {isCreditNote && inv.related_invoice_id && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFilters((f) => ({
+                                      ...f,
+                                      search: inv.related_invoice_number ?? "",
+                                    }));
+                                    setHighlightedRowId(
+                                      inv.related_invoice_id!,
+                                    );
+                                  }}
+                                  className="text-xs text-red-700 hover:underline"
+                                  title="Отиди към оригиналната фактура"
+                                >
+                                  към фактура{" "}
+                                  <span className="font-mono font-medium">
+                                    {inv.related_invoice_number ??
+                                      `#${inv.related_invoice_id}`}
+                                  </span>
+                                </button>
+                              )}
+                              {hasCN && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFilters((f) => ({
+                                      ...f,
+                                      search: inv.credit_note_number ?? "",
+                                    }));
+                                    setHighlightedRowId(inv.credit_note_id!);
+                                  }}
+                                  className="text-xs text-orange-700 hover:underline flex items-center gap-1 w-fit"
+                                  title="Отвори кредитното известие"
+                                >
+                                  <RotateCcw className="h-3 w-3" />
+                                  Сторнирана с{" "}
+                                  <span className="font-mono font-medium">
+                                    {inv.credit_note_number ??
+                                      `КИ-${inv.credit_note_id}`}
+                                  </span>
+                                </button>
+                              )}
+                              {isCancelled && (
+                                <Badge
+                                  variant="destructive"
+                                  className="text-xs w-fit"
+                                >
+                                  Анулирана
+                                </Badge>
+                              )}
+                              {inv.include_vat === false && (
+                                <Badge
+                                  variant="warning"
+                                  className="text-xs w-fit bg-yellow-100 text-yellow-800 border-yellow-300"
+                                >
+                                  Без ДДС
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div className="font-mono font-medium text-[#f97316]">
+                                {inv.invoice_number}
+                              </div>
+                              {isCancelled && (
+                                <div className="text-xs text-red-600 space-y-0.5">
+                                  <div>
+                                    Анулирана на{" "}
+                                    {inv.cancelled_at
+                                      ? formatDate(inv.cancelled_at)
+                                      : "—"}
+                                  </div>
+                                  {inv.cancel_reason && (
+                                    <div className="text-red-500">
+                                      Причина: {inv.cancel_reason}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {inv.partner?.name ??
+                              inv.partner_name ??
+                              `#${inv.partner_id}`}
+                          </TableCell>
+                          <TableCell>{formatDate(inv.invoice_date)}</TableCell>
+                          <TableCell>{formatCurrency(inv.total_net)}</TableCell>
+                          <TableCell>{formatCurrency(inv.total_vat)}</TableCell>
+                          <TableCell className="font-bold">
+                            {formatCurrency(inv.total_gross)}
+                          </TableCell>
+                          <TableCell>
+                            {isCreditNote ? (
+                              <Badge variant="destructive" className="text-xs">
+                                Сторно
+                              </Badge>
+                            ) : hasCN ? (
                               <Badge
                                 variant="warning"
-                                className="text-xs w-fit bg-yellow-100 text-yellow-800 border-yellow-300"
+                                className="text-xs bg-orange-100 text-orange-700 border-orange-300"
                               >
-                                Без ДДС
+                                Сторнирана
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant={
+                                  paymentVariants[
+                                    isCancelled
+                                      ? "cancelled"
+                                      : (inv.payment_status ?? "unpaid")
+                                  ] ?? "secondary"
+                                }
+                              >
+                                {
+                                  paymentLabels[
+                                    isCancelled
+                                      ? "cancelled"
+                                      : (inv.payment_status ?? "unpaid")
+                                  ]
+                                }
                               </Badge>
                             )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
-                            <div className="font-mono font-medium text-[#f97316]">
-                              {inv.invoice_number}
-                            </div>
-                            {isCancelled && (
-                              <div className="text-xs text-red-600 space-y-0.5">
-                                <div>
-                                  Анулирана на{" "}
-                                  {inv.cancelled_at
-                                    ? formatDate(inv.cancelled_at)
-                                    : "—"}
-                                </div>
-                                {inv.cancel_reason && (
-                                  <div className="text-red-500">
-                                    Причина: {inv.cancel_reason}
-                                  </div>
-                                )}
+                          </TableCell>
+                          <TableCell>
+                            {isCancelled ? (
+                              <span className="text-xs text-gray-400">
+                                анулирана
+                              </span>
+                            ) : inv.sent_at ? (
+                              <div className="flex items-center gap-1 text-green-600 text-sm">
+                                <CheckCircle className="h-3.5 w-3.5" />
+                                {formatDate(inv.sent_at)}
                               </div>
+                            ) : (
+                              <button
+                                onClick={() => markSentMutation.mutate(inv.id)}
+                                disabled={markSentMutation.isPending}
+                                className="flex items-center gap-1 text-gray-400 hover:text-[#f97316] text-sm transition-colors"
+                                title="Маркирай като изпратена"
+                              >
+                                <span className="text-gray-300">—</span>
+                              </button>
                             )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {inv.partner?.name ??
-                            inv.partner_name ??
-                            `#${inv.partner_id}`}
-                        </TableCell>
-                        <TableCell>{formatDate(inv.invoice_date)}</TableCell>
-                        <TableCell>{formatCurrency(inv.total_net)}</TableCell>
-                        <TableCell>{formatCurrency(inv.total_vat)}</TableCell>
-                        <TableCell className="font-bold">
-                          {formatCurrency(inv.total_gross)}
-                        </TableCell>
-                        <TableCell>
-                          {isCreditNote ? (
-                            <Badge variant="destructive" className="text-xs">
-                              Сторно
-                            </Badge>
-                          ) : hasCN ? (
-                            <Badge
-                              variant="warning"
-                              className="text-xs bg-orange-100 text-orange-700 border-orange-300"
-                            >
-                              Сторнирана
-                            </Badge>
-                          ) : (
-                            <Badge
-                              variant={
-                                paymentVariants[
-                                  isCancelled
-                                    ? "cancelled"
-                                    : (inv.payment_status ?? "unpaid")
-                                ] ?? "secondary"
-                              }
-                            >
-                              {
-                                paymentLabels[
-                                  isCancelled
-                                    ? "cancelled"
-                                    : (inv.payment_status ?? "unpaid")
-                                ]
-                              }
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {isCancelled ? (
-                            <span className="text-xs text-gray-400">
-                              анулирана
-                            </span>
-                          ) : inv.sent_at ? (
-                            <div className="flex items-center gap-1 text-green-600 text-sm">
-                              <CheckCircle className="h-3.5 w-3.5" />
-                              {formatDate(inv.sent_at)}
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => markSentMutation.mutate(inv.id)}
-                              disabled={markSentMutation.isPending}
-                              className="flex items-center gap-1 text-gray-400 hover:text-[#f97316] text-sm transition-colors"
-                              title="Маркирай като изпратена"
-                            >
-                              <span className="text-gray-300">—</span>
-                            </button>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            {inv.document_type !== "credit_note" &&
-                              !isCancelled && (
-                                <Tooltip content="Генерирай PDF отново">
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              {inv.document_type !== "credit_note" &&
+                                !isCancelled && (
+                                  <Tooltip content="Генерирай PDF отново">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() =>
+                                        regenerateMutation.mutate(inv.id)
+                                      }
+                                      disabled={regenerateMutation.isPending}
+                                      className="text-orange-600 hover:text-orange-700"
+                                    >
+                                      {regenerateMutation.isPending ? (
+                                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-orange-300 border-t-orange-600" />
+                                      ) : (
+                                        <RefreshCw className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                  </Tooltip>
+                                )}
+                              <div className="inline-flex">
+                                <Tooltip content="Принтирай 1 копие">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handlePrint(inv, 1)}
+                                    disabled={printingId === inv.id}
+                                    className="rounded-r-none pr-1"
+                                  >
+                                    {printingId === inv.id ? (
+                                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+                                    ) : (
+                                      <Printer className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </Tooltip>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      disabled={printingId === inv.id}
+                                      className="rounded-l-none px-1"
+                                      aria-label="Избери брой копия"
+                                    >
+                                      <ChevronDown className="h-3 w-3" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      onClick={() => handlePrint(inv, 1)}
+                                    >
+                                      📄 1 копие (Оригинал)
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={() => handlePrint(inv, 2)}
+                                    >
+                                      📄📄 2 копия (и двете Оригинал)
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
+                              <Tooltip content="Изтегли PDF">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleDownload(inv)}
+                                  disabled={downloadingId === inv.id}
+                                >
+                                  {downloadingId === inv.id ? (
+                                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+                                  ) : (
+                                    <Download className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </Tooltip>
+                              {!inv.sent_at && !isCancelled && (
+                                <Tooltip content="Изпрати по имейл">
                                   <Button
                                     size="sm"
                                     variant="ghost"
                                     onClick={() =>
-                                      regenerateMutation.mutate(inv.id)
+                                      sendEmailMutation.mutate(inv.id)
                                     }
-                                    disabled={regenerateMutation.isPending}
-                                    className="text-orange-600 hover:text-orange-700"
+                                    disabled={sendEmailMutation.isPending}
                                   >
-                                    {regenerateMutation.isPending ? (
-                                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-orange-300 border-t-orange-600" />
-                                    ) : (
-                                      <RefreshCw className="h-4 w-4" />
-                                    )}
+                                    <Send className="h-4 w-4" />
                                   </Button>
                                 </Tooltip>
                               )}
-                            <div className="inline-flex">
-                              <Tooltip content="Принтирай 1 копие">
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => handlePrint(inv, 1)}
-                                  disabled={printingId === inv.id}
-                                  className="rounded-r-none pr-1"
-                                >
-                                  {printingId === inv.id ? (
-                                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
-                                  ) : (
-                                    <Printer className="h-4 w-4" />
-                                  )}
-                                </Button>
-                              </Tooltip>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    disabled={printingId === inv.id}
-                                    className="rounded-l-none px-1"
-                                    aria-label="Избери брой копия"
-                                  >
-                                    <ChevronDown className="h-3 w-3" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem
-                                    onClick={() => handlePrint(inv, 1)}
-                                  >
-                                    📄 1 копие (Оригинал)
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => handlePrint(inv, 2)}
-                                  >
-                                    📄📄 2 копия (и двете Оригинал)
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                            <Tooltip content="Изтегли PDF">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleDownload(inv)}
-                                disabled={downloadingId === inv.id}
-                              >
-                                {downloadingId === inv.id ? (
-                                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
-                                ) : (
-                                  <Download className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </Tooltip>
-                            {!inv.sent_at && !isCancelled && (
-                              <Tooltip content="Изпрати по имейл">
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() =>
-                                    sendEmailMutation.mutate(inv.id)
-                                  }
-                                  disabled={sendEmailMutation.isPending}
-                                >
-                                  <Send className="h-4 w-4" />
-                                </Button>
-                              </Tooltip>
-                            )}
-                            {/* Quick pay button — for unpaid/partial invoices */}
-                            {inv.document_type !== "credit_note" &&
-                              !isCancelled &&
-                              inv.payment_status !== "paid" && (
-                                <Tooltip content="Запиши плащане">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => openPayModal(inv)}
-                                    className="text-green-600 hover:text-green-700"
-                                  >
-                                    <Banknote className="h-4 w-4" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                            {inv.document_type !== "credit_note" &&
-                              !isCancelled &&
-                              !hasCreditNote(inv.id) && (
-                                <Tooltip content="Издай кредитно известие (сторниране)">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => openCreditNoteModal(inv)}
-                                    className="text-red-600 hover:text-red-700"
-                                  >
-                                    <RotateCcw className="h-4 w-4" />
-                                  </Button>
-                                </Tooltip>
-                              )}
-                            <Can permission={PERMISSIONS.INVOICES_CANCEL}>
+                              {/* Quick pay button — for unpaid/partial invoices */}
                               {inv.document_type !== "credit_note" &&
                                 !isCancelled &&
-                                Number(inv.paid_amount ?? 0) <= 0.001 &&
-                                !hasCreditNote(inv.id) && (
-                                  <Tooltip content="Анулирай фактура">
+                                inv.payment_status !== "paid" && (
+                                  <Tooltip content="Запиши плащане">
                                     <Button
                                       size="sm"
                                       variant="ghost"
-                                      onClick={() => openCancelModal(inv)}
-                                      className="text-red-700 hover:text-red-800"
+                                      onClick={() => openPayModal(inv)}
+                                      className="text-green-600 hover:text-green-700"
                                     >
-                                      <XCircle className="h-4 w-4" />
+                                      <Banknote className="h-4 w-4" />
                                     </Button>
                                   </Tooltip>
                                 )}
-                            </Can>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                              {inv.document_type !== "credit_note" &&
+                                !isCancelled &&
+                                !hasCreditNote(inv.id) && (
+                                  <Tooltip content="Издай кредитно известие (сторниране)">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => openCreditNoteModal(inv)}
+                                      className="text-red-600 hover:text-red-700"
+                                    >
+                                      <RotateCcw className="h-4 w-4" />
+                                    </Button>
+                                  </Tooltip>
+                                )}
+                              <Can permission={PERMISSIONS.INVOICES_CANCEL}>
+                                {inv.document_type !== "credit_note" &&
+                                  !isCancelled &&
+                                  Number(inv.paid_amount ?? 0) <= 0.001 &&
+                                  !hasCreditNote(inv.id) && (
+                                    <Tooltip content="Анулирай фактура">
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => openCancelModal(inv)}
+                                        className="text-red-700 hover:text-red-800"
+                                      >
+                                        <XCircle className="h-4 w-4" />
+                                      </Button>
+                                    </Tooltip>
+                                  )}
+                              </Can>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Credit Note Modal */}
       {creditNoteModal && (
@@ -1184,5 +1351,241 @@ export function Invoices() {
         </div>
       )}
     </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*  RazpiskaTable                                                         */
+/*                                                                        */
+/*  Listing for the "Стокови разписки" tab. Shows orders that have a      */
+/*  stock-dispatch slip (goods given) but no invoice yet, with payment    */
+/*  status pulled from the order's paid_amount. Lets the cashier print    */
+/*  the razpiska PDF (same /orders/:id/stock-dispatch-pdf endpoint) and   */
+/*  jump to the order detail to record a payment.                          */
+/* ────────────────────────────────────────────────────────────────────── */
+
+interface RazpiskaRow extends Order {
+  _payment_status: "paid" | "partial" | "unpaid";
+  _paid: number;
+  _total: number;
+}
+
+function RazpiskaTable({
+  rows,
+  isLoading,
+  error,
+  onOpenOrder,
+}: {
+  rows: RazpiskaRow[];
+  isLoading: boolean;
+  error: unknown;
+  onOpenOrder: (orderId: number) => void;
+}) {
+  const [printingId, setPrintingId] = useState<number | null>(null);
+
+  const handlePrint = async (orderId: number, orderNumber?: number | null) => {
+    setPrintingId(orderId);
+    try {
+      const res = await api.get(
+        `/orders/${orderId}/stock-dispatch-pdf?t=${Date.now()}`,
+        { responseType: "blob" },
+      );
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      iframe.onload = () => {
+        try {
+          iframe.contentWindow?.print();
+        } catch {
+          const link = document.createElement("a");
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noopener";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+      };
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        if (iframe.parentNode) document.body.removeChild(iframe);
+      }, 60000);
+      const num = orderNumber ?? orderId;
+      toast.success(
+        `Стокова разписка SR-${String(num).padStart(7, "0")} отворена за печат`,
+      );
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        err?.response?.data?.message ||
+        "Грешка при отваряне на разписка";
+      toast.error(msg);
+    } finally {
+      setPrintingId(null);
+    }
+  };
+
+  const handleDownload = async (
+    orderId: number,
+    orderNumber?: number | null,
+  ) => {
+    try {
+      const res = await api.get(
+        `/orders/${orderId}/stock-dispatch-pdf?t=${Date.now()}`,
+        { responseType: "blob" },
+      );
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const num = orderNumber ?? orderId;
+      const filename = `SR-${String(num).padStart(7, "0")}.pdf`;
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        document.body.removeChild(link);
+      }, 150);
+    } catch {
+      toast.error("Грешка при изтегляне");
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-0">
+          <LoadingOverlay />
+        </CardContent>
+      </Card>
+    );
+  }
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-4">
+          <ErrorMessage message="Грешка при зареждане" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Номер</TableHead>
+              <TableHead>Партньор</TableHead>
+              <TableHead>Дата</TableHead>
+              <TableHead className="text-right">Сума</TableHead>
+              <TableHead className="text-right">Платено</TableHead>
+              <TableHead className="text-right">Остатък</TableHead>
+              <TableHead>Статус</TableHead>
+              <TableHead className="text-right">Действия</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={8}
+                  className="text-center text-gray-400 py-8"
+                >
+                  Няма стокови разписки
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((o) => {
+                const remaining = Math.max(0, o._total - o._paid);
+                const num = o.order_number ?? o.id;
+                const razpiskaNumber = `SR-${String(num).padStart(7, "0")}`;
+                const partnerName =
+                  o.invoice_partner_name ??
+                  o.partner?.name ??
+                  o.partner_name ??
+                  `#${o.partner_id}`;
+                return (
+                  <TableRow key={o.id}>
+                    <TableCell>
+                      <div className="font-mono font-medium text-[#f97316]">
+                        {razpiskaNumber}
+                      </div>
+                    </TableCell>
+                    <TableCell>{partnerName}</TableCell>
+                    <TableCell>{formatDate(o.order_date)}</TableCell>
+                    <TableCell className="text-right font-medium">
+                      {formatCurrency(o._total)}
+                    </TableCell>
+                    <TableCell className="text-right text-emerald-700">
+                      {o._paid > 0 ? formatCurrency(o._paid) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {remaining > 0 ? (
+                        <span className="font-semibold text-red-700">
+                          {formatCurrency(remaining)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          paymentVariants[o._payment_status] ?? "secondary"
+                        }
+                      >
+                        {paymentLabels[o._payment_status] ?? o._payment_status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip content="Принтирай разписка">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handlePrint(o.id, o.order_number)}
+                            disabled={printingId === o.id}
+                          >
+                            {printingId === o.id ? (
+                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+                            ) : (
+                              <Printer className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content="Изтегли PDF">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDownload(o.id, o.order_number)}
+                          >
+                            <Download className="h-4 w-4" />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content="Отвори поръчката (запис на плащане)">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => onOpenOrder(o.id)}
+                          >
+                            <Banknote className="h-4 w-4" />
+                          </Button>
+                        </Tooltip>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }

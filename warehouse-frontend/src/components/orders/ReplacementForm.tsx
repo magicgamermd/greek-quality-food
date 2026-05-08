@@ -1,21 +1,31 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import AsyncSelect from "react-select/async";
-import { Trash2, Package } from "lucide-react";
+import { Trash2, Package, ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { formatCurrency } from "@/lib/utils";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
+import { formatCurrency, stockColorClass } from "@/lib/utils";
 
 /**
  * ReplacementForm — used by the New Order dialog when "Замяна" mode is on.
  *
- * Renders two item sections (взема се / връща се), each with its own
- * "+ Добави артикул" button. Live-computes the diff and exposes state
- * to the parent via `onChange`. Headless of partner selection — the
- * parent picks the partner and feeds the partnerId in for partner-aware
- * pricing (same `/orders/products-for-order` endpoint Orders.tsx uses,
- * so the catalog and price tier behave identically).
+ * Renders two item sections (взема се / връща се) inside the same Table
+ * layout the regular order form uses. The only colour cues are a small
+ * coloured chip in each section header and the diff banner at the
+ * bottom, where green/red carries semantic meaning (signed amount).
+ *
+ * Headless of partner selection — the parent picks the partner and feeds
+ * the partnerId in for partner-aware pricing (same `/orders/products-for-order`
+ * endpoint Orders.tsx uses, so the catalog and price tier behave identically).
  *
  * Payment method picker is only shown when diff !== 0 (no payment when
  * the swap is even).
@@ -51,9 +61,12 @@ interface PickerProduct {
   name_en: string | null;
   sku: string | null;
   unit: string | null;
+  brand: string | null;
   selling_price: number | null;
   group_price: number | null;
   partner_price: number | null;
+  total_stock: number | string | null;
+  low_stock_threshold: number | null;
 }
 
 interface PickerOption {
@@ -79,13 +92,6 @@ function emptyLine(): ReplacementLineItem {
     quantity: 1,
     unit_price: 0,
   };
-}
-
-function formatLeva(amount: number): string {
-  // Display diffs in EUR via the project-wide formatter (it handles the
-  // BGN→EUR conversion using BGN_PER_EUR). Sign is rendered separately
-  // by callers.
-  return formatCurrency(Math.abs(amount));
 }
 
 export function ReplacementForm({ partnerId, onChange }: ReplacementFormProps) {
@@ -131,15 +137,17 @@ export function ReplacementForm({ partnerId, onChange }: ReplacementFormProps) {
   return (
     <div className="space-y-4">
       <ItemsSection
-        title="🟢 Взема се"
-        accent="green"
+        title="Взема се"
+        accent="give"
+        sectionTotal={giveSum}
         items={giveItems}
         onItemsChange={setGiveItems}
         partnerId={partnerId}
       />
       <ItemsSection
-        title="🔴 Връща се"
-        accent="red"
+        title="Връща се"
+        accent="return"
+        sectionTotal={retSum}
         items={returnItems}
         onItemsChange={setReturnItems}
         partnerId={partnerId}
@@ -182,7 +190,7 @@ function DiffBanner({ diff, isZero }: { diff: number; isZero: boolean }) {
         role="status"
         aria-live="polite"
       >
-        <span className="font-semibold">+{formatLeva(diff)}</span> (клиент
+        <span className="font-semibold">+{formatCurrency(diff)}</span> (клиент
         доплаща)
       </div>
     );
@@ -193,7 +201,7 @@ function DiffBanner({ diff, isZero }: { diff: number; isZero: boolean }) {
       role="status"
       aria-live="polite"
     >
-      −{formatLeva(diff)} (връщаме на клиент)
+      −{formatCurrency(Math.abs(diff))} (връщаме на клиент)
     </div>
   );
 }
@@ -248,20 +256,28 @@ function PaymentMethodPicker({
 function ItemsSection({
   title,
   accent,
+  sectionTotal,
   items,
   onItemsChange,
   partnerId,
 }: {
   title: string;
-  accent: "green" | "red";
+  accent: "give" | "return";
+  sectionTotal: number;
   items: ReplacementLineItem[];
   onItemsChange: (items: ReplacementLineItem[]) => void;
   partnerId: string;
 }) {
-  const borderClass =
-    accent === "green"
-      ? "border-l-4 border-green-500 bg-green-50/30"
-      : "border-l-4 border-red-500 bg-red-50/30";
+  // Subtle accent — a small coloured chip in the header instead of a
+  // saturated background tint behind the whole section. Keeps the
+  // table card looking like the rest of the app (white surface, neutral
+  // borders) while still giving the operator a quick visual cue which
+  // side of the swap they're editing.
+  const isGive = accent === "give";
+  const Icon = isGive ? ArrowDownLeft : ArrowUpRight;
+  const chipClass = isGive
+    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+    : "bg-rose-50 text-rose-700 border border-rose-200";
 
   const addRow = () => onItemsChange([...items, emptyLine()]);
 
@@ -277,37 +293,53 @@ function ItemsSection({
     onItemsChange(items.filter((_, i) => i !== idx));
   };
 
-  const sectionTotal = items.reduce(
-    (sum, it) =>
-      sum + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
-    0,
-  );
-
   return (
-    <div className={`rounded-r-md p-4 ${borderClass}`}>
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-base font-semibold">{title}</h3>
+    <div className="rounded-md border bg-white">
+      <div className="flex items-center justify-between gap-3 border-b bg-gray-50 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${chipClass}`}
+          >
+            <Icon className="h-3 w-3" />
+            {title}
+          </span>
+        </div>
         {sectionTotal > 0 && (
           <span className="text-sm text-gray-600">
             Сума:{" "}
-            <span className="font-semibold">{formatLeva(sectionTotal)}</span>
+            <span className="font-semibold">
+              {formatCurrency(sectionTotal)}
+            </span>
           </span>
         )}
       </div>
 
-      <div className="space-y-2">
-        {items.map((item, idx) => (
-          <ItemRow
-            key={idx}
-            item={item}
-            partnerId={partnerId}
-            onChange={(next) => updateRow(idx, next)}
-            onRemove={() => removeRow(idx)}
-          />
-        ))}
+      <div className="overflow-x-auto">
+        <Table className="min-w-[640px]">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="min-w-[280px]">Продукт</TableHead>
+              <TableHead className="w-24">Количество</TableHead>
+              <TableHead className="w-32">Ед. цена</TableHead>
+              <TableHead className="w-28">Сума</TableHead>
+              <TableHead className="w-12" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((item, idx) => (
+              <ItemRow
+                key={idx}
+                item={item}
+                partnerId={partnerId}
+                onChange={(next) => updateRow(idx, next)}
+                onRemove={() => removeRow(idx)}
+              />
+            ))}
+          </TableBody>
+        </Table>
       </div>
 
-      <div className="mt-3">
+      <div className="border-t px-3 py-2">
         <Button type="button" variant="outline" size="sm" onClick={addRow}>
           + Добави артикул
         </Button>
@@ -331,14 +363,19 @@ function ItemRow({
   onChange: (next: ReplacementLineItem) => void;
   onRemove: () => void;
 }) {
+  const [loadError, setLoadError] = useState<string | null>(null);
   const lineTotal =
     (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
 
   // Same endpoint Orders.tsx uses for the new-order picker so the user
   // sees identical results (partner-aware pricing, same name+sku label).
+  // Mirrors the error-with-retry UX from Orders.tsx ProductSearch — when
+  // the API fails the picker swaps for an inline error + "Опитай пак"
+  // button instead of silently returning an empty list.
   const loadOptions = useCallback(
     async (inputValue: string): Promise<PickerOption[]> => {
       try {
+        setLoadError(null);
         const params = new URLSearchParams();
         if (partnerId) params.set("partner_id", partnerId);
         if (inputValue.trim()) params.set("search", inputValue.trim());
@@ -359,7 +396,14 @@ function ItemRow({
             label: `${p.name_bg || p.name_en} — ${p.sku || ""}`,
             product: p,
           }));
-      } catch {
+      } catch (err: any) {
+        const msg =
+          err?.response?.data?.error ||
+          err?.response?.data?.message ||
+          err?.message ||
+          "Грешка при зареждане";
+        console.error("[ReplacementForm] loadOptions error:", msg, err);
+        setLoadError(msg);
         return [];
       }
     },
@@ -390,10 +434,10 @@ function ItemRow({
   };
 
   return (
-    <div className="grid grid-cols-12 gap-2 items-center">
-      <div className="col-span-12 md:col-span-6">
+    <TableRow>
+      <TableCell>
         {item.product_id ? (
-          <div className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-1.5">
+          <div className="flex items-center gap-2">
             <Package className="h-4 w-4 shrink-0 text-gray-400" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">
@@ -411,6 +455,17 @@ function ItemRow({
             >
               Смени
             </Button>
+          </div>
+        ) : loadError ? (
+          <div className="text-xs text-red-500 py-1">
+            Грешка: {loadError}{" "}
+            <button
+              type="button"
+              className="underline text-blue-500"
+              onClick={() => setLoadError(null)}
+            >
+              Опитай пак
+            </button>
           </div>
         ) : (
           <AsyncSelect<PickerOption, false>
@@ -438,15 +493,63 @@ function ItemRow({
                 ...base,
                 minHeight: "40px",
                 borderColor: "#d1d5db",
-                "&:hover": { borderColor: "#6366f1" },
+                "&:hover": { borderColor: "#f97316" },
                 boxShadow: "none",
               }),
             }}
+            formatOptionLabel={(option) => {
+              if (!option?.product) {
+                return <span className="text-sm">{option?.label ?? "—"}</span>;
+              }
+              const p = option.product;
+              const rawPrice =
+                p.partner_price ?? p.group_price ?? p.selling_price;
+              const price = rawPrice != null ? parseFloat(String(rawPrice)) : 0;
+              const stockNum = parseFloat(String(p.total_stock ?? 0));
+              return (
+                <div>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <div className="font-medium text-sm">
+                        {p.name_bg || p.name_en || "Без име"}
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        {p.sku || ""}
+                        {p.brand ? ` · ${p.brand}` : ""}
+                      </div>
+                    </div>
+                    <div className="text-right ml-4 shrink-0">
+                      <div
+                        className={`text-sm font-medium ${price > 0 ? "text-emerald-600" : "text-orange-500"}`}
+                      >
+                        {price > 0 ? formatCurrency(price) : "без цена"}
+                      </div>
+                      <div className="text-xs">
+                        {stockNum < 0 ? (
+                          <span className="text-red-600 font-semibold">
+                            на минус: {stockNum}
+                          </span>
+                        ) : (
+                          <span
+                            className={stockColorClass(
+                              stockNum,
+                              p.low_stock_threshold,
+                            )}
+                          >
+                            налично: {stockNum}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }}
           />
         )}
-      </div>
+      </TableCell>
 
-      <div className="col-span-4 md:col-span-2">
+      <TableCell>
         <Input
           type="number"
           min="0.001"
@@ -456,12 +559,11 @@ function ItemRow({
             onChange({ ...item, quantity: Number(e.target.value) || 0 })
           }
           disabled={!item.product_id}
-          placeholder="К-во"
           aria-label="Количество"
         />
-      </div>
+      </TableCell>
 
-      <div className="col-span-4 md:col-span-2">
+      <TableCell>
         <Input
           type="number"
           min="0"
@@ -471,16 +573,15 @@ function ItemRow({
             onChange({ ...item, unit_price: Number(e.target.value) || 0 })
           }
           disabled={!item.product_id}
-          placeholder="Цена"
           aria-label="Единична цена"
         />
-      </div>
+      </TableCell>
 
-      <div className="col-span-3 md:col-span-1 text-sm font-medium">
-        {lineTotal > 0 ? formatLeva(lineTotal) : "—"}
-      </div>
+      <TableCell className="text-sm font-medium text-gray-700">
+        {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
+      </TableCell>
 
-      <div className="col-span-1 flex justify-end">
+      <TableCell>
         <button
           type="button"
           onClick={onRemove}
@@ -489,12 +590,7 @@ function ItemRow({
         >
           <Trash2 className="h-4 w-4" />
         </button>
-      </div>
-    </div>
+      </TableCell>
+    </TableRow>
   );
 }
-
-// formatCurrency is exported in case parent integrations want EUR display
-// elsewhere — the component itself uses BGN-formatting because the диф is
-// shown in лева at the till.
-export { formatCurrency };
