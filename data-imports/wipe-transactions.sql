@@ -146,6 +146,10 @@ DELETE FROM notification_reads;
 DELETE FROM notifications;
 DELETE FROM audit_events;
 DELETE FROM document_counters;
+-- Re-seed counter rows които миграциите seed-ват с ON CONFLICT DO NOTHING
+-- (т.е. не се пресъздават автоматично след wipe). Без това, първото
+-- credit-note издаване ще fail-не с "Cannot read properties of undefined".
+INSERT INTO document_counters (type, current_val) VALUES ('credit_note', 0);
 DELETE FROM import_logs;
 
 -- 7) Resetни sequence-ите — както internal PK-ите, така и човек-четимите

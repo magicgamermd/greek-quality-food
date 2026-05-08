@@ -1632,12 +1632,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           totalGross = totalNet + totalVat;
         }
 
-        // Generate credit note number atomically
+        // Generate credit note number atomically. Използваме UPSERT, за да
+        // работи дори ако wipe / новa миграция остави document_counters
+        // без ред 'credit_note' (миграция 004 seed-ва го с ON CONFLICT
+        // DO NOTHING, така че при празна таблица seed-ът не се повтаря
+        // автоматично).
         const {
           rows: [counter],
         } = await client.query(
-          `UPDATE document_counters SET current_val = current_val + 1
-           WHERE type = 'credit_note' RETURNING current_val`,
+          `INSERT INTO document_counters (type, current_val)
+           VALUES ('credit_note', 1)
+           ON CONFLICT (type) DO UPDATE
+             SET current_val = document_counters.current_val + 1
+           RETURNING current_val`,
         );
         const cnNumber = `КИ-${String(counter.current_val).padStart(10, "0")}`;
 
