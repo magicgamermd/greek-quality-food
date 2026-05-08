@@ -935,6 +935,66 @@ async function assembleMonthlyReportData(
     [to],
   );
 
+  // 9) Outstanding razpiski snapshot — orders without invoice (razpiska
+  //    flow), не cancelled/quoted, paid_amount < |total| към края на
+  //    месеца. За replacement orders gross е signed (refund показва се
+  //    с "-"), но remaining винаги е спрямо |total|.
+  const { rows: outstandingRazpiskiTotalRows } = await query(
+    `SELECT COUNT(*)::int AS count,
+            COALESCE(SUM(remaining), 0)::numeric AS total
+       FROM (
+         SELECT o.id,
+                CASE WHEN o.is_replacement THEN ABS(o.total_amount)
+                     ELSE o.total_amount END
+                - COALESCE(SUM(pmt.amount), 0) AS remaining
+           FROM orders o
+           LEFT JOIN payments pmt ON pmt.order_id = o.id
+                                  AND DATE(pmt.paid_at) <= $1
+          WHERE o.invoice_id IS NULL
+            AND o.status NOT IN ('cancelled', 'quoted')
+            AND DATE(o.order_date) <= $1
+          GROUP BY o.id
+         HAVING (CASE WHEN o.is_replacement THEN ABS(o.total_amount)
+                      ELSE o.total_amount END)
+                - COALESCE(SUM(pmt.amount), 0) > 0.01
+       ) AS t`,
+    [to],
+  );
+  const outstandingRazpiskiTotal = outstandingRazpiskiTotalRows[0] ?? {
+    count: 0,
+    total: 0,
+  };
+
+  const { rows: outstandingRazpiskiTopRows } = await query(
+    `SELECT o.id,
+            o.order_number,
+            TO_CHAR(o.order_date, 'YYYY-MM-DD') AS order_date,
+            o.total_amount::numeric AS gross,
+            o.is_replacement,
+            COALESCE(ip.name, p.name) AS partner_name,
+            COALESCE(SUM(pmt.amount), 0)::numeric AS paid,
+            (CASE WHEN o.is_replacement THEN ABS(o.total_amount)
+                  ELSE o.total_amount END
+             - COALESCE(SUM(pmt.amount), 0))::numeric AS remaining,
+            ($1::date - o.order_date::date)::int AS days_overdue
+       FROM orders o
+       LEFT JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
+       LEFT JOIN payments pmt ON pmt.order_id = o.id
+                              AND DATE(pmt.paid_at) <= $1
+      WHERE o.invoice_id IS NULL
+        AND o.status NOT IN ('cancelled', 'quoted')
+        AND DATE(o.order_date) <= $1
+      GROUP BY o.id, o.order_number, o.order_date, o.total_amount,
+               o.is_replacement, ip.name, p.name
+     HAVING (CASE WHEN o.is_replacement THEN ABS(o.total_amount)
+                  ELSE o.total_amount END)
+            - COALESCE(SUM(pmt.amount), 0) > 0.01
+      ORDER BY o.order_date ASC
+      LIMIT 10`,
+    [to],
+  );
+
   return {
     month,
     generatedBy: (request.user as any)?.email ?? "—",
@@ -1013,6 +1073,20 @@ async function assembleMonthlyReportData(
         paid: parseFloat(r.paid ?? 0),
         remaining: parseFloat(r.remaining ?? 0),
         days_overdue: r.days_overdue ?? 0,
+      })),
+    },
+    outstandingRazpiski: {
+      totalCount: outstandingRazpiskiTotal.count ?? 0,
+      totalRemaining: parseFloat(outstandingRazpiskiTotal.total ?? 0),
+      top10: outstandingRazpiskiTopRows.map((r: any) => ({
+        order_number: r.order_number ?? r.id,
+        order_date: r.order_date,
+        partner_name: r.partner_name ?? "—",
+        gross: parseFloat(r.gross ?? 0),
+        paid: parseFloat(r.paid ?? 0),
+        remaining: parseFloat(r.remaining ?? 0),
+        days_overdue: r.days_overdue ?? 0,
+        is_replacement: r.is_replacement === true,
       })),
     },
     outputPath: "",

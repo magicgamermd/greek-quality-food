@@ -125,6 +125,24 @@ export interface MonthlyReportData {
       days_overdue: number;
     }>;
   };
+  // Неплатени стокови разписки (orders без фактура) — snapshot към края на
+  // месеца. Същата логика както outstanding фактурите, но за orders, които
+  // нямат `invoice_id`. Replacement orders с total < 0 (refund) се отчитат
+  // спрямо |total| (auto-вкараният refund payment row покрива разликата).
+  outstandingRazpiski: {
+    totalCount: number;
+    totalRemaining: number;
+    top10: Array<{
+      order_number: number | string;
+      order_date: string;
+      partner_name: string;
+      gross: number; // signed if replacement
+      paid: number;
+      remaining: number;
+      days_overdue: number;
+      is_replacement: boolean;
+    }>;
+  };
   outputPath: string;
 }
 
@@ -713,6 +731,93 @@ export async function generateMonthlyReportPdf(
             formatInvoiceDateBg(r.invoice_date),
             truncateToWidth(doc, r.partner_name, cols[2].w - 4),
             fmtEur(r.gross),
+            fmtEur(r.remaining),
+            String(r.days_overdue),
+          ];
+          cx = L;
+          cells.forEach((val, i) => {
+            doc.text(val, cx + 2, rowY, {
+              width: cols[i].w - 4,
+              height: rowH - 2,
+              align: cols[i].align,
+              lineBreak: false,
+              ellipsis: true,
+            });
+            cx += cols[i].w;
+          });
+          doc.y = rowY + rowH;
+        });
+      }
+    }
+    doc.moveDown(0.6);
+
+    // ── Раздел 8: Неплатени стокови разписки (snapshot) ──
+    // Поръчки без фактура (invoice_id IS NULL), не cancelled, paid <
+    // |total|. Замените са включени и маркирани с "З" префикс пред №.
+    sectionHeader("НЕПЛАТЕНИ СТОКОВИ РАЗПИСКИ (към края на месеца)");
+    {
+      doc.font("Main").fontSize(9).fillColor("#0f172a");
+      ensureSpace(14);
+      doc.text(
+        `Общо неплатени: ${data.outstandingRazpiski.totalCount} разписки · ${fmtEur(data.outstandingRazpiski.totalRemaining)}`,
+        L,
+        doc.y,
+        { width: pageW },
+      );
+      doc.moveDown(0.3);
+
+      if (data.outstandingRazpiski.top10.length > 0) {
+        doc.font("MainBold").fontSize(8.5).fillColor("#475569");
+        doc.text("Топ 10 най-просрочени:", L, doc.y, { width: pageW });
+        doc.moveDown(0.15);
+        const cols = [
+          { header: "№ Поръчка", w: 80, align: "left" as const },
+          { header: "Дата", w: 65, align: "left" as const },
+          {
+            header: "Партньор",
+            w: pageW - 80 - 65 - 80 - 80 - 60,
+            align: "left" as const,
+          },
+          { header: "Сума", w: 80, align: "right" as const },
+          { header: "Остатък", w: 80, align: "right" as const },
+          { header: "Дни", w: 60, align: "right" as const },
+        ];
+        const rowH = 14;
+        const headerY = doc.y;
+        let cx = L;
+        doc.font("MainBold").fontSize(8).fillColor("#475569");
+        for (const c of cols) {
+          doc.text(c.header, cx + 2, headerY, {
+            width: c.w - 4,
+            align: c.align,
+            lineBreak: false,
+          });
+          cx += c.w;
+        }
+        doc.y = headerY + rowH;
+        doc
+          .moveTo(L, doc.y - 2)
+          .lineTo(L + pageW, doc.y - 2)
+          .lineWidth(0.3)
+          .strokeColor("#cbd5e1")
+          .stroke();
+
+        doc.font("Main").fontSize(9).fillColor("#0f172a");
+        data.outstandingRazpiski.top10.forEach((r) => {
+          ensureSpace(rowH);
+          const rowY = doc.y;
+          // "З" префикс на № за да е визуално различим а замяната от
+          // обикновена razpiska — без да добавяме отделна колона "Тип"
+          // което би стеснило партньора.
+          const orderLabel = r.is_replacement
+            ? `З #${r.order_number}`
+            : `#${r.order_number}`;
+          const cells = [
+            truncateToWidth(doc, orderLabel, cols[0].w - 4),
+            formatInvoiceDateBg(r.order_date),
+            truncateToWidth(doc, r.partner_name, cols[2].w - 4),
+            // gross е signed за замени (refund показваме с "-").
+            r.is_replacement ? fmtSignedEur(r.gross) : fmtEur(r.gross),
             fmtEur(r.remaining),
             String(r.days_overdue),
           ];
