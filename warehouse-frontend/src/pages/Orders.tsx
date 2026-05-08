@@ -727,6 +727,7 @@ function OrderDetailModal({
       city: "",
       contact_person: "",
       phone: "",
+      email: "",
     });
     setEikLookupLoading(false);
     setEikAutoFilled(false);
@@ -2010,7 +2011,8 @@ function OrderDetailModal({
                       Math.floor(
                         (Date.now() -
                           new Date(
-                            detail.updated_at ?? detail.order_date,
+                            (detail as { updated_at?: string }).updated_at ??
+                              detail.order_date,
                           ).getTime()) /
                           (1000 * 60 * 60 * 24),
                       ),
@@ -4945,7 +4947,7 @@ function CreateOrderModal({
             x.product_id != null && x.product_id === Number(row.product_id),
         );
         if (!o) return row;
-        return { ...row, quantity: o.available };
+        return { ...row, quantity: String(o.available) };
       }),
     );
     setPendingOversell(null);
@@ -4966,10 +4968,10 @@ function CreateOrderModal({
           continue;
         }
         const overQty = Number(row.quantity) - o.available;
-        out.push({ ...row, quantity: o.available });
+        out.push({ ...row, quantity: String(o.available) });
         out.push({
           ...row,
-          quantity: overQty,
+          quantity: String(overQty),
           line_status: status,
         } as any);
       }
@@ -6812,6 +6814,8 @@ export function Orders() {
                 partner: "",
                 invoice: "",
                 stock_dispatch: "",
+                warranty: "",
+                shipment: "",
                 article: "",
               });
               setShowHistory(false);
@@ -7306,7 +7310,7 @@ export function Orders() {
                               stock has come in. Flips status → confirmed
                               and order_date → today so the row joins the
                               day's orders for the second customer visit. */}
-                          {order.status === "awaiting_stock" && (
+                          {(order.status as string) === "awaiting_stock" && (
                             <Button
                               size="sm"
                               variant="outline"

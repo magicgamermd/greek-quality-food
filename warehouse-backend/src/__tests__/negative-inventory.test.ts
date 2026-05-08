@@ -308,7 +308,8 @@ describe("orders route — back-order / negative inventory", () => {
     // because its purpose is to guard back-order semantics as a whole.
     // We re-import the incoming route locally to avoid mutating the
     // outer file's top-level registration.
-    const incomingRoutes = (await import("../routes/incoming.js")).default;
+    const incomingModule: any = await import("../routes/incoming.js");
+    const incomingRoutes = incomingModule.default ?? incomingModule;
     const app = Fastify();
     app.addHook("onRequest", async (request) => {
       (request as any).user = {

@@ -367,7 +367,8 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       qc.invalidateQueries({ queryKey: ["purchase-order", orderId] });
       onClose();
     },
-    onError: (err) => toast.error(getApiErrorMessage(err)),
+    onError: (err) =>
+      toast.error(getApiErrorMessage(err, "Грешка при запазване")),
   });
 
   const sendMut = useMutation({
@@ -378,7 +379,8 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       qc.invalidateQueries({ queryKey: ["purchase-orders"] });
       qc.invalidateQueries({ queryKey: ["purchase-order", orderId] });
     },
-    onError: (err) => toast.error(getApiErrorMessage(err)),
+    onError: (err) =>
+      toast.error(getApiErrorMessage(err, "Грешка при изпращане")),
   });
 
   const reopenMut = useMutation({
@@ -389,7 +391,8 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       qc.invalidateQueries({ queryKey: ["purchase-orders"] });
       qc.invalidateQueries({ queryKey: ["purchase-order", orderId] });
     },
-    onError: (err) => toast.error(getApiErrorMessage(err)),
+    onError: (err) =>
+      toast.error(getApiErrorMessage(err, "Грешка при връщане в чернова")),
   });
 
   const convertMut = useMutation({
@@ -404,7 +407,8 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       qc.invalidateQueries({ queryKey: ["purchase-orders"] });
       qc.invalidateQueries({ queryKey: ["purchase-order", orderId] });
     },
-    onError: (err) => toast.error(getApiErrorMessage(err)),
+    onError: (err) =>
+      toast.error(getApiErrorMessage(err, "Грешка при конвертиране")),
   });
 
   const convertSingleNoteMut = useMutation({
@@ -418,7 +422,8 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       qc.invalidateQueries({ queryKey: ["purchase-order", orderId] });
       onClose();
     },
-    onError: (err) => toast.error(getApiErrorMessage(err)),
+    onError: (err) =>
+      toast.error(getApiErrorMessage(err, "Грешка при обединяване")),
   });
 
   const handleAddProduct = (p: ProductOption["product"]) => {
@@ -492,7 +497,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      toast.error(getApiErrorMessage(err));
+      toast.error(getApiErrorMessage(err, "Грешка при изтегляне"));
     }
   };
 
@@ -869,7 +874,8 @@ export default function PurchaseOrders() {
       setEditingId(data.id);
       setDrawerOpen(true);
     },
-    onError: (err) => toast.error(getApiErrorMessage(err)),
+    onError: (err) =>
+      toast.error(getApiErrorMessage(err, "Грешка при обединяване")),
   });
 
   const openNew = () => {
