@@ -9,6 +9,10 @@ import {
   generateDailyReportPdf,
   type DailyReportData,
 } from "../services/daily-report-pdf.js";
+import {
+  generateMonthlyReportPdf,
+  type MonthlyReportData,
+} from "../services/monthly-report-pdf.js";
 
 const dailyReportQuerySchema = z.object({
   date: z
@@ -17,6 +21,28 @@ const dailyReportQuerySchema = z.object({
     .optional()
     .transform((v) => v ?? new Date().toISOString().slice(0, 10)),
 });
+
+// Месечен отчет — `month` е YYYY-MM. Default = текущия месец.
+const monthlyReportQuerySchema = z.object({
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/, "month must be YYYY-MM")
+    .optional()
+    .transform((v) => v ?? new Date().toISOString().slice(0, 7)),
+});
+
+// Връща [from, to] inclusive ISO YYYY-MM-DD за дадения YYYY-MM.
+function monthRange(month: string): { from: string; to: string } {
+  const [y, m] = month.split("-").map(Number);
+  // Use UTC за да не зависи от локалния timezone — месецът се
+  // дефинира спрямо заявения календар, не спрямо timezone-а на сървъра.
+  const fromDate = new Date(Date.UTC(y, m - 1, 1));
+  // Last day = day 0 на следващия месец → винаги валидно (29 февруари
+  // на високосна, 30 на април и т.н.).
+  const toDate = new Date(Date.UTC(y, m, 0));
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return { from: fmt(fromDate), to: fmt(toDate) };
+}
 
 async function jwtVerify(request: FastifyRequest, reply: FastifyReply) {
   try {
@@ -52,6 +78,37 @@ export default async function reportsRoutes(app: FastifyInstance) {
       await generateDailyReportPdf(data);
       const stream = fs.createReadStream(outputPath);
       const filename = `Дневен_отчет_${date}.pdf`;
+      const encodedFilename = encodeURIComponent(filename);
+      return reply
+        .header("Content-Type", "application/pdf")
+        .header(
+          "Content-Disposition",
+          `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+        )
+        .send(stream);
+    },
+  );
+
+  // GET /reports/monthly-pdf?month=YYYY-MM — Месечен отчет (Monthly Report)
+  app.get(
+    "/monthly-pdf",
+    { preHandler: reportsViewPreHandler },
+    async (request, reply) => {
+      const parsed = monthlyReportQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return reply
+          .status(400)
+          .send({ error: parsed.error.errors[0]?.message ?? "Bad month" });
+      }
+      const { month } = parsed.data;
+      const data = await assembleMonthlyReportData(month, request);
+      const pdfDir = path.resolve(process.cwd(), "data", "reports");
+      if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+      const outputPath = path.join(pdfDir, `monthly-${month}.pdf`);
+      data.outputPath = outputPath;
+      await generateMonthlyReportPdf(data);
+      const stream = fs.createReadStream(outputPath);
+      const filename = `Месечен_отчет_${month}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
       return reply
         .header("Content-Type", "application/pdf")
@@ -651,6 +708,313 @@ async function assembleDailyReportData(
       qty: parseFloat(r.qty ?? 0),
       total: parseFloat(r.total ?? 0),
     })),
+    outputPath: "",
+  };
+}
+
+// Месечен — същия pattern както дневния, но с BETWEEN range вместо
+// `= $date`. Per-day breakdown идва от GROUP BY DATE(order_date).
+// Outstanding е snapshot към края на месеца (paid_at <= to).
+async function assembleMonthlyReportData(
+  month: string,
+  request: FastifyRequest,
+): Promise<MonthlyReportData> {
+  const { from, to } = monthRange(month);
+  const { rows: companyRows } = await query(
+    "SELECT company_name FROM settings WHERE id = 1",
+  );
+  const companyName = companyRows[0]?.company_name ?? "BAKALIA GREEK DELI FOOD";
+
+  // 1) Per-day breakdown — пълна картина за всеки ден от месеца, включително
+  //    дните без поръчки (LEFT JOIN срещу generate_series). Cancelled/quoted
+  //    се изключват от orderCount/grossTotal — те не са реален оборот.
+  //    paid/unpaid идват от sum-а на свързаните payments спрямо |total|.
+  const { rows: dailyRows } = await query(
+    `WITH days AS (
+       SELECT generate_series($1::date, $2::date, interval '1 day')::date AS d
+     ),
+     orders_per_day AS (
+       SELECT DATE(o.order_date) AS d,
+              o.id, o.is_replacement,
+              CASE WHEN o.is_replacement THEN ABS(o.total_amount)
+                   ELSE o.total_amount END AS billed,
+              o.total_amount AS signed_total,
+              o.status
+         FROM orders o
+        WHERE DATE(o.order_date) BETWEEN $1 AND $2
+          AND o.status NOT IN ('cancelled', 'quoted')
+     ),
+     payments_per_order AS (
+       SELECT o.id AS order_id, COALESCE(SUM(p.amount), 0)::numeric AS paid
+         FROM orders o
+         LEFT JOIN payments p ON (p.order_id = o.id
+                              OR (o.invoice_id IS NOT NULL AND p.invoice_id = o.invoice_id))
+                              AND DATE(p.paid_at) <= $2
+        WHERE DATE(o.order_date) BETWEEN $1 AND $2
+        GROUP BY o.id
+     ),
+     daily_agg AS (
+       SELECT opd.d,
+              COUNT(*)::int AS order_count,
+              COALESCE(SUM(opd.signed_total), 0)::numeric AS gross_total,
+              COALESCE(SUM(LEAST(ppo.paid, opd.billed)), 0)::numeric AS paid_sum,
+              COALESCE(SUM(GREATEST(opd.billed - ppo.paid, 0)), 0)::numeric AS unpaid_sum
+         FROM orders_per_day opd
+         LEFT JOIN payments_per_order ppo ON ppo.order_id = opd.id
+        GROUP BY opd.d
+     )
+     SELECT days.d AS day_date,
+            COALESCE(da.order_count, 0)::int AS order_count,
+            COALESCE(da.gross_total, 0)::numeric AS gross_total,
+            COALESCE(da.paid_sum, 0)::numeric AS paid_sum,
+            COALESCE(da.unpaid_sum, 0)::numeric AS unpaid_sum
+       FROM days
+       LEFT JOIN daily_agg da ON da.d = days.d
+      ORDER BY days.d ASC`,
+    [from, to],
+  );
+
+  // 2) Orders summary by status
+  const { rows: orderSummaryRows } = await query(
+    `SELECT status, COUNT(*)::int AS count, COALESCE(SUM(total_amount), 0)::numeric AS sum
+       FROM orders WHERE DATE(order_date) BETWEEN $1 AND $2 GROUP BY status`,
+    [from, to],
+  );
+
+  // 3) Invoices stats — same классификация като в дневния отчет.
+  const { rows: invStatusRows } = await query(
+    `WITH classified AS (
+        SELECT i.status,
+               i.total_net,
+               i.total_vat,
+               i.total_gross,
+               (cn.id IS NOT NULL) AS is_credit_noted
+          FROM invoices i
+          LEFT JOIN invoices cn
+            ON cn.related_invoice_id = i.id
+           AND cn.document_type = 'credit_note'
+         WHERE DATE(i.invoice_date) BETWEEN $1 AND $2
+           AND i.document_type = 'invoice'
+     )
+     SELECT
+        COUNT(*) FILTER (WHERE status = 'active' AND NOT is_credit_noted)::int AS active_count,
+        COALESCE(SUM(total_net)   FILTER (WHERE status = 'active' AND NOT is_credit_noted), 0)::numeric AS active_net,
+        COALESCE(SUM(total_vat)   FILTER (WHERE status = 'active' AND NOT is_credit_noted), 0)::numeric AS active_vat,
+        COALESCE(SUM(total_gross) FILTER (WHERE status = 'active' AND NOT is_credit_noted), 0)::numeric AS active_gross,
+        COUNT(*) FILTER (WHERE is_credit_noted)::int AS credit_noted_count,
+        COALESCE(SUM(total_gross) FILTER (WHERE is_credit_noted), 0)::numeric AS credit_noted_sum,
+        COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_count,
+        COALESCE(SUM(total_gross) FILTER (WHERE status = 'cancelled'), 0)::numeric AS cancelled_sum
+       FROM classified`,
+    [from, to],
+  );
+  const invStats = invStatusRows[0] ?? {};
+
+  const { rows: invByMethodRows } = await query(
+    `SELECT COALESCE(i.payment_method, 'unset') AS method,
+            COUNT(*)::int AS count,
+            COALESCE(SUM(i.total_gross), 0)::numeric AS sum
+       FROM invoices i
+       LEFT JOIN invoices cn
+         ON cn.related_invoice_id = i.id
+        AND cn.document_type = 'credit_note'
+      WHERE DATE(i.invoice_date) BETWEEN $1 AND $2
+        AND i.document_type = 'invoice'
+        AND i.status = 'active'
+        AND cn.id IS NULL
+      GROUP BY i.payment_method`,
+    [from, to],
+  );
+
+  // 4) Payments by method
+  const { rows: paymentByMethodRows } = await query(
+    `SELECT payment_method AS method,
+            COUNT(*)::int AS count,
+            COALESCE(SUM(amount), 0)::numeric AS sum
+       FROM payments
+      WHERE DATE(paid_at) BETWEEN $1 AND $2
+      GROUP BY payment_method`,
+    [from, to],
+  );
+  const paymentTotal = paymentByMethodRows.reduce(
+    (s: number, r: any) => s + parseFloat(r.sum ?? 0),
+    0,
+  );
+
+  // 5) Replacements — count + signed net diff (give − return).
+  const { rows: replacementRows } = await query(
+    `SELECT COUNT(*)::int AS count,
+            COALESCE(SUM(total_amount), 0)::numeric AS net_diff
+       FROM orders
+      WHERE DATE(order_date) BETWEEN $1 AND $2
+        AND is_replacement = true
+        AND status != 'cancelled'`,
+    [from, to],
+  );
+  const replacementStats = replacementRows[0] ?? { count: 0, net_diff: 0 };
+
+  // 6) Top 5 partners by gross — invoice_partner override wins, същата логика
+  //    като в дневния. Excludes cancelled/quoted поръчки.
+  const { rows: topPartnerRows } = await query(
+    `SELECT COALESCE(ip.name, p.name) AS partner_name,
+            COUNT(*)::int AS order_count,
+            COALESCE(SUM(o.total_amount), 0)::numeric AS total
+       FROM orders o
+       LEFT JOIN partners p ON p.id = o.partner_id
+       LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
+      WHERE DATE(o.order_date) BETWEEN $1 AND $2
+        AND o.status NOT IN ('cancelled', 'quoted')
+      GROUP BY COALESCE(ip.name, p.name)
+      ORDER BY total DESC
+      LIMIT 5`,
+    [from, to],
+  );
+
+  // 7) Top 10 products by quantity
+  const { rows: topProductRows } = await query(
+    `SELECT
+        oi.name_bg_snapshot AS name,
+        oi.sku_snapshot     AS sku,
+        SUM(oi.quantity)::numeric    AS qty,
+        SUM(oi.total_price)::numeric AS total
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+      WHERE DATE(o.order_date) BETWEEN $1 AND $2
+        AND o.status NOT IN ('cancelled', 'quoted')
+      GROUP BY oi.name_bg_snapshot, oi.sku_snapshot
+      ORDER BY qty DESC
+      LIMIT 10`,
+    [from, to],
+  );
+
+  // 8) Outstanding invoices snapshot at end-of-month
+  const { rows: outstandingTotalRows } = await query(
+    `SELECT COUNT(*)::int AS count,
+            COALESCE(SUM(remaining), 0)::numeric AS total
+       FROM (
+         SELECT i.id,
+                i.total_gross - COALESCE(SUM(p.amount), 0) AS remaining
+           FROM invoices i
+           LEFT JOIN payments p ON p.invoice_id = i.id AND DATE(p.paid_at) <= $1
+           LEFT JOIN invoices cn
+             ON cn.related_invoice_id = i.id
+            AND cn.document_type = 'credit_note'
+          WHERE DATE(i.invoice_date) <= $1
+            AND i.document_type = 'invoice'
+            AND i.status = 'active'
+            AND cn.id IS NULL
+          GROUP BY i.id
+         HAVING i.total_gross - COALESCE(SUM(p.amount), 0) > 0.01
+       ) AS t`,
+    [to],
+  );
+  const outstandingTotal = outstandingTotalRows[0] ?? { count: 0, total: 0 };
+
+  const { rows: outstandingTopRows } = await query(
+    `SELECT i.invoice_number,
+            TO_CHAR(i.invoice_date, 'YYYY-MM-DD') AS invoice_date,
+            p.name AS partner_name,
+            i.total_gross::numeric AS gross,
+            COALESCE(SUM(pmt.amount), 0)::numeric AS paid,
+            (i.total_gross - COALESCE(SUM(pmt.amount), 0))::numeric AS remaining,
+            ($1::date - i.invoice_date::date)::int AS days_overdue
+       FROM invoices i
+       LEFT JOIN payments pmt ON pmt.invoice_id = i.id AND DATE(pmt.paid_at) <= $1
+       LEFT JOIN partners p ON p.id = i.partner_id
+       LEFT JOIN invoices cn
+         ON cn.related_invoice_id = i.id
+        AND cn.document_type = 'credit_note'
+      WHERE DATE(i.invoice_date) <= $1
+        AND i.document_type = 'invoice'
+        AND i.status = 'active'
+        AND cn.id IS NULL
+      GROUP BY i.id, p.name
+     HAVING i.total_gross - COALESCE(SUM(pmt.amount), 0) > 0.01
+      ORDER BY i.invoice_date ASC
+      LIMIT 10`,
+    [to],
+  );
+
+  return {
+    month,
+    generatedBy: (request.user as any)?.email ?? "—",
+    company: { name: companyName },
+    payments: {
+      byMethod: paymentByMethodRows.map((r: any) => ({
+        method: r.method,
+        count: r.count,
+        sum: parseFloat(r.sum ?? 0),
+      })),
+      total: paymentTotal,
+    },
+    dailyBreakdown: dailyRows.map((r: any) => {
+      const dateIso =
+        r.day_date instanceof Date
+          ? r.day_date.toISOString().slice(0, 10)
+          : String(r.day_date).slice(0, 10);
+      const day = parseInt(dateIso.slice(8, 10), 10);
+      return {
+        day,
+        orderCount: r.order_count ?? 0,
+        grossTotal: parseFloat(r.gross_total ?? 0),
+        paid: parseFloat(r.paid_sum ?? 0),
+        unpaid: parseFloat(r.unpaid_sum ?? 0),
+      };
+    }),
+    ordersSummaryByStatus: orderSummaryRows.map((r: any) => ({
+      status: r.status,
+      count: r.count,
+      sum: parseFloat(r.sum ?? 0),
+    })),
+    invoices: {
+      active: {
+        count: invStats.active_count ?? 0,
+        net: parseFloat(invStats.active_net ?? 0),
+        vat: parseFloat(invStats.active_vat ?? 0),
+        gross: parseFloat(invStats.active_gross ?? 0),
+      },
+      creditNoted: {
+        count: invStats.credit_noted_count ?? 0,
+        sum: parseFloat(invStats.credit_noted_sum ?? 0),
+      },
+      cancelled: {
+        count: invStats.cancelled_count ?? 0,
+        sum: parseFloat(invStats.cancelled_sum ?? 0),
+      },
+      byPaymentMethod: invByMethodRows.map((r: any) => ({
+        method: r.method,
+        count: r.count,
+        sum: parseFloat(r.sum ?? 0),
+      })),
+    },
+    replacements: {
+      count: replacementStats.count ?? 0,
+      netDiff: parseFloat(replacementStats.net_diff ?? 0),
+    },
+    topPartners: topPartnerRows.map((r: any) => ({
+      partner_name: r.partner_name ?? "—",
+      order_count: r.order_count ?? 0,
+      total: parseFloat(r.total ?? 0),
+    })),
+    topProducts: topProductRows.map((r: any) => ({
+      name: r.name ?? "—",
+      sku: r.sku ?? null,
+      qty: parseFloat(r.qty ?? 0),
+      total: parseFloat(r.total ?? 0),
+    })),
+    outstanding: {
+      totalCount: outstandingTotal.count ?? 0,
+      totalRemaining: parseFloat(outstandingTotal.total ?? 0),
+      top10: outstandingTopRows.map((r: any) => ({
+        invoice_number: r.invoice_number,
+        invoice_date: r.invoice_date,
+        partner_name: r.partner_name ?? "—",
+        gross: parseFloat(r.gross ?? 0),
+        paid: parseFloat(r.paid ?? 0),
+        remaining: parseFloat(r.remaining ?? 0),
+        days_overdue: r.days_overdue ?? 0,
+      })),
+    },
     outputPath: "",
   };
 }

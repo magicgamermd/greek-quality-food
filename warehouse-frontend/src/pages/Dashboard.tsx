@@ -11,7 +11,16 @@ import {
   Printer,
   Eye,
   EyeOff,
+  ChevronDown,
+  CalendarDays,
+  CalendarRange,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import { formatCurrency, formatUnit, formatDate } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,6 +83,11 @@ const kpiCards = [
 
 const todayLocal = (): string => new Date().toLocaleDateString("sv-SE");
 
+// "YYYY-MM" за текущия месец, в локален timezone — sv-SE locale дава
+// ISO формат при toLocaleDateString, така че slice(0, 7) е безопасен.
+const currentMonthLocal = (): string =>
+  new Date().toLocaleDateString("sv-SE").slice(0, 7);
+
 // localStorage key за persist на reveal state — на mobile девайс където
 // касеро споделя екран с клиент, потребителят често иска "Стойност на
 // склада" да остане скрита между навигации, иначе се връща обратно при
@@ -86,6 +100,8 @@ export function Dashboard() {
 
   const [dailyReportOpen, setDailyReportOpen] = useState(false);
   const [reportDate, setReportDate] = useState<string>(todayLocal());
+  const [monthlyReportOpen, setMonthlyReportOpen] = useState(false);
+  const [reportMonth, setReportMonth] = useState<string>(currentMonthLocal());
   const [isDownloading, setIsDownloading] = useState(false);
 
   // "Стойност на склада" е чувствителна цифра — кешъра често има клиент
@@ -108,21 +124,26 @@ export function Dashboard() {
     }
   }, [stockValueHidden]);
 
-  const downloadDailyReport = async () => {
+  // Общ download flow за дневен/месечен отчет — двата endpoint-а връщат
+  // application/pdf blob, отварят се в нов таб. Различава се само
+  // URL-ът и success callback (затваряне на съответния dialog).
+  const downloadReport = async (
+    url: string,
+    onSuccess: () => void,
+    fallbackErrorMsg: string,
+  ) => {
     if (isDownloading) return;
     setIsDownloading(true);
     try {
-      const res = await api.get(`/reports/daily-pdf?date=${reportDate}`, {
-        responseType: "blob",
-      });
+      const res = await api.get(url, { responseType: "blob" });
       const blob = new Blob([res.data], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setDailyReportOpen(false);
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, "_blank");
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+      onSuccess();
     } catch (err: any) {
-      console.error("Error downloading daily report:", err);
-      let msg = "Грешка при сваляне на отчета";
+      console.error("Error downloading report:", err);
+      let msg = fallbackErrorMsg;
       try {
         if (err?.response?.data instanceof Blob) {
           const text = await err.response.data.text();
@@ -137,6 +158,20 @@ export function Dashboard() {
       setIsDownloading(false);
     }
   };
+
+  const downloadDailyReport = () =>
+    downloadReport(
+      `/reports/daily-pdf?date=${reportDate}`,
+      () => setDailyReportOpen(false),
+      "Грешка при сваляне на дневния отчет",
+    );
+
+  const downloadMonthlyReport = () =>
+    downloadReport(
+      `/reports/monthly-pdf?month=${reportMonth}`,
+      () => setMonthlyReportOpen(false),
+      "Грешка при сваляне на месечния отчет",
+    );
 
   // Role-based KPI visibility
   const visibleKpiCards = kpiCards.filter(({ key }) => {
@@ -245,14 +280,49 @@ export function Dashboard() {
           </p>
         </div>
         <Can permission={PERMISSIONS.REPORTS_VIEW}>
-          <Button
-            variant="outline"
-            onClick={() => setDailyReportOpen(true)}
-            title="Дневен отчет (PDF)"
-          >
-            <Printer className="h-4 w-4" />
-            Дневен отчет
-          </Button>
+          {/* Split button — главното action остава "Дневен отчет"
+              (default behavior съвпада с предишния бутон). Стрелката
+              отваря dropdown с другите варианти (засега месечен; в
+              бъдеще годишен / по партньор). */}
+          <div className="inline-flex">
+            <Button
+              variant="outline"
+              onClick={() => setDailyReportOpen(true)}
+              title="Дневен отчет (PDF)"
+              className="rounded-r-none border-r-0"
+            >
+              <Printer className="h-4 w-4" />
+              Дневен отчет
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  title="Други отчети"
+                  aria-label="Други отчети"
+                  className="rounded-l-none px-2"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[180px]">
+                <DropdownMenuItem
+                  onSelect={() => setDailyReportOpen(true)}
+                  className="gap-2"
+                >
+                  <CalendarDays className="h-4 w-4 text-gray-500" />
+                  Дневен отчет
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => setMonthlyReportOpen(true)}
+                  className="gap-2"
+                >
+                  <CalendarRange className="h-4 w-4 text-gray-500" />
+                  Месечен отчет
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </Can>
       </div>
 
@@ -497,6 +567,43 @@ export function Dashboard() {
             </Button>
             <Button
               onClick={() => void downloadDailyReport()}
+              disabled={isDownloading}
+              className="bg-[#f97316] hover:bg-[#ea580c]"
+            >
+              <Printer className="h-4 w-4" />
+              {isDownloading ? "Сваляне…" : "Свали PDF"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={monthlyReportOpen} onOpenChange={setMonthlyReportOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Месечен отчет</DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-1.5">
+            <Label className="text-xs">За месец</Label>
+            {/* type="month" дава на browser-а native month picker
+                (Chrome/Edge/Safari всички поддържат). Връща "YYYY-MM"
+                което backend-ът очаква. max-ът ограничава до текущия
+                месец — бъдещ месец би върнал празен отчет. */}
+            <Input
+              type="month"
+              value={reportMonth}
+              onChange={(e) => setReportMonth(e.target.value)}
+              max={currentMonthLocal()}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setMonthlyReportOpen(false)}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={() => void downloadMonthlyReport()}
               disabled={isDownloading}
               className="bg-[#f97316] hover:bg-[#ea580c]"
             >
