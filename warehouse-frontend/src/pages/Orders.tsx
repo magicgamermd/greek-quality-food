@@ -3623,6 +3623,10 @@ function EditOrderItemsModal({
     setItems(mappedItems.length > 0 ? mappedItems : [emptyItem()]);
     setErrorMsg("");
     setSuccessMsg("");
+    // Reset bulk-discount inputs — иначе попълнените стойности от
+    // предишно отваряне остават залепнали в полетата.
+    setBulkDiscount("");
+    setBulkDiscountAmount("");
   }, [open, order]);
 
   const handleProductSelect = useCallback(
@@ -4701,6 +4705,11 @@ function CreateOrderModal({
       setPendingOversell(null);
       setIsReplacement(false);
       setReplacementState(null);
+      // Reset на bulk-discount полетата — иначе при затваряне с попълнена
+      // отстъпка стойностите остават и при следващото отваряне на dialog-а
+      // изглеждат "залепнали" от предишната поръчка.
+      setBulkDiscount("");
+      setBulkDiscountAmount("");
       // Auto-land focus on партньор combobox so user can start typing
       // immediately — no mouse needed to begin a new order.
       queueMicrotask(() => partnerInputRef.current?.focus());
