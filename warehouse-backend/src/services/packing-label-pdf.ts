@@ -49,6 +49,10 @@ export interface PackingLabelData {
   // Когато true, бележката се рендерира с "ЗАМЯНА" значка и две секции
   // — "Дай на клиента" и "Приеми обратно" — разделени по `is_returning`.
   isReplacement?: boolean;
+  // Когато true, бележката е за финално ПРЕДАВАНЕ на платена-невзета
+  // стока (миграция 079, pending_pickup линии). Показва се различен
+  // badge "ПРЕДАВАНЕ" + sub-line "Платена невзета стока".
+  isPickupHandover?: boolean;
 }
 
 function formatDate(d: Date): string {
@@ -90,11 +94,12 @@ export async function generatePackingLabelPdf(
     let y = MARGIN;
     const L = MARGIN;
     const isReplacement = Boolean(data.isReplacement);
+    const isPickupHandover = Boolean(data.isPickupHandover);
 
     // Order number — big and bold, full width, centred. Visible from
-    // across the warehouse. За замяна слагаме малко по-малък шрифт за
-    // заглавието, така че значката "ЗАМЯНА" да се събере на същия ред.
-    const titleFontSize = isReplacement ? 18 : 20;
+    // across the warehouse. За замяна/предаване слагаме малко по-малък
+    // шрифт за заглавието, така че значката да се събере на същия ред.
+    const titleFontSize = isReplacement || isPickupHandover ? 18 : 20;
     doc.font("MainBold").fontSize(titleFontSize).fillColor("#000");
     doc.text(`ПОРЪЧКА #${data.orderNumber}`, L, y, {
       width: CONTENT_W,
@@ -105,24 +110,41 @@ export async function generatePackingLabelPdf(
         width: CONTENT_W,
       }) + 4;
 
-    // ЗАМЯНА badge — inverted (white text on black pill), centred under
-    // the title. Без емоджи, защото Roboto няма емоджи глифове и ще
-    // рендерира кутийки на термалния принтер.
-    if (isReplacement) {
-      const badgeText = "ЗАМЯНА";
+    // Status badge — inverted pill, centred под заглавието. Без емоджи,
+    // защото Roboto няма емоджи глифове и ще рендерира кутийки на
+    // термалния принтер. Замяна и предаване се изключват взаимно
+    // (replacement не може да бъде в pickup mode).
+    const badgeLabel = isReplacement
+      ? "ЗАМЯНА"
+      : isPickupHandover
+        ? "ПРЕДАВАНЕ"
+        : null;
+    if (badgeLabel) {
       doc.font("MainBold").fontSize(10);
-      const badgeTextW = doc.widthOfString(badgeText);
+      const badgeTextW = doc.widthOfString(badgeLabel);
       const badgeW = badgeTextW + 14;
       const badgeH = 14;
       const badgeX = L + (CONTENT_W - badgeW) / 2;
       doc.roundedRect(badgeX, y, badgeW, badgeH, 3).fillColor("#000").fill();
-      doc.fillColor("#fff").text(badgeText, badgeX, y + 2, {
+      doc.fillColor("#fff").text(badgeLabel, badgeX, y + 2, {
         width: badgeW,
         align: "center",
         lineBreak: false,
       });
       doc.fillColor("#000");
       y += badgeH + 3;
+      // Sub-line за pickup — обяснение какво вижда работника на склада.
+      // Замяната няма sub-line, за да остави място за двете секции.
+      if (isPickupHandover) {
+        doc.font("Main").fontSize(8).fillColor("#444");
+        doc.text("Платена невзета стока", L, y, {
+          width: CONTENT_W,
+          align: "center",
+          lineBreak: false,
+        });
+        doc.fillColor("#000");
+        y += 11;
+      }
     }
 
     // Heavy divider under the title

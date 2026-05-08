@@ -4001,14 +4001,37 @@ export default async function orderRoutes(app: FastifyInstance) {
       // Бележката за пакетиране е чисто складов документ — кешъра/
       // склада физически вземат само "normal" линиите. paid_not_taken
       // (клиентът вече е платил, ще си го вземе при следващо посещение)
-      // и awaiting (pre-order, чака стока) не отиват в пакета и не
-      // трябва да присъстват в принтираната бележка, иначе склада
-      // случайно ще опакова неправилни количества. UI-ът на /warehouse
-      // вече ги отделя в "Не пакетирай (още)" секция; backend-ът трябва
-      // да следва същата логика и за PDF-а.
-      const packingItems = items.filter(
-        (it: any) => (it.line_status ?? "normal") === "normal",
+      // и awaiting (pre-order, чака стока) не отиват в пакета.
+      //
+      // PICKUP режим (миграция 079): когато поръчката е fulfilled и има
+      // pending_pickup линии, бележката се препечатва за финалното
+      // ПРЕДАВАНЕ на платена-невзета стока — там показваме само
+      // pending_pickup редовете (не normal-ите, които вече са взети).
+      const hasPending = items.some(
+        (it: any) => it.line_status === "pending_pickup",
       );
+      const isPickupHandover = order.status === "fulfilled" && hasPending;
+      const packingItems = items.filter((it: any) => {
+        const ls = it.line_status ?? "normal";
+        return isPickupHandover ? ls === "pending_pickup" : ls === "normal";
+      });
+
+      // Нормализация на unit-а — DB може да съдържа "pcs" (legacy
+      // английска стойност). Складът чете на български и UI-ът има
+      // unitLabels мапинг ("pcs" → "бр."); правим същото и за принт.
+      const UNIT_BG: Record<string, string> = {
+        pcs: "бр.",
+        box: "кутия",
+        pack: "пакет",
+        kg: "кг",
+        g: "г",
+        l: "л",
+        ml: "мл",
+      };
+      const localizeUnit = (u: string | null | undefined): string => {
+        if (!u) return "бр.";
+        return UNIT_BG[u.toLowerCase()] ?? u;
+      };
 
       await generatePackingLabelPdf({
         orderNumber: order.order_number ?? order.id,
@@ -4017,13 +4040,14 @@ export default async function orderRoutes(app: FastifyInstance) {
         items: packingItems.map((it: any) => ({
           name_bg: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
           quantity: it.quantity,
-          unit: it.unit || "бр.",
+          unit: localizeUnit(it.unit),
           is_returning: Boolean(it.is_returning),
         })),
         deliveryLabel,
         notes: order.notes ?? null,
         outputPath,
         isReplacement: Boolean(order.is_replacement),
+        isPickupHandover,
       });
 
       const stream = fs.createReadStream(outputPath);

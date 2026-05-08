@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { formatUnit } from "@/lib/utils";
 import type { Order, OrderItem } from "@/types";
 import { Spinner } from "@/components/ui/spinner";
 import { confirm } from "@/components/ConfirmDialog";
@@ -349,7 +350,9 @@ export function WarehousePacking() {
                           item.name_en ||
                           item.product?.name_en ||
                           `Продукт #${item.product_id}`;
-                        const unit = item.unit || item.product?.unit || "бр.";
+                        const unit = formatUnit(
+                          item.unit || item.product?.unit,
+                        );
                         return (
                           <li key={item.id}>
                             <label className="flex items-center gap-3 cursor-pointer group">
@@ -627,7 +630,7 @@ function PackingItemSection({
               item.name_en ||
               item.product?.name_en ||
               `Продукт #${item.product_id}`;
-            const unit = item.unit || item.product?.unit || "бр.";
+            const unit = formatUnit(item.unit || item.product?.unit);
             return (
               <li key={item.id}>
                 <label className="flex items-center gap-3 cursor-pointer group">
