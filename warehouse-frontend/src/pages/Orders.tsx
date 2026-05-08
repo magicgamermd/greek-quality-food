@@ -140,6 +140,58 @@ function hasAnnulledInvoice(order: Pick<Order, "annulled_invoice_at">) {
 }
 
 /**
+ * Arrow-key navigation между бутоните в един row (или група).
+ *
+ * Подход: attach-ва се като `onKeyDown` на parent div-а. При Arrow
+ * Left/Right взима всички focusable button-и/линкове в контейнера и
+ * мести фокуса към съседен. ArrowUp/ArrowDown отваря opt-out за
+ * cross-row navigation (caller-ът решава дали да го handle-не).
+ *
+ * Кешъра идва от DOS-style програма — всичко се навигира с клавиатура.
+ * Пример: drawer footer-а с "Генерирай оферта" / "Потвърди поръчка" —
+ * ArrowLeft/Right прескача между двата, Enter активира.
+ *
+ * Връща true ако event-а е consumed (за да не дублира защита по-нагоре).
+ */
+function arrowNavRow(e: React.KeyboardEvent<HTMLElement>): boolean {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return false;
+  // Не превземаме когато caret-ът е в input текст и user-ът редактира
+  // (selectionStart > 0 за ArrowLeft, selectionEnd < length за ArrowRight).
+  const target = e.target as HTMLElement;
+  if (target instanceof HTMLInputElement && target.type !== "checkbox") {
+    if (target.type === "number" || target.type === "text") {
+      // За тези типове позволяваме arrow nav само когато caret-ът е в
+      // края/началото на полето, за да не пречим на text editing.
+      const len = (target.value ?? "").length;
+      if (e.key === "ArrowLeft" && (target.selectionStart ?? 0) > 0)
+        return false;
+      if (e.key === "ArrowRight" && (target.selectionEnd ?? 0) < len)
+        return false;
+    }
+  }
+  const container = e.currentTarget;
+  // Селектираме всички not-disabled focusable controls в реда.
+  // Включваме button + a + input (без hidden), за да обхванем
+  // checkbox-и в реда също.
+  const controls = Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"])',
+    ),
+  );
+  if (controls.length === 0) return false;
+  const active = document.activeElement as HTMLElement | null;
+  const idx = active ? controls.indexOf(active) : -1;
+  if (idx === -1) return false;
+  e.preventDefault();
+  const nextIdx =
+    e.key === "ArrowRight"
+      ? Math.min(controls.length - 1, idx + 1)
+      : Math.max(0, idx - 1);
+  controls[nextIdx]?.focus();
+  return true;
+}
+
+/**
  * Replacement orders carry a SIGNED total: positive when the customer must
  * doplaci, negative when the shop refunds the difference, zero for an even
  * swap. Backend stores it as |give − return| so we display the sign by
@@ -1962,7 +2014,10 @@ function OrderDetailModal({
             )}
 
             {/* Row 1 — primary workflow action */}
-            <div className="flex flex-wrap gap-2 items-center justify-end">
+            <div
+              className="flex flex-wrap gap-2 items-center justify-end"
+              onKeyDown={arrowNavRow}
+            >
               {detail.status === "pending" && (
                 <>
                   <Button
@@ -2116,7 +2171,10 @@ function OrderDetailModal({
 
             {/* Row 2 — Invoice group (available from confirmed onwards) */}
             {detail.status !== "pending" && detail.status !== "cancelled" && (
-              <div className="flex flex-wrap gap-2 items-center border-t pt-2">
+              <div
+                className="flex flex-wrap gap-2 items-center border-t pt-2"
+                onKeyDown={arrowNavRow}
+              >
                 <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
                   Фактура:
                 </span>
@@ -4496,7 +4554,7 @@ function EditOrderItemsModal({
           </div>
         )}
 
-        <DialogFooter className="shrink-0 gap-2">
+        <DialogFooter className="shrink-0 gap-2" onKeyDown={arrowNavRow}>
           <Button variant="outline" onClick={onClose}>
             Отказ
           </Button>
@@ -6383,7 +6441,7 @@ function CreateOrderModal({
 
             {errorMsg && <ErrorMessage message={errorMsg} />}
 
-            <DialogFooter className="gap-2">
+            <DialogFooter className="gap-2" onKeyDown={arrowNavRow}>
               <Button variant="outline" onClick={onClose}>
                 {orderCreated ? "Затвори" : "Отказ"}
               </Button>
