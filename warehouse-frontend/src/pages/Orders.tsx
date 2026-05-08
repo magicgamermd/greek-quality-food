@@ -2249,24 +2249,46 @@ function OrderDetailModal({
                   </div>
                 )}
 
-                {/* Payment method — printed on the invoice as "Начин на плащане" */}
+                {/* Payment method — printed on the invoice as "Начин на
+                    плащане". Dropdown за компактност (4 опции в pills
+                    заемаха цял ред); default = "В брой". */}
                 {!hasInvoice ? (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
                     <span className="text-xs text-gray-500">Плащане:</span>
-                    {INVOICE_PAYMENT_METHOD_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => setPaymentMethod(opt.value)}
-                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                          paymentMethod === opt.value
-                            ? "bg-[#f97316] text-white"
-                            : "bg-white text-gray-600 border hover:bg-gray-100"
-                        }`}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-[#f97316] text-white hover:bg-[#ea580c]"
+                          title="Смени начин на плащане"
+                        >
+                          {INVOICE_PAYMENT_METHOD_LABELS[paymentMethod] ??
+                            "Банков превод"}
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        className="min-w-[160px]"
                       >
-                        {opt.label}
-                      </button>
-                    ))}
+                        {INVOICE_PAYMENT_METHOD_OPTIONS.map((opt) => {
+                          const isCurrent = paymentMethod === opt.value;
+                          return (
+                            <DropdownMenuItem
+                              key={opt.value}
+                              onSelect={() => setPaymentMethod(opt.value)}
+                              className={
+                                isCurrent
+                                  ? "bg-[#f97316]/10 text-[#f97316]"
+                                  : ""
+                              }
+                            >
+                              {opt.label}
+                            </DropdownMenuItem>
+                          );
+                        })}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 ) : (
                   <div
