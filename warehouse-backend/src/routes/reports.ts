@@ -328,6 +328,12 @@ async function assembleDailyReportData(
   // order's own partner. If an individual order ('Физическо лице')
   // got reissued to a company via 'Издай на фирма', the override
   // company name is what the cashier expects to see in the report.
+  // Replacement orders never have an invoice, so i.payment_method is NULL
+  // for them. Fall back to the OLDEST payment row (lowest id) on the order
+  // to surface 'Кеш / Банка / ПОС' in the cashier table — same pattern as
+  // `orderRows` above. Without this fallback, замени се появяваха с "—" в
+  // основната таблица, а в "ЗАМЕНИ" секцията — с правилния начин, и
+  // двете несъответстващи си.
   const { rows: orderPaymentRows } = await query(
     `SELECT o.id,
             o.order_number,
@@ -336,7 +342,7 @@ async function assembleDailyReportData(
             o.status,
             o.is_replacement,
             COALESCE(ip.name, p.name) AS partner_name,
-            i.payment_method,
+            COALESCE(i.payment_method, rp.payment_method) AS payment_method,
             i.invoice_number,
             i.status AS invoice_status,
             COALESCE(SUM(pmt.amount), 0)::numeric AS paid_amount,
@@ -346,12 +352,19 @@ async function assembleDailyReportData(
        LEFT JOIN partners p ON p.id = o.partner_id
        LEFT JOIN partners ip ON ip.id = o.invoice_partner_id
        LEFT JOIN invoices i ON i.id = o.invoice_id
+       LEFT JOIN LATERAL (
+         SELECT payment_method
+           FROM payments
+          WHERE order_id = o.id
+          ORDER BY id ASC
+          LIMIT 1
+       ) rp ON TRUE
        LEFT JOIN payments pmt ON (pmt.invoice_id = i.id OR pmt.order_id = o.id)
                               AND DATE(pmt.paid_at) <= $1
       WHERE DATE(o.order_date) = $1
       GROUP BY o.id, o.order_number, o.order_date, o.total_amount, o.status,
                o.is_replacement, ip.name, p.name, i.payment_method,
-               i.invoice_number, i.status
+               rp.payment_method, i.invoice_number, i.status
       ORDER BY o.order_number ASC`,
     [date],
   );
@@ -517,9 +530,16 @@ async function assembleDailyReportData(
         const total = parseFloat(r.total_amount ?? 0);
         const paid = parseFloat(r.paid_amount ?? 0);
         const cancelled = r.status === "cancelled";
+        const isReplacement = r.is_replacement === true;
+        // За замяна total е signed (give − return); auto-вкараният
+        // payment row е |total| с is_refund флаг, така че сравняваме
+        // срещу |total|. Same-value swap (|total|≈0) е settled by
+        // construction — няма payment row и няма дълг.
+        const billed = isReplacement ? Math.abs(total) : total;
         let paymentStatus: "paid" | "partial" | "unpaid" | "cancelled";
         if (cancelled) paymentStatus = "cancelled";
-        else if (paid >= total - 0.01) paymentStatus = "paid";
+        else if (isReplacement && billed < 0.01) paymentStatus = "paid";
+        else if (paid >= billed - 0.01) paymentStatus = "paid";
         else if (paid > 0) paymentStatus = "partial";
         else paymentStatus = "unpaid";
         const orderDateIso =
@@ -553,13 +573,17 @@ async function assembleDailyReportData(
       // и paid_not_taken/awaiting не променят логиката — статусът тук е
       // payment_status (paid/partial/unpaid/cancelled), който се изчислява
       // в paymentsRows блока по-горе. Сумираме remaining = total − paid.
+      // За замяна total е signed → ползваме |total| като "billed", иначе
+      // refund (-5.12 €) се появява със +5.12 € "remaining" в общата сума.
       let count = 0;
       let total = 0;
       for (const r of orderPaymentRows) {
         const totalAmt = parseFloat(r.total_amount ?? 0);
         const paid = parseFloat(r.paid_amount ?? 0);
         if (r.status === "cancelled") continue;
-        const remaining = totalAmt - paid;
+        const billed =
+          r.is_replacement === true ? Math.abs(totalAmt) : totalAmt;
+        const remaining = billed - paid;
         if (remaining > 0.001) {
           count++;
           total += remaining;
