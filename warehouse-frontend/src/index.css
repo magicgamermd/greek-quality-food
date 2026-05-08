@@ -55,3 +55,20 @@ body {
     font-size: 16px !important;
   }
 }
+
+/* Hide native number input spinner arrows globally.
+ *
+ * При попълване на поръчки/заявки/доставки кешъра ползва клавиатура за
+ * навигация — стрелките нагоре/надолу преместват фокуса между клетки,
+ * не променят стойността. Browser-овият spinner-control (стрелките
+ * вдясно от <input type="number">) визуално подсказва грешния pattern
+ * (+0.1/-0.1) и обърква user-а. Премахваме ги навсякъде; ако някъде
+ * наистина искаме spinner, ще го добавим обратно с opt-in клас. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}

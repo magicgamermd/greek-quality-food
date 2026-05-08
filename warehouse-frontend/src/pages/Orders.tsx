@@ -3582,6 +3582,75 @@ function EditOrderItemsModal({
     );
   };
 
+  // Keyboard refs + arrow navigation — same pattern като в CreateOrderModal.
+  // Виж там подробен коментар.
+  const editQtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const editKgRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const editPriceRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const editDiscountRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const editSubmitBtnRef = useRef<HTMLButtonElement | null>(null);
+  const editFocusAndSelect = (el: HTMLInputElement | null) => {
+    if (!el) return;
+    el.focus();
+    try {
+      el.select();
+    } catch {
+      /* ignore */
+    }
+  };
+  type EditCol = "qty" | "kg" | "price" | "discount";
+  const EDIT_COLS: EditCol[] = ["qty", "kg", "price", "discount"];
+  const editFocusCell = (rowIdx: number, col: EditCol): boolean => {
+    const row = items[rowIdx];
+    if (!row) return false;
+    const refs = {
+      qty: editQtyRefs,
+      kg: editKgRefs,
+      price: editPriceRefs,
+      discount: editDiscountRefs,
+    }[col];
+    const el = refs.current[row.row_key];
+    if (!el) return false;
+    editFocusAndSelect(el);
+    return true;
+  };
+  const handleEditCellArrowKey = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    rowIdx: number,
+    col: EditCol,
+  ): boolean => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (rowIdx > 0) editFocusCell(rowIdx - 1, col);
+      return true;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!editFocusCell(rowIdx + 1, col)) {
+        editSubmitBtnRef.current?.focus();
+      }
+      return true;
+    }
+    if (e.key === "ArrowLeft") {
+      const t = e.currentTarget;
+      if (t.selectionStart && t.selectionStart > 0) return false;
+      e.preventDefault();
+      const idx = EDIT_COLS.indexOf(col);
+      if (idx > 0) editFocusCell(rowIdx, EDIT_COLS[idx - 1]);
+      return true;
+    }
+    if (e.key === "ArrowRight") {
+      const t = e.currentTarget;
+      const len = (t.value ?? "").length;
+      if (t.selectionEnd != null && t.selectionEnd < len) return false;
+      e.preventDefault();
+      const idx = EDIT_COLS.indexOf(col);
+      if (idx < EDIT_COLS.length - 1) editFocusCell(rowIdx, EDIT_COLS[idx + 1]);
+      return true;
+    }
+    return false;
+  };
+
   useEffect(() => {
     if (!open) return;
 
@@ -4135,6 +4204,9 @@ function EditOrderItemsModal({
                         </TableCell>
                         <TableCell>
                           <Input
+                            ref={(el) => {
+                              editQtyRefs.current[item.row_key] = el;
+                            }}
                             type="number"
                             min="0.001"
                             step="0.001"
@@ -4142,17 +4214,26 @@ function EditOrderItemsModal({
                             onChange={(e) =>
                               setItem(i, "quantity", e.target.value)
                             }
+                            onKeyDown={(e) =>
+                              handleEditCellArrowKey(e, i, "qty")
+                            }
                             disabled={!item.product_id}
                           />
                         </TableCell>
                         <TableCell>
                           <Input
+                            ref={(el) => {
+                              editKgRefs.current[item.row_key] = el;
+                            }}
                             type="number"
                             step="0.01"
                             min="0"
                             value={item.weight_kg}
                             onChange={(e) =>
                               setItem(i, "weight_kg", e.target.value)
+                            }
+                            onKeyDown={(e) =>
+                              handleEditCellArrowKey(e, i, "kg")
                             }
                             className="w-20"
                             disabled={!item.product_id}
@@ -4162,6 +4243,9 @@ function EditOrderItemsModal({
                         </TableCell>
                         <TableCell>
                           <Input
+                            ref={(el) => {
+                              editPriceRefs.current[item.row_key] = el;
+                            }}
                             type="number"
                             step="0.01"
                             min="0"
@@ -4169,11 +4253,17 @@ function EditOrderItemsModal({
                             onChange={(e) =>
                               setItem(i, "unit_price", e.target.value)
                             }
+                            onKeyDown={(e) =>
+                              handleEditCellArrowKey(e, i, "price")
+                            }
                             disabled={!item.product_id}
                           />
                         </TableCell>
                         <TableCell>
                           <Input
+                            ref={(el) => {
+                              editDiscountRefs.current[item.row_key] = el;
+                            }}
                             type="number"
                             step="0.1"
                             min="0"
@@ -4181,6 +4271,9 @@ function EditOrderItemsModal({
                             value={item.discount_percent}
                             onChange={(e) =>
                               setItem(i, "discount_percent", e.target.value)
+                            }
+                            onKeyDown={(e) =>
+                              handleEditCellArrowKey(e, i, "discount")
                             }
                             disabled={!item.product_id}
                             placeholder="0"
@@ -4407,7 +4500,11 @@ function EditOrderItemsModal({
           <Button variant="outline" onClick={onClose}>
             Отказ
           </Button>
-          <Button onClick={() => void submitEdit()} disabled={!canSubmit}>
+          <Button
+            ref={editSubmitBtnRef}
+            onClick={() => void submitEdit()}
+            disabled={!canSubmit}
+          >
             {mutation.isPending ? (
               <>
                 <Spinner size="sm" />
@@ -4617,8 +4714,13 @@ function CreateOrderModal({
   // "typed scan" without reaching for the mouse. Keyed by row_key so
   // adding/removing rows keeps the right input in focus.
   const qtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const kgRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const priceRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const discountRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  // Submit button ref — ArrowDown от последния ред слиза тук, така че
+  // касиерът може да попълни всичко с клавиатурата и натисне Enter за
+  // създаване, без да посяга към мишка.
+  const submitBtnRef = useRef<HTMLButtonElement | null>(null);
   // Full "top-of-form" keyboard flow: партньор → дата → първи продукт.
   const partnerInputRef = useRef<HTMLInputElement | null>(null);
   const dateInputRef = useRef<HTMLInputElement | null>(null);
@@ -4644,6 +4746,71 @@ function CreateOrderModal({
     if (!rowKey) return;
     const handle = productSearchRefs.current[rowKey];
     handle?.focus();
+  };
+
+  // Arrow-key navigation между клетките на items таблицата. Колоните
+  // са ['qty', 'kg', 'price', 'discount'] — продуктът и сумата не са
+  // editable числа. ArrowUp/Down мести между редовете в същата колона;
+  // ArrowLeft/Right в същия ред между колоните; ArrowDown от последния
+  // ред слиза към submit бутона ("Създай поръчка"). Browser-овият
+  // default за ArrowUp/Down в number input-и (промяна +/- step) се
+  // потиска — кешъра не иска stealth промени на quantities/цени.
+  type Col = "qty" | "kg" | "price" | "discount";
+  const COLS: Col[] = ["qty", "kg", "price", "discount"];
+  const cellRefMap = (col: Col) =>
+    ({
+      qty: qtyRefs,
+      kg: kgRefs,
+      price: priceRefs,
+      discount: discountRefs,
+    })[col];
+  const focusCell = (rowIdx: number, col: Col): boolean => {
+    const row = items[rowIdx];
+    if (!row) return false;
+    const el = cellRefMap(col).current[row.row_key];
+    if (!el) return false;
+    focusAndSelect(el);
+    return true;
+  };
+  const handleCellArrowKey = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    rowIdx: number,
+    col: Col,
+  ): boolean => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (rowIdx > 0) focusCell(rowIdx - 1, col);
+      return true;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      // Опитваме next row. Ако няма (последния ред) → submit бутон.
+      if (!focusCell(rowIdx + 1, col)) {
+        submitBtnRef.current?.focus();
+      }
+      return true;
+    }
+    if (e.key === "ArrowLeft") {
+      // Не превземаме когато caret-ът не е в началото на полето —
+      // user-ът редактира числото и иска да мести в текста.
+      const target = e.currentTarget;
+      if (target.selectionStart && target.selectionStart > 0) return false;
+      e.preventDefault();
+      const idx = COLS.indexOf(col);
+      if (idx > 0) focusCell(rowIdx, COLS[idx - 1]);
+      return true;
+    }
+    if (e.key === "ArrowRight") {
+      const target = e.currentTarget;
+      const len = (target.value ?? "").length;
+      if (target.selectionEnd != null && target.selectionEnd < len)
+        return false;
+      e.preventDefault();
+      const idx = COLS.indexOf(col);
+      if (idx < COLS.length - 1) focusCell(rowIdx, COLS[idx + 1]);
+      return true;
+    }
+    return false;
   };
 
   // Sync partner_id with customerMode
@@ -5760,6 +5927,7 @@ function CreateOrderModal({
                                     setItem(i, "quantity", e.target.value)
                                   }
                                   onKeyDown={(e) => {
+                                    if (handleCellArrowKey(e, i, "qty")) return;
                                     if (e.key === "Enter") {
                                       e.preventDefault();
                                       focusAndSelect(
@@ -5778,6 +5946,9 @@ function CreateOrderModal({
                               </TableCell>
                               <TableCell>
                                 <Input
+                                  ref={(el) => {
+                                    kgRefs.current[item.row_key] = el;
+                                  }}
                                   type="number"
                                   step="0.01"
                                   min="0"
@@ -5785,6 +5956,15 @@ function CreateOrderModal({
                                   onChange={(e) =>
                                     setItem(i, "weight_kg", e.target.value)
                                   }
+                                  onKeyDown={(e) => {
+                                    if (handleCellArrowKey(e, i, "kg")) return;
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      focusAndSelect(
+                                        priceRefs.current[item.row_key],
+                                      );
+                                    }
+                                  }}
                                   className="w-20"
                                   disabled={!item.product_id}
                                   placeholder="0"
@@ -5804,6 +5984,8 @@ function CreateOrderModal({
                                     setItem(i, "unit_price", e.target.value)
                                   }
                                   onKeyDown={(e) => {
+                                    if (handleCellArrowKey(e, i, "price"))
+                                      return;
                                     if (e.key !== "Enter") return;
                                     e.preventDefault();
                                     // Enter in Цена → jump to Отст. % на СЪЩИЯ ред.
@@ -5854,6 +6036,8 @@ function CreateOrderModal({
                                     )
                                   }
                                   onKeyDown={(e) => {
+                                    if (handleCellArrowKey(e, i, "discount"))
+                                      return;
                                     if (e.key !== "Enter") return;
                                     e.preventDefault();
                                     const nextRow = items[i + 1];
@@ -6230,6 +6414,7 @@ function CreateOrderModal({
               {!orderCreated &&
                 (isReplacement || !hasStockIssues || confirmOverstock) && (
                   <Button
+                    ref={submitBtnRef}
                     onClick={() => void submitCreateOrder()}
                     disabled={!canSubmit}
                   >
