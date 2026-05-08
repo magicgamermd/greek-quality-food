@@ -152,6 +152,36 @@ function formatInvoiceDateBg(iso: string): string {
   return `${d}.${mm}.${y}`;
 }
 
+// Pixel-base truncation. pdfkit-s ellipsis опцията работи надеждно само
+// при многоредови блокове; при едноредова cell с lineBreak: false и
+// kirillic input (Roboto cyrillic glyphs са ~5.7pt при fontSize 9, vs
+// 4.5pt за латиница), char-base truncate (.slice(0, N) + "…") често
+// прелива колоната и redo-вете се припокриват. Binary-search-ваме до
+// най-дългия prefix който се побира + ellipsis.
+function truncateToWidth(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  maxWidth: number,
+): string {
+  if (!text) return text;
+  if (doc.widthOfString(text) <= maxWidth) return text;
+  const ellipsis = "…";
+  const ellipsisW = doc.widthOfString(ellipsis);
+  if (ellipsisW > maxWidth) return ""; // нямаме място дори за "…"
+  let lo = 0;
+  let hi = text.length;
+  // Invariant: text.slice(0, lo) + … fits; text.slice(0, hi) + … may not.
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (doc.widthOfString(text.slice(0, mid)) + ellipsisW <= maxWidth) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return text.slice(0, lo).trimEnd() + ellipsis;
+}
+
 export async function generateMonthlyReportPdf(
   data: MonthlyReportData,
 ): Promise<void> {
@@ -541,9 +571,7 @@ export async function generateMonthlyReportPdf(
         const rowY = doc.y;
         const cells = [
           String(idx + 1),
-          r.partner_name.length > 50
-            ? r.partner_name.slice(0, 48) + "…"
-            : r.partner_name,
+          truncateToWidth(doc, r.partner_name, cols[1].w - 4),
           String(r.order_count),
           fmtEur(r.total),
         ];
@@ -551,6 +579,7 @@ export async function generateMonthlyReportPdf(
         cells.forEach((val, i) => {
           doc.text(val, cx + 2, rowY, {
             width: cols[i].w - 4,
+            height: rowH - 2,
             align: cols[i].align,
             lineBreak: false,
             ellipsis: true,
@@ -605,8 +634,8 @@ export async function generateMonthlyReportPdf(
         const rowY = doc.y;
         const cells = [
           String(idx + 1),
-          r.name.length > 45 ? r.name.slice(0, 43) + "…" : r.name,
-          r.sku ?? "—",
+          truncateToWidth(doc, r.name, cols[1].w - 4),
+          truncateToWidth(doc, r.sku ?? "—", cols[2].w - 4),
           formatEurAmount(r.qty).replace(",00", ""),
           fmtEur(r.total),
         ];
@@ -614,6 +643,7 @@ export async function generateMonthlyReportPdf(
         cells.forEach((val, i) => {
           doc.text(val, cx + 2, rowY, {
             width: cols[i].w - 4,
+            height: rowH - 2,
             align: cols[i].align,
             lineBreak: false,
             ellipsis: true,
@@ -679,11 +709,9 @@ export async function generateMonthlyReportPdf(
           ensureSpace(rowH);
           const rowY = doc.y;
           const cells = [
-            r.invoice_number,
+            truncateToWidth(doc, r.invoice_number, cols[0].w - 4),
             formatInvoiceDateBg(r.invoice_date),
-            r.partner_name.length > 32
-              ? r.partner_name.slice(0, 30) + "…"
-              : r.partner_name,
+            truncateToWidth(doc, r.partner_name, cols[2].w - 4),
             fmtEur(r.gross),
             fmtEur(r.remaining),
             String(r.days_overdue),
@@ -692,6 +720,7 @@ export async function generateMonthlyReportPdf(
           cells.forEach((val, i) => {
             doc.text(val, cx + 2, rowY, {
               width: cols[i].w - 4,
+              height: rowH - 2,
               align: cols[i].align,
               lineBreak: false,
               ellipsis: true,
