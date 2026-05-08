@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -9,6 +9,8 @@ import {
   Package,
   ArrowRight,
   Printer,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatUnit, formatDate } from "@/lib/utils";
@@ -72,6 +74,12 @@ const kpiCards = [
 
 const todayLocal = (): string => new Date().toLocaleDateString("sv-SE");
 
+// localStorage key за persist на reveal state — на mobile девайс където
+// касеро споделя екран с клиент, потребителят често иска "Стойност на
+// склада" да остане скрита между навигации, иначе се връща обратно при
+// всеки таб switch.
+const STOCK_VALUE_HIDDEN_KEY = "mertm:dashboard:stock-value-hidden";
+
 export function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -79,6 +87,26 @@ export function Dashboard() {
   const [dailyReportOpen, setDailyReportOpen] = useState(false);
   const [reportDate, setReportDate] = useState<string>(todayLocal());
   const [isDownloading, setIsDownloading] = useState(false);
+
+  // "Стойност на склада" е чувствителна цифра — кешъра често има клиент
+  // зад гърба си. Default скрит (както при банковите приложения) и
+  // persistnat-о в localStorage, за да не се отгръща при таб switch.
+  const [stockValueHidden, setStockValueHidden] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    // Дефолтът е "скрита". Само expлицитно "0" в localStorage я разкрива.
+    return window.localStorage.getItem(STOCK_VALUE_HIDDEN_KEY) !== "0";
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STOCK_VALUE_HIDDEN_KEY,
+        stockValueHidden ? "1" : "0",
+      );
+    } catch {
+      // localStorage може да е disabled в private mode — не fail-ваме UI-a.
+    }
+  }, [stockValueHidden]);
 
   const downloadDailyReport = async () => {
     if (isDownloading) return;
@@ -235,6 +263,13 @@ export function Dashboard() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           {visibleKpiCards.map(
             ({ key, label, icon: Icon, color, bg, format, link }) => {
+              const isStockValue = key === "total_stock_value";
+              const rawValue = kpis
+                ? format(kpis[key as keyof DashboardKPIs] as number)
+                : "—";
+              const isHidden =
+                isStockValue && stockValueHidden && rawValue !== "—";
+
               const card = (
                 <Card
                   key={key}
@@ -242,19 +277,63 @@ export function Dashboard() {
                   onClick={() => navigate(link)}
                 >
                   <CardContent className="p-5">
-                    <div className="flex items-center justify-between">
-                      <div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
                         <p className="text-sm text-gray-500 font-medium">
                           {label}
                         </p>
-                        <p className="text-2xl font-bold text-gray-900 mt-1">
-                          {kpis
-                            ? format(kpis[key as keyof DashboardKPIs] as number)
-                            : "—"}
-                        </p>
+                        <div className="flex items-center gap-2 mt-1 min-h-[2rem]">
+                          {isHidden ? (
+                            // Fixed-width placeholder (4 bullets) така че НЕ
+                            // издаваме колко е дълга сумата. Не render-ваме
+                            // реалната стойност в DOM-а изобщо — view-source /
+                            // copy-paste / accessibility tree всичко вижда
+                            // същия placeholder. Blur ефектът върху истински
+                            // числа би могъл да бъде reverse-нат с screenshot
+                            // tools, затова не разчитаме само на CSS.
+                            <span
+                              aria-label="Скрита стойност"
+                              className="text-2xl font-bold text-gray-400 tracking-[0.25em] select-none"
+                            >
+                              ••••
+                            </span>
+                          ) : (
+                            <p className="text-2xl font-bold text-gray-900">
+                              {rawValue}
+                            </p>
+                          )}
+                          {isStockValue && rawValue !== "—" && (
+                            <button
+                              type="button"
+                              aria-label={
+                                stockValueHidden
+                                  ? "Покажи стойността"
+                                  : "Скрий стойността"
+                              }
+                              title={
+                                stockValueHidden
+                                  ? "Покажи стойността"
+                                  : "Скрий стойността"
+                              }
+                              onClick={(e) => {
+                                // Stop propagation, иначе click-ът на картата
+                                // веднага ще navigate-не към /inventory.
+                                e.stopPropagation();
+                                setStockValueHidden((v) => !v);
+                              }}
+                              className="p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                            >
+                              {stockValueHidden ? (
+                                <Eye className="h-4 w-4" />
+                              ) : (
+                                <EyeOff className="h-4 w-4" />
+                              )}
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div
-                        className={`h-12 w-12 rounded-xl ${bg} flex items-center justify-center`}
+                        className={`h-12 w-12 rounded-xl ${bg} flex items-center justify-center shrink-0`}
                       >
                         <Icon className={`h-6 w-6 ${color}`} />
                       </div>
@@ -262,7 +341,7 @@ export function Dashboard() {
                   </CardContent>
                 </Card>
               );
-              if (key === "total_stock_value") {
+              if (isStockValue) {
                 return (
                   <Can
                     key={key}
