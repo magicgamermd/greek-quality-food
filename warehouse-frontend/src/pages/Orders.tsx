@@ -2316,32 +2316,14 @@ function OrderDetailModal({
                     <div className="flex items-center gap-2 flex-wrap">
                       {(detail as any)?.partner_partner_type ===
                         "individual" && (
-                        <>
-                          <Input
-                            value={clientDisplayName}
-                            onChange={(e) =>
-                              setClientDisplayName(e.target.value)
-                            }
-                            placeholder="Име на клиента (по желание)"
-                            className="w-60 h-9"
-                            disabled={!!partnerOverride}
-                            title={
-                              partnerOverride
-                                ? "Не се ползва, докато фактурата е насочена към фирма."
-                                : "Ако клиентът поиска фактурата да е на конкретно име — иначе остава 'Физическо лице — краен потребител'."
-                            }
-                          />
-                          <Button
-                            variant="outline"
-                            onClick={() => setPartnerOverrideOpen(true)}
-                            className="border-blue-600 text-blue-700 hover:bg-blue-50"
-                          >
-                            <Building2 className="h-4 w-4" />
-                            {partnerOverride
-                              ? "Промени фирма"
-                              : "Издай на фирма"}
-                          </Button>
-                        </>
+                        <Button
+                          variant="outline"
+                          onClick={() => setPartnerOverrideOpen(true)}
+                          className="border-blue-600 text-blue-700 hover:bg-blue-50"
+                        >
+                          <Building2 className="h-4 w-4" />
+                          {partnerOverride ? "Промени фирма" : "Издай на фирма"}
+                        </Button>
                       )}
                       {invoiceDateOverride && (
                         // Hidden chord (− then +) flipped this on. Surfaces a
