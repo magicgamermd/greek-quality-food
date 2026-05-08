@@ -221,6 +221,14 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
       // следващото отваряне на dialog-а вижда stale списък и default-ът
       // на сумата е грешен (показва пълната, не остатъка).
       qc.invalidateQueries({ queryKey: ["order-razpiska-payments"] });
+      // Drawer-ът на отворена поръчка чете order-detail — без invalidate
+      // paid_amount / payment-badge остават stale до ръчно reload.
+      qc.invalidateQueries({ queryKey: ["order-detail"] });
+      // Dashboard-а ползва "recent-orders" + invoice-for-payment cache.
+      qc.invalidateQueries({ queryKey: ["recent-orders"] });
+      qc.invalidateQueries({ queryKey: ["invoice-for-payment"] });
+      // Партньорската история (drawer) показва payment status на всеки ред.
+      qc.invalidateQueries({ queryKey: ["partner-history-detail"] });
       onClose();
     },
   });
