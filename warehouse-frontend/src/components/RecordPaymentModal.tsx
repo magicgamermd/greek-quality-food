@@ -68,7 +68,9 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
   const fixedInvoiceId =
     context.kind === "invoice-fixed" ? context.invoice_id : null;
 
-  const { data: orderPayments } = useQuery<{ amount: number | string }[]>({
+  const { data: orderPayments, isFetching: orderPaymentsFetching } = useQuery<
+    { amount: number | string }[]
+  >({
     queryKey: ["order-razpiska-payments", orderId],
     queryFn: () =>
       api
@@ -140,7 +142,18 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
       });
       didFillInvoiceRef.current = true;
     } else if (context.kind === "order-fixed") {
-      if (orderPayments === undefined || didFillOrderRef.current) return;
+      // Изчакваме query-то да се settle-не — докато react-query refetch-ва
+      // (stale-while-revalidate), `data` връща стария кеш. Ако сетнем
+      // amount-а сега и flag-нем didFillOrderRef=true, freshter-ите данни
+      // (които пристигат секунди по-късно) няма да override-нат полето
+      // → default-ът остава грешно (показваше пълната сума вместо
+      // остатъка след вече направено частично плащане).
+      if (
+        orderPayments === undefined ||
+        orderPaymentsFetching ||
+        didFillOrderRef.current
+      )
+        return;
       const total = getOrderTotalToCollect(context.order);
       const remaining = Math.max(0, total - alreadyPaidOnOrder);
       setForm({
@@ -160,7 +173,14 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
         paid_at: today,
       });
     }
-  }, [open, context, orderPayments, alreadyPaidOnOrder, fixedInvoice]);
+  }, [
+    open,
+    context,
+    orderPayments,
+    orderPaymentsFetching,
+    alreadyPaidOnOrder,
+    fixedInvoice,
+  ]);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -184,6 +204,10 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
       qc.invalidateQueries({ queryKey: ["invoices"] });
       qc.invalidateQueries({ queryKey: ["unpaid-invoices"] });
       qc.invalidateQueries({ queryKey: ["orders"] });
+      // Razpiska плащанията се cache-ват по orderId; без invalidate
+      // следващото отваряне на dialog-а вижда stale списък и default-ът
+      // на сумата е грешен (показва пълната, не остатъка).
+      qc.invalidateQueries({ queryKey: ["order-razpiska-payments"] });
       onClose();
     },
   });
