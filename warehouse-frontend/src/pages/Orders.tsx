@@ -4782,6 +4782,11 @@ function CreateOrderModal({
   // Full "top-of-form" keyboard flow: партньор → дата → първи продукт.
   const partnerInputRef = useRef<HTMLInputElement | null>(null);
   const dateInputRef = useRef<HTMLInputElement | null>(null);
+  // Customer mode toggle бутоните — за да можем да фокусираме активния
+  // когато user натисне ArrowUp от partner combobox-а (преминаване
+  // нагоре в потока).
+  const legalModeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const individualModeBtnRef = useRef<HTMLButtonElement | null>(null);
   const productSearchRefs = useRef<Record<string, ProductSearchHandle | null>>(
     {},
   );
@@ -5607,8 +5612,27 @@ function CreateOrderModal({
             {/* Тип клиент (сегмент) */}
             <div className="flex flex-wrap items-center gap-2">
               <Label className="mr-2">Тип клиент:</Label>
-              <div className="inline-flex rounded-lg border bg-gray-50 p-1">
+              <div
+                className="inline-flex rounded-lg border bg-gray-50 p-1"
+                onKeyDown={(e) => {
+                  // ArrowDown от toggle бутон → влиза в partner combobox
+                  // (или, при individual режим, директно в първия
+                  // ProductSearch — там няма combobox).
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    if (customerMode === "individual") {
+                      const firstRow = items[0];
+                      if (firstRow) focusProductSearch(firstRow.row_key);
+                    } else {
+                      partnerInputRef.current?.focus();
+                    }
+                    return;
+                  }
+                  arrowNavRow(e);
+                }}
+              >
                 <button
+                  ref={legalModeBtnRef}
                   type="button"
                   onClick={() => setCustomerMode("legal")}
                   className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
@@ -5620,6 +5644,7 @@ function CreateOrderModal({
                   🏢 Фирма (с ЕИК)
                 </button>
                 <button
+                  ref={individualModeBtnRef}
                   type="button"
                   onClick={() => setCustomerMode("individual")}
                   className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
@@ -5699,10 +5724,25 @@ function CreateOrderModal({
                           }))
                         }
                         onPickEnter={() =>
-                          queueMicrotask(() =>
-                            focusAndSelect(dateInputRef.current),
-                          )
+                          // След избор на партньор — направо на първия
+                          // ProductSearch, не на "Дата на доставка".
+                          // Датата по подразбиране е утре и рядко се
+                          // променя; кешъра иска веднага да започне с
+                          // първия артикул. Ако трябва да коригира
+                          // датата, Tab/Shift+Tab я достига.
+                          queueMicrotask(() => {
+                            const firstRow = items[0];
+                            if (firstRow) focusProductSearch(firstRow.row_key);
+                          })
                         }
+                        onArrowUpClosed={() => {
+                          // Връщане към активния тип-клиент toggle бутон.
+                          const target =
+                            customerMode === "legal"
+                              ? legalModeBtnRef.current
+                              : individualModeBtnRef.current;
+                          target?.focus();
+                        }}
                         placeholder="Избери или потърси по код, име или ЕИК..."
                         emptyMessage="Няма намерени партньори."
                       />
@@ -6474,6 +6514,20 @@ function CreateOrderModal({
                   <Button
                     ref={submitBtnRef}
                     onClick={() => void submitCreateOrder()}
+                    onKeyDown={(e) => {
+                      // ArrowUp от submit бутон → връщам в последния
+                      // ред на items grid-а (qty колоната — началото на
+                      // реда). Двупосочно с ArrowDown→submit от grid-а.
+                      if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        const lastRow = items[items.length - 1];
+                        if (lastRow) {
+                          const el = qtyRefs.current[lastRow.row_key];
+                          if (el) focusAndSelect(el);
+                          else focusProductSearch(lastRow.row_key);
+                        }
+                      }
+                    }}
                     disabled={!canSubmit}
                   >
                     {mutation.isPending ? (

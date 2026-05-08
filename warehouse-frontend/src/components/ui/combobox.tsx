@@ -24,6 +24,11 @@ export interface ComboboxProps<T = unknown> {
   disabled?: boolean;
   /** Called on Enter when an item is picked — useful for "advance to next field" */
   onPickEnter?: () => void;
+  /** Called когато user натисне ArrowUp на input-а ПРИ ЗАТВОРЕН popup —
+   * позволява cross-component nav нагоре (напр. към тип-клиент toggle).
+   * Не се вика когато popup-а е отворен (там стрелката highlight-ва
+   * предишен item). */
+  onArrowUpClosed?: () => void;
   /** Reference forwarded to the underlying input */
   inputRef?: React.Ref<HTMLInputElement>;
   /** Filter predicate override (default: case-insensitive substring match on label + hint) */
@@ -52,6 +57,7 @@ export function Combobox<T = unknown>({
   inputClassName,
   disabled,
   onPickEnter,
+  onArrowUpClosed,
   inputRef,
   filter,
   size = "default",
@@ -165,6 +171,15 @@ export function Combobox<T = unknown>({
       return;
     }
     if (e.key === "ArrowUp") {
+      // Когато popup-а е затворен — не highlight-ваме (нищо не се
+      // показва), а позволяваме cross-component nav нагоре.
+      if (!open) {
+        if (onArrowUpClosed) {
+          e.preventDefault();
+          onArrowUpClosed();
+        }
+        return;
+      }
       if (filtered.length === 0) return;
       e.preventDefault();
       setHighlight((h) => Math.max(h - 1, 0));
