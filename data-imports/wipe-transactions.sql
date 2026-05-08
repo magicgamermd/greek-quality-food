@@ -22,6 +22,11 @@
 -- За dry-run: смени `COMMIT;` накрая на `ROLLBACK;`.
 -- ============================================================================
 
+-- Defensive table existence helper — razpiska_corrections и
+-- razpiska_correction_items идват от по-нова миграция и може да липсват
+-- на по-стара деплоировка. Skip-ваме ги вместо да fail-ваме целия wipe.
+\set ON_ERROR_STOP on
+
 BEGIN;
 
 -- 1) Текущо състояние ---------------------------------------------------------
@@ -34,7 +39,6 @@ UNION ALL SELECT 'payments', COUNT(*) FROM payments
 UNION ALL SELECT 'incoming_goods', COUNT(*) FROM incoming_goods
 UNION ALL SELECT 'incoming_items', COUNT(*) FROM incoming_items
 UNION ALL SELECT 'purchase_orders', COUNT(*) FROM purchase_orders
-UNION ALL SELECT 'razpiska_corrections', COUNT(*) FROM razpiska_corrections
 UNION ALL SELECT 'inventory NON-ZERO rows', COUNT(*) FROM inventory WHERE quantity <> 0
 UNION ALL SELECT 'inventory total qty', SUM(quantity)::int FROM inventory
 ORDER BY 1;
@@ -88,29 +92,46 @@ WHERE inv.product_id   = a.product_id
   AND inv.warehouse_id = 1
   AND inv.batch_id IS NULL;
 
--- 4) Reverse razpiska_corrections (нетен delta)
-WITH corr AS (
-  SELECT product_id, SUM(quantity) AS qty
-  FROM razpiska_correction_items
-  GROUP BY product_id
-)
-UPDATE inventory inv
-SET quantity   = inv.quantity - c.qty,
-    updated_at = NOW()
-FROM corr c
-WHERE inv.product_id   = c.product_id
-  AND inv.warehouse_id = 1
-  AND inv.batch_id IS NULL;
+-- 4) Reverse razpiska_corrections (нетен delta) — пропуска се ако
+--    таблицата още не е мигрирана (DO block не fail-ва транзакцията).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+     WHERE table_schema='public' AND table_name='razpiska_correction_items'
+  ) THEN
+    UPDATE inventory inv
+       SET quantity = inv.quantity - c.qty,
+           updated_at = NOW()
+      FROM (SELECT product_id, SUM(quantity) AS qty
+              FROM razpiska_correction_items GROUP BY product_id) c
+     WHERE inv.product_id = c.product_id
+       AND inv.warehouse_id = 1
+       AND inv.batch_id IS NULL;
+    DELETE FROM razpiska_correction_items;
+    DELETE FROM razpiska_corrections;
+  END IF;
+END $$;
 
--- 5) DELETE в правилен ред (razpiska FIRST — то реферира orders с NOT NULL).
+-- 5) DELETE в правилен ред.
 --    НЕ ползваме TRUNCATE CASCADE — то cascade-ва и до batches+inventory!
-DELETE FROM razpiska_correction_items;
-DELETE FROM razpiska_corrections;     -- референцира orders с NOT NULL → trябва first
 DELETE FROM payments;                 -- FK → orders, invoices (RESTRICT)
 DELETE FROM comarch_sync;             -- FK → orders SET NULL — но wipe-ваме изцяло
 DELETE FROM order_items;              -- CASCADE от orders, но експлицит
--- self-FK на orders: parent_order_id, replacement_of_order_id (nullable, NO ACTION)
-UPDATE orders SET parent_order_id = NULL, replacement_of_order_id = NULL;
+-- self-FK на orders: parent_order_id, replacement_of_order_id (nullable, NO ACTION).
+-- replacement_of_order_id е деферирана за бъдеща миграция, затова е
+-- conditional — иначе wipe-ът fail-ва на по-стари деплоировки.
+UPDATE orders SET parent_order_id = NULL;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='orders'
+       AND column_name='replacement_of_order_id'
+  ) THEN
+    EXECUTE 'UPDATE orders SET replacement_of_order_id = NULL';
+  END IF;
+END $$;
 DELETE FROM orders;
 DELETE FROM invoice_number_reservations;
 -- self-FK на invoices: related_invoice_id (nullable, NO ACTION)
@@ -138,8 +159,17 @@ ALTER SEQUENCE incoming_goods_id_seq RESTART WITH 1;
 ALTER SEQUENCE incoming_items_id_seq RESTART WITH 1;
 ALTER SEQUENCE purchase_orders_id_seq RESTART WITH 1;
 ALTER SEQUENCE purchase_order_items_id_seq RESTART WITH 1;
-ALTER SEQUENCE razpiska_corrections_id_seq RESTART WITH 1;
-ALTER SEQUENCE razpiska_correction_items_id_seq RESTART WITH 1;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class
+              WHERE relkind='S' AND relname='razpiska_corrections_id_seq') THEN
+    EXECUTE 'ALTER SEQUENCE razpiska_corrections_id_seq RESTART WITH 1';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_class
+              WHERE relkind='S' AND relname='razpiska_correction_items_id_seq') THEN
+    EXECUTE 'ALTER SEQUENCE razpiska_correction_items_id_seq RESTART WITH 1';
+  END IF;
+END $$;
 ALTER SEQUENCE stock_writeoffs_id_seq RESTART WITH 1;
 ALTER SEQUENCE notifications_id_seq RESTART WITH 1;
 ALTER SEQUENCE audit_events_id_seq RESTART WITH 1;
@@ -159,7 +189,6 @@ UNION ALL SELECT 'payments', COUNT(*) FROM payments
 UNION ALL SELECT 'incoming_goods', COUNT(*) FROM incoming_goods
 UNION ALL SELECT 'incoming_items', COUNT(*) FROM incoming_items
 UNION ALL SELECT 'purchase_orders', COUNT(*) FROM purchase_orders
-UNION ALL SELECT 'razpiska_corrections', COUNT(*) FROM razpiska_corrections
 UNION ALL SELECT 'inventory NON-ZERO rows', COUNT(*) FROM inventory WHERE quantity <> 0
 UNION ALL SELECT 'inventory total qty', SUM(quantity)::int FROM inventory
 UNION ALL SELECT 'products (preserved)', COUNT(*) FROM products
