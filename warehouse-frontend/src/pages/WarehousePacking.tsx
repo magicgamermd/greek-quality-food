@@ -332,45 +332,43 @@ export function WarehousePacking() {
                       })}
                     </ul>
                   )}
-                  {skipped.length > 0 && (
-                    // Heads-up note so the worker doesn't grab lines that
-                    // are paid-but-already-with-customer (paid_not_taken)
-                    // or pre-order awaiting goods. Each line surfaces its
-                    // status word in Bulgarian.
-                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                      <div className="font-medium mb-1">
-                        Не пакетирай (още):
-                      </div>
-                      <ul className="space-y-0.5 text-xs">
-                        {skipped.map((it) => {
-                          const prodName =
-                            it.name_bg ||
-                            it.product?.name_bg ||
-                            it.name_en ||
-                            it.product?.name_en ||
-                            `Продукт #${it.product_id}`;
-                          const unit = it.unit || it.product?.unit || "бр.";
-                          const statusLabel =
-                            it.line_status === "paid_not_taken"
-                              ? "Платен — невзет"
-                              : it.line_status === "awaiting"
-                                ? "На изчакване (pre-order)"
-                                : it.line_status;
-                          return (
-                            <li
-                              key={it.id}
-                              className="flex items-center justify-between gap-2"
-                            >
-                              <span>
-                                {prodName} — {it.quantity} {unit}
-                              </span>
-                              <span className="font-medium">{statusLabel}</span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  )}
+                  {skipped.length > 0 &&
+                    (() => {
+                      // Компактен banner — само бройки, без имена. Преди
+                      // показвахме детайлен списък, но имената на
+                      // paid_not_taken артикули често дублираха normal
+                      // редове (същия SKU, две различни line_status-и) и
+                      // объркваха склада. Складът работи само с горния
+                      // списък; банерът е чисто info че има още линии,
+                      // които касата управлява.
+                      const paidCount = skipped.filter(
+                        (it) => it.line_status === "paid_not_taken",
+                      ).length;
+                      const awaitingCount = skipped.filter(
+                        (it) => it.line_status === "awaiting",
+                      ).length;
+                      const messages: string[] = [];
+                      if (paidCount > 0) {
+                        messages.push(
+                          `${paidCount} ${paidCount === 1 ? "артикул е платен — невзет" : "артикула са платени — невзети"} (касата ги управлява)`,
+                        );
+                      }
+                      if (awaitingCount > 0) {
+                        messages.push(
+                          `${awaitingCount} ${awaitingCount === 1 ? "артикул чака стока" : "артикула чакат стока"} (pre-order)`,
+                        );
+                      }
+                      return (
+                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
+                          <span aria-hidden>📌</span>
+                          <div className="flex-1">
+                            {messages.map((m, idx) => (
+                              <div key={idx}>{m}</div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                 </div>
 
                 {waybillResult[order.id] && (
