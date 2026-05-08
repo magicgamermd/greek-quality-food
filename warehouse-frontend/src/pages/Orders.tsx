@@ -26,7 +26,10 @@ import {
   Pencil,
   ChevronDown,
   RefreshCw,
+  RefreshCcw,
   RotateCcw,
+  Coins,
+  Hourglass,
   ClipboardList,
   ScrollText,
   XCircle,
@@ -145,13 +148,10 @@ function hasAnnulledInvoice(order: Pick<Order, "annulled_invoice_at">) {
  */
 function formatReplacementTotal(amount: number | null | undefined): string {
   const n = Number(amount ?? 0);
-  if (Math.abs(n) < 0.005) return "0.00 лв";
-  const abs = Math.abs(n).toLocaleString("bg-BG", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  if (n > 0) return `+${abs} лв`;
-  return `−${abs} лв`;
+  if (Math.abs(n) < 0.005) return formatCurrency(0);
+  const abs = formatCurrency(Math.abs(n));
+  if (n > 0) return `+${abs}`;
+  return `−${abs}`;
 }
 
 interface OrderProduct {
@@ -5041,15 +5041,21 @@ function CreateOrderModal({
           onKeyDown={handleDialogKeyDown}
         >
           <DialogHeader className="shrink-0">
-            <div className="flex items-center justify-between gap-2">
-              <DialogTitle
-                className={isReplacement ? "text-red-600 font-bold" : ""}
-              >
-                {isReplacement ? "🔄 НОВА ЗАМЯНА" : "Нова поръчка"}
-              </DialogTitle>
+            <div className="flex items-center justify-between gap-2 pr-9">
+              <div className="flex items-center gap-2">
+                <DialogTitle>Нова поръчка</DialogTitle>
+                {isReplacement && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                    <RefreshCcw className="h-3 w-3" />
+                    Замяна
+                  </span>
+                )}
+              </div>
               {canCreateReplacement && (
-                <button
+                <Button
                   type="button"
+                  size="sm"
+                  variant={isReplacement ? "default" : "outline"}
                   disabled={
                     !selectedPartner || !isSelectedPartnerRazpiskaEligible
                   }
@@ -5062,11 +5068,6 @@ function CreateOrderModal({
                           ? "Излез от режим Замяна"
                           : "Премини в режим Замяна"
                   }
-                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                    isReplacement
-                      ? "bg-red-600 text-white hover:bg-red-700"
-                      : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                  } disabled:opacity-40 disabled:cursor-not-allowed`}
                   onClick={() => {
                     setIsReplacement((v) => {
                       const next = !v;
@@ -5075,8 +5076,9 @@ function CreateOrderModal({
                     });
                   }}
                 >
-                  🔄 Замяна
-                </button>
+                  <RefreshCcw className="h-4 w-4" />
+                  Замяна
+                </Button>
               )}
             </div>
             <p className="text-xs text-gray-400 mt-1">
@@ -5692,12 +5694,59 @@ function CreateOrderModal({
           {/* Order total */}
           <div className="border-t pt-3 shrink-0">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-gray-500">
-                {validItems.length} артикул{validItems.length !== 1 ? "а" : ""}
-              </span>
-              <span className="text-lg font-bold">
-                Общо: {formatCurrency(orderTotal)}
-              </span>
+              {(() => {
+                if (isReplacement && replacementState) {
+                  // In replacement mode the regular `validItems` array is
+                  // empty — count + sign-applied total come from the
+                  // give/return rows the ReplacementForm owns. Same
+                  // signed math the backend uses to compute orders.total.
+                  const giveCount = replacementState.giveItems.filter(
+                    (i) => i.product_id && Number(i.quantity) > 0,
+                  ).length;
+                  const retCount = replacementState.returnItems.filter(
+                    (i) => i.product_id && Number(i.quantity) > 0,
+                  ).length;
+                  const totalCount = giveCount + retCount;
+                  const giveSum = replacementState.giveItems.reduce(
+                    (s, i) =>
+                      s +
+                      (Number(i.quantity) || 0) * (Number(i.unit_price) || 0),
+                    0,
+                  );
+                  const retSum = replacementState.returnItems.reduce(
+                    (s, i) =>
+                      s +
+                      (Number(i.quantity) || 0) * (Number(i.unit_price) || 0),
+                    0,
+                  );
+                  const diff = giveSum - retSum;
+                  return (
+                    <>
+                      <span className="text-sm text-gray-500">
+                        {totalCount} артикул{totalCount !== 1 ? "а" : ""}
+                        {giveCount > 0 || retCount > 0
+                          ? ` (взема ${giveCount} · връща ${retCount})`
+                          : ""}
+                      </span>
+                      <span className="text-lg font-bold">
+                        Разлика: {diff > 0 ? "+" : diff < 0 ? "−" : ""}
+                        {formatCurrency(Math.abs(diff))}
+                      </span>
+                    </>
+                  );
+                }
+                return (
+                  <>
+                    <span className="text-sm text-gray-500">
+                      {validItems.length} артикул
+                      {validItems.length !== 1 ? "а" : ""}
+                    </span>
+                    <span className="text-lg font-bold">
+                      Общо: {formatCurrency(orderTotal)}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
             {awaitingTotal > 0 && (
               // Awaiting items live on the parent for visibility but their
@@ -5822,9 +5871,6 @@ function CreateOrderModal({
                   <Button
                     onClick={() => void submitCreateOrder()}
                     disabled={!canSubmit}
-                    className={
-                      isReplacement ? "bg-red-600 hover:bg-red-700" : undefined
-                    }
                   >
                     {mutation.isPending ? (
                       <>
@@ -6497,16 +6543,6 @@ export function Orders() {
     }
   };
 
-  const [statusDropdownId, setStatusDropdownId] = useState<number | null>(null);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    if (!statusDropdownId) return;
-    const handler = () => setStatusDropdownId(null);
-    document.addEventListener("click", handler);
-    return () => document.removeEventListener("click", handler);
-  }, [statusDropdownId]);
-
   // Status transitions map
   const statusTransitions: Record<string, { label: string; value: string }[]> =
     {
@@ -6573,8 +6609,8 @@ export function Orders() {
             onClick={() => selectFilter("below_cost")}
             className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
               belowCostOnly
-                ? "bg-amber-500 text-white"
-                : "bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+                ? "bg-[#f97316] text-white"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
             title="Покажи само поръчки с одобрение под доставна цена"
           >
@@ -6587,23 +6623,25 @@ export function Orders() {
           onClick={() => selectFilter("paid_not_taken")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasPaidNotTaken
-              ? "bg-amber-500 text-white"
-              : "bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+              ? "bg-[#f97316] text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само поръчки с платени-невзети редове"
         >
-          💰 Платени невзети
+          <Coins className="h-3.5 w-3.5" />
+          Платени невзети
         </button>
         <button
           onClick={() => selectFilter("awaiting")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasAwaiting
-              ? "bg-gray-500 text-white"
-              : "bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100"
+              ? "bg-[#f97316] text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само поръчки с редове на изчакване (pre-order)"
         >
-          ⏳ На изчакване
+          <Hourglass className="h-3.5 w-3.5" />
+          На изчакване
         </button>
         {/* Econt COD filter — show only orders with a courier shipment
             attached AND a cod_amount > 0. Combined with the new
@@ -6613,24 +6651,26 @@ export function Orders() {
           onClick={() => selectFilter("cod")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasCod
-              ? "bg-violet-500 text-white"
-              : "bg-violet-50 text-violet-800 border border-violet-200 hover:bg-violet-100"
+              ? "bg-[#f97316] text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само поръчки с Еконт товарителница и наложен платеж"
         >
-          🚚 Наложен платеж
+          <Truck className="h-3.5 w-3.5" />
+          Наложен платеж
         </button>
         {/* Замени filter — toggle "show only replacement orders" */}
         <button
           onClick={() => selectFilter("replacement")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             filterReplacement === "only"
-              ? "bg-red-600 text-white"
-              : "bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+              ? "bg-[#f97316] text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само замени"
         >
-          🔄 Замени
+          <RefreshCcw className="h-3.5 w-3.5" />
+          Замени
         </button>
       </div>
 
@@ -6833,18 +6873,17 @@ export function Orders() {
                   filteredOrders.map((order) => (
                     <TableRow
                       key={order.id}
-                      className={`cursor-pointer hover:bg-gray-50 ${
-                        order.is_replacement ? "text-red-700" : ""
-                      }`}
+                      className="cursor-pointer hover:bg-gray-50"
                       onClick={() => setDetailOrder(order)}
                     >
                       <TableCell className="font-mono">
                         {order.is_replacement && (
                           <span
-                            className="mr-1 inline-flex items-center gap-0.5 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700"
+                            className="mr-1.5 inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-700"
                             title="Замяна — двупосочно движение на стока"
                           >
-                            🔄 ЗАМЯНА
+                            <RefreshCcw className="h-2.5 w-2.5" />
+                            Замяна
                           </span>
                         )}
                         <HighlightMatch
@@ -7147,6 +7186,52 @@ export function Orders() {
                             );
                           }
 
+                          // Замяна — total_amount е signed (give − return).
+                          // payments.amount винаги е положителна (auto row на
+                          // create или manual). Сравнението е срещу |total|.
+                          //  • |total| ≈ 0 → same-value swap (warranty), няма
+                          //    плащане → счита се за settled.
+                          //  • paid ≥ |total| → settled (или клиентът е
+                          //    доплатил на +, или ние сме изплатили refund на
+                          //    −).
+                          //  • 0 < paid < |total| → частично (рядко за замяна,
+                          //    но manual payments го допускат).
+                          //  • paid = 0 и |total| > 0 → unsettled. Знакът ни
+                          //    казва кой дължи на кого, така че кешъра не
+                          //    трябва да чете signed total в съседната колона.
+                          if (o.is_replacement) {
+                            const absTotal = Math.abs(total);
+                            if (absTotal < 0.01) {
+                              return (
+                                <Badge
+                                  variant="success"
+                                  title="Замяна без разлика (гаранция)"
+                                >
+                                  Платена
+                                </Badge>
+                              );
+                            }
+                            if (paid >= absTotal - 0.01) {
+                              return <Badge variant="success">Платена</Badge>;
+                            }
+                            if (paid > 0) {
+                              return <Badge variant="warning">Частично</Badge>;
+                            }
+                            if (total < 0) {
+                              return (
+                                <Badge
+                                  variant="destructive"
+                                  title="Дължим refund на клиента"
+                                >
+                                  Дължим refund
+                                </Badge>
+                              );
+                            }
+                            return (
+                              <Badge variant="destructive">Неплатена</Badge>
+                            );
+                          }
+
                           const isPaid = paid >= total - 0.01 && total > 0;
                           const isPartial = paid > 0 && paid < total - 0.01;
 
@@ -7161,62 +7246,60 @@ export function Orders() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {/* Status change dropdown */}
+                          {/* Status change dropdown — radix Portal-based, за
+                              да не бъде клипнато от overflow-auto на Table
+                              wrapper-a (последния ред на таблицата иначе
+                              рендира dropdown-а извън viewport-a и излиза
+                              само горната рамка). Анти-flip на radix го
+                              отваря нагоре когато няма място отдолу. */}
                           {statusTransitions[order.status] && (
-                            <div className="relative">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setStatusDropdownId(
-                                    statusDropdownId === order.id
-                                      ? null
-                                      : order.id,
-                                  );
-                                }}
-                                disabled={
-                                  statusMutation.isPending ||
-                                  fulfillMutation.isPending
-                                }
-                                title="Промени статуса"
-                                aria-label="Промени статуса"
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={(e) => e.stopPropagation()}
+                                  disabled={
+                                    statusMutation.isPending ||
+                                    fulfillMutation.isPending
+                                  }
+                                  title="Промени статуса"
+                                  aria-label="Промени статуса"
+                                >
+                                  <ChevronDown className="h-3.5 w-3.5" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent
+                                align="end"
+                                className="min-w-[160px]"
+                                onClick={(e) => e.stopPropagation()}
                               >
-                                <ChevronDown className="h-3.5 w-3.5" />
-                              </Button>
-                              {statusDropdownId === order.id && (
-                                <div className="absolute right-0 top-full mt-1 z-50 bg-white border rounded-lg shadow-lg py-1 min-w-[160px]">
-                                  {statusTransitions[order.status].map(
-                                    (transition) => (
-                                      <button
-                                        key={transition.value}
-                                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 ${
-                                          transition.value === "cancelled"
-                                            ? "text-red-600"
-                                            : ""
-                                        }`}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          if (
-                                            transition.value === "fulfilled"
-                                          ) {
-                                            handleFulfillClick(order.id);
-                                          } else {
-                                            statusMutation.mutate({
-                                              id: order.id,
-                                              status: transition.value,
-                                            });
-                                          }
-                                          setStatusDropdownId(null);
-                                        }}
-                                      >
-                                        {transition.label}
-                                      </button>
-                                    ),
-                                  )}
-                                </div>
-                              )}
-                            </div>
+                                {statusTransitions[order.status].map(
+                                  (transition) => (
+                                    <DropdownMenuItem
+                                      key={transition.value}
+                                      className={
+                                        transition.value === "cancelled"
+                                          ? "text-red-600 focus:text-red-700"
+                                          : ""
+                                      }
+                                      onSelect={() => {
+                                        if (transition.value === "fulfilled") {
+                                          handleFulfillClick(order.id);
+                                        } else {
+                                          statusMutation.mutate({
+                                            id: order.id,
+                                            status: transition.value,
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      {transition.label}
+                                    </DropdownMenuItem>
+                                  ),
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
 
                           {/* Mark-arrived — awaiting child order whose
