@@ -633,6 +633,15 @@ function OrderDetailModal({
   const [creditNoteOpen, setCreditNoteOpen] = useState(false);
   const [creditNoteReason, setCreditNoteReason] = useState("");
   const [creditNoteRestoreStock, setCreditNoteRestoreStock] = useState(true);
+  // Per-line selection за частично кредитно известие. Keyed по
+  // order_item.id; стойността е { checked, qty }. Default state при
+  // отваряне на dialog-а: всички редове checked, qty = original (full
+  // КИ — backward-compat UX). Когато потребителят свали checkbox или
+  // редактира qty, payload-ът включва `items[]` и backend-ът превключва
+  // в partial mode.
+  const [creditNoteSelection, setCreditNoteSelection] = useState<
+    Record<number, { checked: boolean; qty: number }>
+  >({});
   const [issuedCreditNoteId, setIssuedCreditNoteId] = useState<number | null>(
     null,
   );
@@ -648,6 +657,7 @@ function OrderDetailModal({
     setCreditNoteOpen(false);
     setCreditNoteReason("");
     setCreditNoteRestoreStock(true);
+    setCreditNoteSelection({});
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
     setClientDisplayEgn("");
@@ -667,6 +677,21 @@ function OrderDetailModal({
     // order if the user confirms after switching drawers.
     setPendingFulfillOversell(null);
   }, [order?.id]);
+
+  // Hydrate creditNoteSelection при отваряне на dialog-а: всички items
+  // checked с пълно количество. Това дава "full credit note" UX по
+  // подразбиране (потребителят може да свали checkbox или да редактира
+  // qty за partial). Skip-ваме awaiting линиите — те още не са fulfilled
+  // и не могат да бъдат сторнирани.
+  useEffect(() => {
+    if (!creditNoteOpen) return;
+    const next: Record<number, { checked: boolean; qty: number }> = {};
+    for (const it of items) {
+      if ((it.line_status ?? "normal") === "awaiting") continue;
+      next[it.id] = { checked: true, qty: parseFloat(String(it.quantity)) };
+    }
+    setCreditNoteSelection(next);
+  }, [creditNoteOpen, items]);
 
   // Hydrate the override chip from the server-persisted value on
   // orders.invoice_partner_id, so reopening a drawer that already has an
@@ -1263,6 +1288,9 @@ function OrderDetailModal({
       reason: string;
       include_vat?: boolean;
       restore_stock?: boolean;
+      // Partial — ако присъства, КИ-то е само за избраните редове с
+      // указани количества. Без `items` поведението е пълно сторниране.
+      items?: Array<{ order_item_id: number; quantity: number }>;
     }) => api.post("/invoices/credit-note", data),
     onSuccess: (res) => {
       const cnId = res.data?.id ?? null;
@@ -2702,7 +2730,7 @@ function OrderDetailModal({
           </DialogContent>
         </Dialog>
 
-        {/* Credit Note (сторниране) dialog */}
+        {/* Credit Note (сторниране) dialog — supports partial */}
         <Dialog
           open={creditNoteOpen}
           onOpenChange={(open) => {
@@ -2710,79 +2738,264 @@ function OrderDetailModal({
             if (!open) setCreditNoteReason("");
           }}
         >
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Сторнирай фактура (Кредитно известие)</DialogTitle>
             </DialogHeader>
-            <div className="space-y-3">
-              <p className="text-sm text-gray-600">
-                Към фактура:{" "}
-                <span className="font-mono font-bold">{invoiceLabel}</span>
-              </p>
-              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
-                Ще бъде издадено <strong>Кредитно известие</strong> с
-                отрицателни суми, равни на оригиналната фактура. Документът ще
-                се отвори за печат автоматично.
-              </div>
-              <div className="space-y-1.5">
-                <Label>Основание за издаване *</Label>
-                <Textarea
-                  value={creditNoteReason}
-                  onChange={(e) => setCreditNoteReason(e.target.value)}
-                  placeholder="напр. Върната стока от клиента / Грешно количество"
-                  rows={3}
-                />
-              </div>
-              <label className="flex items-start gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={creditNoteRestoreStock}
-                  onChange={(e) => setCreditNoteRestoreStock(e.target.checked)}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="font-medium">Върни стоката в склада</span>
-                  <span className="block text-xs text-gray-500">
-                    Маркирай, ако стоката физически е върната. За отстъпка или
-                    корекция на цена — остави непровено.
-                  </span>
-                </span>
-              </label>
-              {creditNoteMutation.isError && (
-                <ErrorMessage
-                  message={
-                    (creditNoteMutation.error as any)?.response?.data?.error ||
-                    "Грешка при издаване на Кредитно известие"
-                  }
-                />
-              )}
-            </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setCreditNoteOpen(false);
-                  setCreditNoteReason("");
-                }}
-              >
-                Отказ
-              </Button>
-              <Button
-                onClick={() =>
-                  effectiveInvoiceId &&
-                  creditNoteMutation.mutate({
-                    related_invoice_id: effectiveInvoiceId,
-                    reason: creditNoteReason.trim() || "Сторниране по искане",
-                    restore_stock: creditNoteRestoreStock,
-                  })
+            {(() => {
+              // Items за този dialog — изключваме awaiting линиите.
+              const cnEligible = items.filter(
+                (it) => (it.line_status ?? "normal") !== "awaiting",
+              );
+              const includeVat = Boolean((detail as any)?.include_vat ?? true);
+              // Live preview: сума на избраните × избраното qty × unit_price.
+              // Backend-ът прави същата калкулация (qty × unit_price = net,
+              // 20% VAT, gross = net + vat при include_vat=true).
+              let netSum = 0;
+              for (const it of cnEligible) {
+                const sel = creditNoteSelection[it.id];
+                if (!sel || !sel.checked) continue;
+                const qty = Number.isFinite(sel.qty) ? sel.qty : 0;
+                if (qty <= 0) continue;
+                const unitPrice = parseFloat(String(it.unit_price ?? 0));
+                netSum += qty * unitPrice;
+              }
+              const vatSum = includeVat ? netSum * 0.2 : 0;
+              const grossSum = netSum + vatSum;
+              // Validation: има ли поне 1 ред със checked + qty > 0
+              const hasAnySelected = cnEligible.some((it) => {
+                const sel = creditNoteSelection[it.id];
+                return sel && sel.checked && sel.qty > 0;
+              });
+              // Дали е "full" (всички items checked + full qty) → не
+              // изпращаме `items` (backward-compat path в backend-а).
+              const isFull = cnEligible.every((it) => {
+                const sel = creditNoteSelection[it.id];
+                if (!sel || !sel.checked) return false;
+                const orig = parseFloat(String(it.quantity));
+                return Math.abs(sel.qty - orig) < 0.0001;
+              });
+
+              const toggleAll = (checked: boolean) => {
+                const next: typeof creditNoteSelection = {};
+                for (const it of cnEligible) {
+                  next[it.id] = {
+                    checked,
+                    qty: parseFloat(String(it.quantity)),
+                  };
                 }
-                disabled={creditNoteMutation.isPending}
-                className="bg-amber-600 hover:bg-amber-700"
-              >
-                {creditNoteMutation.isPending ? <Spinner size="sm" /> : null}
-                Издай Кредитно известие
-              </Button>
-            </DialogFooter>
+                setCreditNoteSelection(next);
+              };
+
+              return (
+                <div className="space-y-3">
+                  <p className="text-sm text-gray-600">
+                    Към фактура:{" "}
+                    <span className="font-mono font-bold">{invoiceLabel}</span>
+                  </p>
+                  <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+                    Избери редовете за сторниране и количеството.{" "}
+                    <strong>По подразбиране всички са избрани</strong> (пълно
+                    КИ). За частично — свали отметката или намали qty.
+                  </div>
+
+                  {/* Items table */}
+                  {cnEligible.length === 0 ? (
+                    <div className="text-sm text-gray-500 italic">
+                      Няма артикули за сторниране.
+                    </div>
+                  ) : (
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b text-xs">
+                        <button
+                          type="button"
+                          onClick={() => toggleAll(true)}
+                          className="text-amber-700 hover:underline"
+                        >
+                          Избери всички
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleAll(false)}
+                          className="text-gray-500 hover:underline"
+                        >
+                          Изчисти
+                        </button>
+                      </div>
+                      <ul className="divide-y divide-gray-100 max-h-72 overflow-y-auto">
+                        {cnEligible.map((it) => {
+                          const sel = creditNoteSelection[it.id] ?? {
+                            checked: false,
+                            qty: 0,
+                          };
+                          const orig = parseFloat(String(it.quantity));
+                          const unitPrice = parseFloat(
+                            String(it.unit_price ?? 0),
+                          );
+                          const lineTotal = sel.checked
+                            ? sel.qty * unitPrice
+                            : 0;
+                          const prodName =
+                            it.name_bg ||
+                            it.product?.name_bg ||
+                            it.name_en ||
+                            it.product?.name_en ||
+                            `Продукт #${it.product_id}`;
+                          const unit = it.unit || it.product?.unit || "бр.";
+                          return (
+                            <li
+                              key={it.id}
+                              className="flex items-center gap-2 px-3 py-2 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={sel.checked}
+                                onChange={(e) =>
+                                  setCreditNoteSelection((prev) => ({
+                                    ...prev,
+                                    [it.id]: {
+                                      checked: e.target.checked,
+                                      qty:
+                                        prev[it.id]?.qty ??
+                                        parseFloat(String(it.quantity)),
+                                    },
+                                  }))
+                                }
+                                className="h-4 w-4"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="truncate">{prodName}</div>
+                                <div className="text-xs text-gray-500">
+                                  оригинал: {orig} {unit} ×{" "}
+                                  {formatCurrency(unitPrice)}
+                                </div>
+                              </div>
+                              <input
+                                type="number"
+                                min={0}
+                                max={orig}
+                                step="0.001"
+                                value={sel.qty}
+                                disabled={!sel.checked}
+                                onChange={(e) => {
+                                  const v = parseFloat(e.target.value);
+                                  setCreditNoteSelection((prev) => ({
+                                    ...prev,
+                                    [it.id]: {
+                                      checked: prev[it.id]?.checked ?? true,
+                                      qty: Number.isFinite(v) ? v : 0,
+                                    },
+                                  }));
+                                }}
+                                className="w-20 px-2 py-1 border rounded text-right disabled:bg-gray-100 disabled:text-gray-400"
+                              />
+                              <span className="text-xs text-gray-400 w-8">
+                                {unit}
+                              </span>
+                              <span className="text-right font-medium w-20 text-sm">
+                                {sel.checked ? formatCurrency(lineTotal) : "—"}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Live total */}
+                  <div className="flex items-center justify-end gap-4 text-sm">
+                    <span className="text-gray-500">
+                      Сума за кредитиране{includeVat ? " (с ДДС)" : ""}:
+                    </span>
+                    <span className="text-lg font-bold text-amber-700">
+                      −{formatCurrency(grossSum)}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>Основание за издаване *</Label>
+                    <Textarea
+                      value={creditNoteReason}
+                      onChange={(e) => setCreditNoteReason(e.target.value)}
+                      placeholder="напр. Върната стока от клиента / Грешно количество"
+                      rows={2}
+                    />
+                  </div>
+                  <label className="flex items-start gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={creditNoteRestoreStock}
+                      onChange={(e) =>
+                        setCreditNoteRestoreStock(e.target.checked)
+                      }
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="font-medium">
+                        Върни стоката в склада
+                      </span>
+                      <span className="block text-xs text-gray-500">
+                        Маркирай, ако стоката физически е върната. За отстъпка
+                        или корекция на цена — остави непроверено.
+                      </span>
+                    </span>
+                  </label>
+                  {creditNoteMutation.isError && (
+                    <ErrorMessage
+                      message={
+                        (creditNoteMutation.error as any)?.response?.data
+                          ?.error || "Грешка при издаване на Кредитно известие"
+                      }
+                    />
+                  )}
+
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setCreditNoteOpen(false);
+                        setCreditNoteReason("");
+                      }}
+                    >
+                      Отказ
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        if (!effectiveInvoiceId) return;
+                        // Когато е full (всички checked + full qty) →
+                        // изпращаме без `items` за backward-compat path.
+                        // Иначе градим items[] от selection-а.
+                        const partialItems = isFull
+                          ? undefined
+                          : cnEligible
+                              .filter((it) => {
+                                const sel = creditNoteSelection[it.id];
+                                return sel && sel.checked && sel.qty > 0;
+                              })
+                              .map((it) => ({
+                                order_item_id: it.id,
+                                quantity: creditNoteSelection[it.id].qty,
+                              }));
+                        creditNoteMutation.mutate({
+                          related_invoice_id: effectiveInvoiceId,
+                          reason:
+                            creditNoteReason.trim() || "Сторниране по искане",
+                          restore_stock: creditNoteRestoreStock,
+                          ...(partialItems ? { items: partialItems } : {}),
+                        });
+                      }}
+                      disabled={creditNoteMutation.isPending || !hasAnySelected}
+                      className="bg-amber-600 hover:bg-amber-700"
+                    >
+                      {creditNoteMutation.isPending ? (
+                        <Spinner size="sm" />
+                      ) : null}
+                      {isFull ? "Издай Кредитно известие" : "Издай частично КИ"}
+                    </Button>
+                  </DialogFooter>
+                </div>
+              );
+            })()}
           </DialogContent>
         </Dialog>
       </Dialog>

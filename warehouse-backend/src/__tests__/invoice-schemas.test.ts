@@ -12,6 +12,16 @@ const createCreditNoteSchema = z.object({
   related_invoice_id: z.number().int(),
   reason: z.string().min(1),
   include_vat: z.boolean().optional(),
+  restore_stock: z.boolean().optional(),
+  items: z
+    .array(
+      z.object({
+        order_item_id: z.number().int().positive(),
+        quantity: z.number().positive(),
+      }),
+    )
+    .min(1)
+    .optional(),
 });
 
 describe("createInvoiceSchema", () => {
@@ -98,5 +108,60 @@ describe("createCreditNoteSchema", () => {
         reason: "test",
       }),
     ).toThrow();
+  });
+
+  // Partial credit note — items[] е optional. Когато присъства, всеки
+  // ред трябва да има positive int order_item_id и positive quantity.
+  describe("partial items", () => {
+    it("should accept items array with valid entries", () => {
+      const result = createCreditNoteSchema.parse({
+        related_invoice_id: 1,
+        reason: "Partial return",
+        items: [
+          { order_item_id: 10, quantity: 2 },
+          { order_item_id: 11, quantity: 0.5 },
+        ],
+      });
+      expect(result.items).toHaveLength(2);
+      expect(result.items?.[0].quantity).toBe(2);
+      expect(result.items?.[1].quantity).toBe(0.5);
+    });
+
+    it("should reject empty items array", () => {
+      expect(() =>
+        createCreditNoteSchema.parse({
+          related_invoice_id: 1,
+          reason: "test",
+          items: [],
+        }),
+      ).toThrow();
+    });
+
+    it("should reject zero or negative quantity", () => {
+      expect(() =>
+        createCreditNoteSchema.parse({
+          related_invoice_id: 1,
+          reason: "test",
+          items: [{ order_item_id: 1, quantity: 0 }],
+        }),
+      ).toThrow();
+      expect(() =>
+        createCreditNoteSchema.parse({
+          related_invoice_id: 1,
+          reason: "test",
+          items: [{ order_item_id: 1, quantity: -1 }],
+        }),
+      ).toThrow();
+    });
+
+    it("should reject non-integer order_item_id", () => {
+      expect(() =>
+        createCreditNoteSchema.parse({
+          related_invoice_id: 1,
+          reason: "test",
+          items: [{ order_item_id: 1.5, quantity: 1 }],
+        }),
+      ).toThrow();
+    });
   });
 });

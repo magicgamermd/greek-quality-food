@@ -7,7 +7,10 @@ import {
   PERMISSIONS,
 } from "../lib/permissions.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
-import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
+import {
+  restoreOrderItemsToInventory,
+  restorePartialItemsToInventory,
+} from "../utils/order-stock.js";
 import { formatEurAmount } from "../utils/currency.js";
 import { invoicePaymentMethodSchema } from "../lib/invoice-payment-method.js";
 import fs from "node:fs";
@@ -200,6 +203,23 @@ const createCreditNoteSchema = z.object({
   // Return goods to inventory? Typically true for full reversal (returned goods),
   // false for discount/price-correction credit notes.
   restore_stock: z.boolean().optional(),
+  // НОВО (partial credit note) — ако е подадено, КИ-то покрива САМО
+  // избраните редове с указаните количества (per-line частично сторниране).
+  // Без `items` поведението е backward-compatible: пълно КИ за всички
+  // редове на оригиналната поръчка/фактура.
+  // - order_item_id трябва да е от поръчката, свързана с related_invoice_id
+  // - quantity > 0 AND ≤ оригиналното количество на реда
+  // - цената се заключва на оригиналната (audit safety) — не я приемаме
+  //   от клиента
+  items: z
+    .array(
+      z.object({
+        order_item_id: z.number().int().positive(),
+        quantity: z.number().positive(),
+      }),
+    )
+    .min(1)
+    .optional(),
 });
 
 const sendEmailSchema = z.object({
@@ -1505,6 +1525,107 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             ? body.include_vat
             : original.include_vat;
 
+        // Load order_items на свързаната поръчка ПРЕДИ да решим totals.
+        // За partial КИ имаме нужда от оригиналните количества и цени, за
+        // да validate-нем заявените редове и да изчислим scaled totals.
+        // Skip awaiting lines (миграция 072) — те още не са били доставени
+        // и не трябва да участват в нито full, нито partial КИ.
+        let sourceOrderId: number | null = null;
+        let allOrderItems: any[] = [];
+        if (original.id) {
+          const { rows: orders } = await client.query(
+            "SELECT id FROM orders WHERE invoice_id = $1",
+            [original.id],
+          );
+          if (orders.length > 0) {
+            sourceOrderId = orders[0].id;
+            const { rows: items } = await client.query(
+              `SELECT oi.*,
+                      oi.name_bg_snapshot AS name_bg,
+                      oi.name_en_snapshot AS name_en,
+                      oi.sku_snapshot     AS sku,
+                      p.unit, p.brand
+               FROM order_items oi
+               LEFT JOIN products p ON p.id = oi.product_id
+               WHERE oi.order_id = $1
+                 AND oi.line_status != 'awaiting'
+               ORDER BY oi.id`,
+              [sourceOrderId],
+            );
+            allOrderItems = items;
+          }
+        }
+
+        // Build {selectedItems, totals} according to full vs partial mode.
+        // - Full (no body.items): всички order_items с пълно количество;
+        //   totals идват от parent invoice-а директно (backward-compat).
+        // - Partial (body.items present): validate per-line + изчисли
+        //   totals от избраните items × partial quantity × оригинална
+        //   unit_price.
+        const isPartial = Boolean(body.items && body.items.length > 0);
+        type SelectedItem = any & { _partialQty: number };
+        let selectedItems: SelectedItem[] = [];
+        let totalNet: number;
+        let totalVat: number;
+        let totalGross: number;
+
+        if (isPartial) {
+          if (allOrderItems.length === 0) {
+            throw Object.assign(
+              new Error(
+                "Cannot create partial credit note: invoice has no linked order with items",
+              ),
+              { statusCode: 400 },
+            );
+          }
+          const byId = new Map<number, any>(
+            allOrderItems.map((it) => [it.id, it]),
+          );
+          for (const req of body.items!) {
+            const oi = byId.get(req.order_item_id);
+            if (!oi) {
+              throw Object.assign(
+                new Error(
+                  `order_item ${req.order_item_id} is not part of this invoice`,
+                ),
+                { statusCode: 400 },
+              );
+            }
+            const orig = parseFloat(oi.quantity);
+            if (req.quantity > orig + 0.0001) {
+              throw Object.assign(
+                new Error(
+                  `quantity ${req.quantity} exceeds original ${orig} for order_item ${oi.id}`,
+                ),
+                { statusCode: 400 },
+              );
+            }
+            selectedItems.push({ ...oi, _partialQty: req.quantity });
+          }
+          // Sum net от selected: net = qty × unit_price (unit_price е stored
+          // като net в order_items — invoice-ът добавя ДДС отгоре). VAT 20%
+          // е стандартен в БГ; включен само ако include_vat=true.
+          let sumNet = 0;
+          for (const sel of selectedItems) {
+            sumNet += sel._partialQty * parseFloat(sel.unit_price);
+          }
+          totalNet = -Math.abs(sumNet);
+          totalVat = includeVat ? -Math.abs(sumNet * 0.2) : 0;
+          // Round към 2 знака за стабилност на сравненията в PDF/UI
+          totalNet = Math.round(totalNet * 100) / 100;
+          totalVat = Math.round(totalVat * 100) / 100;
+          totalGross = Math.round((totalNet + totalVat) * 100) / 100;
+        } else {
+          // Full credit note — negate parent invoice totals (backward-compat)
+          selectedItems = allOrderItems.map((it) => ({
+            ...it,
+            _partialQty: parseFloat(it.quantity),
+          }));
+          totalNet = -Math.abs(parseFloat(original.total_net));
+          totalVat = includeVat ? -Math.abs(parseFloat(original.total_vat)) : 0;
+          totalGross = totalNet + totalVat;
+        }
+
         // Generate credit note number atomically
         const {
           rows: [counter],
@@ -1513,13 +1634,6 @@ export default async function invoiceRoutes(app: FastifyInstance) {
            WHERE type = 'credit_note' RETURNING current_val`,
         );
         const cnNumber = `КИ-${String(counter.current_val).padStart(10, "0")}`;
-
-        // Negate amounts from original invoice
-        const totalNet = -Math.abs(parseFloat(original.total_net));
-        const totalVat = includeVat
-          ? -Math.abs(parseFloat(original.total_vat))
-          : 0;
-        const totalGross = totalNet + totalVat;
 
         // Create credit note record
         const {
@@ -1550,44 +1664,37 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           original.partner_id,
         ]);
 
-        // Load original order items for the PDF line items
-        let pdfItems: any[] = [];
-        let sourceOrderId: number | null = null;
-        if (original.id) {
-          // Find the order linked to this invoice
-          const { rows: orders } = await client.query(
-            "SELECT id FROM orders WHERE invoice_id = $1",
-            [original.id],
-          );
-          if (orders.length > 0) {
-            sourceOrderId = orders[0].id;
-            // Skip awaiting lines — see migration 072.
-            const { rows: items } = await client.query(
-              `SELECT oi.*,
-                      oi.name_bg_snapshot AS name_bg,
-                      oi.name_en_snapshot AS name_en,
-                      oi.sku_snapshot     AS sku,
-                      p.unit, p.brand
-               FROM order_items oi
-               LEFT JOIN products p ON p.id = oi.product_id
-               WHERE oi.order_id = $1
-                 AND oi.line_status != 'awaiting'
-               ORDER BY oi.id`,
-              [orders[0].id],
-            );
-            // Negate quantities and amounts for credit note
-            pdfItems = items.map((item: any) => ({
-              ...item,
-              quantity: -Math.abs(parseFloat(item.quantity)),
-              unit_price: parseFloat(item.unit_price),
-              total_price: -Math.abs(parseFloat(item.total_price)),
-            }));
-          }
-        }
+        // Build PDF items от selectedItems — negate quantities + total_price.
+        // unit_price остава положителна (КИ-то показва "цена × −количество").
+        const pdfItems = selectedItems.map((sel) => {
+          const unitPrice = parseFloat(sel.unit_price);
+          const partialQty = sel._partialQty;
+          return {
+            ...sel,
+            quantity: -Math.abs(partialQty),
+            unit_price: unitPrice,
+            total_price: -Math.abs(
+              Math.round(partialQty * unitPrice * 100) / 100,
+            ),
+          };
+        });
 
-        // Optionally restore stock to inventory (full reversal of goods)
-        if (body.restore_stock && sourceOrderId) {
-          await restoreOrderItemsToInventory(client, sourceOrderId);
+        // Optionally restore stock to inventory.
+        // Full mode → restore цялата поръчка (както досега).
+        // Partial mode → restore само избраните количества от селективния
+        // helper, който намира батчите по order_item_id.
+        if (body.restore_stock) {
+          if (isPartial) {
+            await restorePartialItemsToInventory(
+              client,
+              body.items!.map((it) => ({
+                order_item_id: it.order_item_id,
+                quantity: it.quantity,
+              })),
+            );
+          } else if (sourceOrderId) {
+            await restoreOrderItemsToInventory(client, sourceOrderId);
+          }
         }
 
         // Generate PDF
