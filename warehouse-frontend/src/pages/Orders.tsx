@@ -2191,32 +2191,48 @@ function OrderDetailModal({
                   Фактура:
                 </span>
 
-                {/* VAT toggle / indicator */}
+                {/* VAT toggle / indicator — dropdown за компактност, тъй
+                    като "Без ДДС" се ползва рядко. По default = С ДДС. */}
                 {!hasInvoice ? (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
                     <span className="text-xs text-gray-500">ДДС:</span>
-                    <button
-                      type="button"
-                      onClick={() => setIncludeVat(true)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                        includeVat
-                          ? "bg-[#f97316] text-white"
-                          : "bg-white text-gray-600 border hover:bg-gray-100"
-                      }`}
-                    >
-                      С ДДС
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIncludeVat(false)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                        !includeVat
-                          ? "bg-orange-500 text-white"
-                          : "bg-white text-gray-600 border hover:bg-gray-100"
-                      }`}
-                    >
-                      Без ДДС
-                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition ${
+                            includeVat
+                              ? "bg-[#f97316] text-white hover:bg-[#ea580c]"
+                              : "bg-orange-500 text-white hover:bg-orange-600"
+                          }`}
+                          title="Смени режим на ДДС"
+                        >
+                          {includeVat ? "С ДДС" : "Без ДДС"}
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        className="min-w-[120px]"
+                      >
+                        <DropdownMenuItem
+                          onSelect={() => setIncludeVat(true)}
+                          className={
+                            includeVat ? "bg-[#f97316]/10 text-[#f97316]" : ""
+                          }
+                        >
+                          С ДДС
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => setIncludeVat(false)}
+                          className={
+                            !includeVat ? "bg-orange-50 text-orange-700" : ""
+                          }
+                        >
+                          Без ДДС
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
