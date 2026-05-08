@@ -267,6 +267,105 @@ describe("Batch F1 — POST /orders/:id/items/:itemId/handover", () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it("flips pending_pickup → normal (warehouse confirmation, миграция 079)", async () => {
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([{ id: 1, order_id: 10, line_status: "pending_pickup" }]),
+      )
+      .mockResolvedValueOnce(
+        rows([{ id: 1, order_id: 10, line_status: "normal" }]),
+      );
+    mockTransaction.mockImplementationOnce(async (cb: any) =>
+      cb({ query: clientQuery }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/10/items/1/handover",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      id: 1,
+      line_status: "normal",
+    });
+  });
+});
+
+// New 2-step pickup flow added by миграция 079.
+describe("POST /orders/:id/items/:itemId/send-to-warehouse (миграция 079)", () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    mockTransaction.mockReset();
+    mockQuery.mockReset();
+    app = await buildApp();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it("flips paid_not_taken → pending_pickup and emits notification", async () => {
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([{ id: 1, order_id: 10, line_status: "paid_not_taken" }]),
+      )
+      .mockResolvedValueOnce(
+        rows([{ id: 1, order_id: 10, line_status: "pending_pickup" }]),
+      )
+      .mockResolvedValueOnce(rows([])); // notification insert
+    mockTransaction.mockImplementationOnce(async (cb: any) =>
+      cb({ query: clientQuery }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/10/items/1/send-to-warehouse",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      id: 1,
+      line_status: "pending_pickup",
+    });
+    // Notification insert трябва да присъства
+    const notif = clientQuery.mock.calls.find((c: any[]) =>
+      /INSERT INTO notifications/i.test(String(c[0])),
+    );
+    expect(notif).toBeDefined();
+  });
+
+  it("rejects 400 if the line is already pending_pickup or normal", async () => {
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([{ id: 1, order_id: 10, line_status: "pending_pickup" }]),
+      );
+    mockTransaction.mockImplementationOnce(async (cb: any) =>
+      cb({ query: clientQuery }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/10/items/1/send-to-warehouse",
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns 404 when the item does not belong to the given order", async () => {
+    const clientQuery = vi.fn().mockResolvedValueOnce(rows([]));
+    mockTransaction.mockImplementationOnce(async (cb: any) =>
+      cb({ query: clientQuery }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/10/items/999/send-to-warehouse",
+    });
+    expect(res.statusCode).toBe(404);
+  });
 });
 
 describe("Batch F1 — POST /orders/:id/items/:itemId/confirm-from-awaiting", () => {

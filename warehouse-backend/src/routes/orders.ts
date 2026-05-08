@@ -466,6 +466,12 @@ export default async function orderRoutes(app: FastifyInstance) {
       article,
       has_paid_not_taken,
       has_awaiting,
+      has_pending_pickup,
+      // Унифициран view за /warehouse-packing — обединява processing
+      // orders (за стандартно пакетиране) и orders с pending_pickup
+      // линии (клиент дойде за платена-невзета стока). Касиерите/
+      // складовите хора нищо повече не им трябва.
+      warehouse_view,
       // Filter pill — show only orders that have an Econt shipment
       // attached (товарителница). Combined with `has_cod` it filters
       // down to "Еконт с наложен платеж" specifically.
@@ -542,6 +548,26 @@ export default async function orderRoutes(app: FastifyInstance) {
       where += ` AND EXISTS (
         SELECT 1 FROM order_items oi
         WHERE oi.order_id = o.id AND oi.line_status = 'awaiting'
+      )`;
+    }
+    if (has_pending_pickup === "true") {
+      where += ` AND EXISTS (
+        SELECT 1 FROM order_items oi
+        WHERE oi.order_id = o.id AND oi.line_status = 'pending_pickup'
+      )`;
+    }
+    // Warehouse-packing combined view — поръчки в обработка ИЛИ
+    // готови за финално предаване (pending_pickup линии). Не е
+    // composable с другите status/has_* filter-и; ако се подаде
+    // status=processing В ДОПЪЛНЕНИЕ, той вече е в where и
+    // warehouse_view добавя UNION-condition с OR.
+    if (warehouse_view === "true") {
+      where += ` AND (
+        o.status = 'processing'
+        OR EXISTS (
+          SELECT 1 FROM order_items oi
+          WHERE oi.order_id = o.id AND oi.line_status = 'pending_pickup'
+        )
       )`;
     }
     // Econt filter pills.
@@ -2226,13 +2252,14 @@ export default async function orderRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /orders/:id/items/:itemId/handover — Batch F1
-  // Flip a paid_not_taken line to normal (customer has now picked up the
-  // already-deducted goods). No stock change — the deduction happened at
-  // fulfill time with allowNegative=true. Idempotent guard rejects the
-  // call if the line is in any other status.
+  // POST /orders/:id/items/:itemId/send-to-warehouse — миграция 079
+  // Касиерът прехвърля paid_not_taken линия към склада за финално
+  // пакетиране. Линията преминава в pending_pickup; складът ще я види
+  // на /warehouse-packing в отделна "За предаване" секция и след
+  // като опакова, ще извика /handover (по-долу) за финален flip към
+  // normal. Stock не се пипа — изтеглен е още при оригиналния fulfill.
   app.post(
-    "/:id/items/:itemId/handover",
+    "/:id/items/:itemId/send-to-warehouse",
     { preHandler: ordersManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id, itemId } = request.params as {
@@ -2254,7 +2281,68 @@ export default async function orderRoutes(app: FastifyInstance) {
         }
         if (item.line_status !== "paid_not_taken") {
           throw Object.assign(
-            new Error("Only paid_not_taken lines can be handed over."),
+            new Error(
+              "Only paid_not_taken lines can be sent to the warehouse for pickup.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+        const {
+          rows: [updated],
+        } = await client.query(
+          `UPDATE order_items SET line_status = 'pending_pickup'
+           WHERE id = $1 RETURNING *`,
+          [itemId],
+        );
+        // Notification за склада — нов pickup за пакетиране.
+        await client.query(
+          `INSERT INTO notifications (type, message)
+           VALUES ('pickup_ready_for_packaging', $1)`,
+          [
+            `Поръчка #${id} — клиент идва за платена-невзета стока, изпратена към склад`,
+          ],
+        );
+        return updated;
+      });
+    },
+  );
+
+  // POST /orders/:id/items/:itemId/handover — Batch F1 + миграция 079
+  // Финална стъпка: складът потвърждава, че физически е предал стоката
+  // на клиента. Приема линия в pending_pickup (нов 2-step flow) ИЛИ
+  // paid_not_taken (легаси/директна предаване — backward compat за
+  // повиквания от ниско ниво и за стари UI кешове). И двата прехода
+  // отиват в normal. Stock не се пипа — изтеглен е при оригиналния
+  // fulfill (allowNegative=true за paid_not_taken).
+  app.post(
+    "/:id/items/:itemId/handover",
+    { preHandler: ordersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id, itemId } = request.params as {
+        id: string;
+        itemId: string;
+      };
+      return await transaction(async (client) => {
+        const {
+          rows: [item],
+        } = await client.query(
+          `SELECT id, order_id, line_status FROM order_items
+           WHERE id = $1 AND order_id = $2 FOR UPDATE`,
+          [itemId, id],
+        );
+        if (!item) {
+          throw Object.assign(new Error("Order item not found"), {
+            statusCode: 404,
+          });
+        }
+        if (
+          item.line_status !== "pending_pickup" &&
+          item.line_status !== "paid_not_taken"
+        ) {
+          throw Object.assign(
+            new Error(
+              "Only pending_pickup or paid_not_taken lines can be handed over.",
+            ),
             { statusCode: 400 },
           );
         }

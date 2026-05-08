@@ -31,7 +31,10 @@ export function WarehousePacking() {
   const { data: orders = [], isLoading } = useQuery<Order[]>({
     queryKey: ["warehouse-packing"],
     queryFn: () =>
-      api.get("/orders?status=processing").then((r) => {
+      // Унифициран view: orders в processing (стандартно пакетиране) +
+      // orders с pending_pickup линии (клиент дойде за платена-невзета
+      // стока, касиерът ги изпрати към склад за финално опаковане).
+      api.get("/orders?warehouse_view=true").then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
       }),
@@ -110,6 +113,28 @@ export function WarehousePacking() {
 
   const fulfillMutation = useMutation({
     mutationFn: (id: number) => api.post(`/orders/${id}/fulfill`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["warehouse-packing"] });
+      qc.invalidateQueries({ queryKey: ["warehouse-packing-details"] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
+    },
+  });
+
+  // Pickup confirmation — flips pending_pickup → normal per-item.
+  // Складът натиска "Потвърди предаване" след като е опаковал
+  // платените-невзети редове за дошлия клиент. Изпращаме сериен
+  // POST за всеки checked item; при грешка прескачаме останалите.
+  const pickupMutation = useMutation({
+    mutationFn: async (params: { orderId: number; itemIds: number[] }) => {
+      const results = [];
+      for (const itemId of params.itemIds) {
+        const res = await api.post(
+          `/orders/${params.orderId}/items/${itemId}/handover`,
+        );
+        results.push(res.data);
+      }
+      return results;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["warehouse-packing"] });
       qc.invalidateQueries({ queryKey: ["warehouse-packing-details"] });
@@ -218,21 +243,33 @@ export function WarehousePacking() {
           .filter((order) => {
             const items: OrderItem[] = order.items ?? [];
             if (items.length === 0) return true; // still loading details
-            return items.some(
-              (it) => (it.line_status ?? "normal") === "normal",
-            );
+            // Показваме поръчката ако има поне едно "packable" — normal
+            // (стандартно пакетиране, status='processing') ИЛИ
+            // pending_pickup (финално предаване на клиент дошъл за
+            // платена-невзета стока, status='fulfilled').
+            return items.some((it) => {
+              const ls = it.line_status ?? "normal";
+              return ls === "normal" || ls === "pending_pickup";
+            });
           })
           .map((order) => {
             const allItems: OrderItem[] = order.items ?? [];
-            // Only "normal" lines are packed at this stage. paid_not_taken
-            // (already in customer hands) and awaiting (pre-order, not in
-            // stock yet) are surfaced as a small note below so the worker
-            // knows the order has more lines they shouldn't grab.
+            // Pickup mode = финална стъпка от 2-step предаване (миграция
+            // 079). Поръчката е fulfilled, но касиерът е изпратил линия
+            // към склада защото клиент дойде за невзета стока. Складът
+            // вижда само pending_pickup редовете, опакова и натиска
+            // "Потвърди предаване" → handover endpoint.
+            const isPickupMode =
+              order.status === "fulfilled" &&
+              allItems.some((it) => it.line_status === "pending_pickup");
+            const packStatus: OrderItem["line_status"] = isPickupMode
+              ? "pending_pickup"
+              : "normal";
             const items = allItems.filter(
-              (it) => (it.line_status ?? "normal") === "normal",
+              (it) => (it.line_status ?? "normal") === packStatus,
             );
             const skipped = allItems.filter(
-              (it) => (it.line_status ?? "normal") !== "normal",
+              (it) => (it.line_status ?? "normal") !== packStatus,
             );
             const checked = checkedItems[String(order.id)] || new Set();
             const allChecked =
@@ -266,9 +303,15 @@ export function WarehousePacking() {
                           `Партньор #${order.partner_id}`}
                       </p>
                     </div>
-                    <div className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-medium">
-                      В обработка
-                    </div>
+                    {isPickupMode ? (
+                      <div className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm font-medium">
+                        За предаване
+                      </div>
+                    ) : (
+                      <div className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-medium">
+                        В обработка
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -333,19 +376,24 @@ export function WarehousePacking() {
                     </ul>
                   )}
                   {skipped.length > 0 &&
+                    !isPickupMode &&
                     (() => {
                       // Компактен banner — само бройки, без имена. Преди
                       // показвахме детайлен списък, но имената на
                       // paid_not_taken артикули често дублираха normal
                       // редове (същия SKU, две различни line_status-и) и
-                      // объркваха склада. Складът работи само с горния
-                      // списък; банерът е чисто info че има още линии,
-                      // които касата управлява.
+                      // объркваха склада. Banner-ът е чисто info че има
+                      // още линии, които се управляват другаде.
+                      // Не показваме в pickup mode — там горният списък
+                      // обхваща точно това което се обработва.
                       const paidCount = skipped.filter(
                         (it) => it.line_status === "paid_not_taken",
                       ).length;
                       const awaitingCount = skipped.filter(
                         (it) => it.line_status === "awaiting",
+                      ).length;
+                      const pendingCount = skipped.filter(
+                        (it) => it.line_status === "pending_pickup",
                       ).length;
                       const messages: string[] = [];
                       if (paidCount > 0) {
@@ -353,11 +401,17 @@ export function WarehousePacking() {
                           `${paidCount} ${paidCount === 1 ? "артикул е платен — невзет" : "артикула са платени — невзети"} (касата ги управлява)`,
                         );
                       }
+                      if (pendingCount > 0) {
+                        messages.push(
+                          `${pendingCount} ${pendingCount === 1 ? "артикул е изпратен за предаване" : "артикула са изпратени за предаване"} (на склад)`,
+                        );
+                      }
                       if (awaitingCount > 0) {
                         messages.push(
                           `${awaitingCount} ${awaitingCount === 1 ? "артикул чака стока" : "артикула чакат стока"} (pre-order)`,
                         );
                       }
+                      if (messages.length === 0) return null;
                       return (
                         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
                           <span aria-hidden>📌</span>
@@ -449,30 +503,68 @@ export function WarehousePacking() {
                         🏪 Вземане на място
                       </div>
                     )}
-                    <button
-                      onClick={async () => {
-                        const ok = await confirm({
-                          title: `Потвърди изпращане на Поръчка #${order.id}?`,
-                          description:
-                            "Поръчката ще бъде маркирана като изпълнена и ще се отрази в склада.",
-                          confirmText: "Потвърди изпращане",
-                        });
-                        if (ok) fulfillMutation.mutate(order.id);
-                      }}
-                      disabled={fulfillMutation.isPending}
-                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-base font-medium transition-colors ${
-                        allChecked
-                          ? "bg-orange-500 hover:bg-orange-600 text-white"
-                          : "bg-orange-200 hover:bg-orange-300 text-orange-800"
-                      }`}
-                    >
-                      {fulfillMutation.isPending ? (
-                        <Spinner size="sm" />
-                      ) : (
-                        <CheckCircle className="h-5 w-5" />
-                      )}
-                      Потвърди изпращане
-                    </button>
+                    {isPickupMode ? (
+                      <button
+                        onClick={async () => {
+                          // Pickup confirm — натискаме handover за всеки
+                          // checked pending_pickup ред. По default и без
+                          // checked items: предаваме всички.
+                          const itemIds =
+                            checked.size > 0
+                              ? Array.from(checked)
+                              : items.map((it) => it.id);
+                          if (itemIds.length === 0) return;
+                          const ok = await confirm({
+                            title: `Потвърди предаване на Поръчка #${order.id}?`,
+                            description: `Ще се маркират ${itemIds.length} ред(а) като предадени на клиента.`,
+                            confirmText: "Потвърди предаване",
+                          });
+                          if (ok)
+                            pickupMutation.mutate({
+                              orderId: order.id,
+                              itemIds,
+                            });
+                        }}
+                        disabled={pickupMutation.isPending}
+                        className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-base font-medium transition-colors ${
+                          allChecked
+                            ? "bg-amber-500 hover:bg-amber-600 text-white"
+                            : "bg-amber-200 hover:bg-amber-300 text-amber-900"
+                        }`}
+                      >
+                        {pickupMutation.isPending ? (
+                          <Spinner size="sm" />
+                        ) : (
+                          <CheckCircle className="h-5 w-5" />
+                        )}
+                        Потвърди предаване
+                      </button>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: `Потвърди изпращане на Поръчка #${order.id}?`,
+                            description:
+                              "Поръчката ще бъде маркирана като изпълнена и ще се отрази в склада.",
+                            confirmText: "Потвърди изпращане",
+                          });
+                          if (ok) fulfillMutation.mutate(order.id);
+                        }}
+                        disabled={fulfillMutation.isPending}
+                        className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-base font-medium transition-colors ${
+                          allChecked
+                            ? "bg-orange-500 hover:bg-orange-600 text-white"
+                            : "bg-orange-200 hover:bg-orange-300 text-orange-800"
+                        }`}
+                      >
+                        {fulfillMutation.isPending ? (
+                          <Spinner size="sm" />
+                        ) : (
+                          <CheckCircle className="h-5 w-5" />
+                        )}
+                        Потвърди изпращане
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

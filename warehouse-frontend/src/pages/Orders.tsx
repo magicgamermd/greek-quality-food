@@ -1242,20 +1242,24 @@ function OrderDetailModal({
     },
   });
 
-  // Batch F1 — line-status transitions per row (drawer). Both endpoints are
-  // idempotent on the backend; we just refetch after success.
+  // Batch F1 + миграция 079 — line-status transitions per row (drawer).
+  // Когато клиент идва за платена-невзета стока, касиерът натиска
+  // "Изпрати в склад" → backend flip-ва линията към pending_pickup и
+  // тя се появява в /warehouse-packing като отделна "За предаване"
+  // секция. Складът физически опакова и натиска "Потвърди предаване"
+  // там, което извиква /handover (финален flip към normal).
   const handoverMutation = useMutation({
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) =>
-      api.post(`/orders/${orderId}/items/${itemId}/handover`),
+      api.post(`/orders/${orderId}/items/${itemId}/send-to-warehouse`),
     onSuccess: () => {
       invalidateAllOrderRelated();
-      toast.success("Артикулът е предаден");
+      toast.success("Изпратено към склад за предаване");
     },
     onError: (err: any) => {
       toast.error(
         err?.response?.data?.error ??
           err?.response?.data?.message ??
-          "Грешка при предаване на артикула",
+          "Грешка при изпращане към склад",
       );
     },
   });
@@ -1855,10 +1859,18 @@ function OrderDetailModal({
                                         }
                                         disabled={handoverMutation.isPending}
                                         className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                                        title="Маркирай като предадено (paid_not_taken → normal)"
+                                        title="Изпрати към склад за финално опаковане и предаване (paid_not_taken → pending_pickup)"
                                       >
-                                        ✓ Предадено
+                                        📦 Изпрати в склад
                                       </button>
+                                    )}
+                                    {lineStatus === "pending_pickup" && (
+                                      <span
+                                        className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-blue-300 bg-blue-50 text-blue-800"
+                                        title="Изпратено към склад. Складарят ще потвърди предаването."
+                                      >
+                                        🟡 На склад
+                                      </span>
                                     )}
                                     {lineStatus === "awaiting" && (
                                       <button
