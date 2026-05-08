@@ -27,8 +27,10 @@ vi.mock("../services/packing-label-pdf.js", () => ({
 
 import { query } from "../db.js";
 import ordersRoutes from "../routes/orders.js";
+import { generatePackingLabelPdf } from "../services/packing-label-pdf.js";
 
 const mockQuery = vi.mocked(query);
+const mockGen = vi.mocked(generatePackingLabelPdf);
 
 function rows<T>(list: T[]) {
   return { rows: list } as any;
@@ -47,7 +49,10 @@ async function buildApp() {
 describe("GET /orders/:id/packing-label-pdf", () => {
   let app: any;
 
-  beforeEach(() => mockQuery.mockReset());
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockGen.mockClear();
+  });
   afterEach(async () => {
     if (app) await app.close();
   });
@@ -97,6 +102,66 @@ describe("GET /orders/:id/packing-label-pdf", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toMatch(/application\/pdf/);
+  });
+
+  it("passes replacement flag and per-item is_returning to the generator", async () => {
+    // Замяна order (#181 от UI screenshot-a): two give lines, two return
+    // lines. Ензикалият тест е, че route-ът пробутва is_replacement и
+    // is_returning надолу, иначе принтираната бележка не различава "дай"
+    // от "приеми обратно".
+    mockQuery.mockResolvedValueOnce(
+      rows([
+        {
+          id: 181,
+          order_number: 181,
+          partner_id: 9,
+          partner_name: "Физическо лице — краен потребител",
+          econt_city: null,
+          is_replacement: true,
+        },
+      ]),
+    );
+    mockQuery.mockResolvedValueOnce(
+      rows([
+        {
+          id: 5001,
+          order_id: 181,
+          name_bg: "САК ЗА ШАТРА 3*3 NEW Y-804",
+          quantity: "1",
+          unit: "бр.",
+          is_returning: false,
+        },
+        {
+          id: 5002,
+          order_id: 181,
+          name_bg: "САК ЗА ШАТРА 3*4.5 Y-2085",
+          quantity: "1",
+          unit: "бр.",
+          is_returning: true,
+        },
+      ]),
+    );
+
+    app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders/181/packing-label-pdf",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockGen).toHaveBeenCalledTimes(1);
+    const callArg = mockGen.mock.calls[0][0];
+    expect(callArg.isReplacement).toBe(true);
+    expect(callArg.items).toEqual([
+      expect.objectContaining({
+        name_bg: "САК ЗА ШАТРА 3*3 NEW Y-804",
+        is_returning: false,
+      }),
+      expect.objectContaining({
+        name_bg: "САК ЗА ШАТРА 3*4.5 Y-2085",
+        is_returning: true,
+      }),
+    ]);
   });
 
   it("returns a PDF stream for an Econt office order", async () => {

@@ -33,6 +33,9 @@ export interface PackingLabelItem {
   name_bg: string;
   quantity: number | string;
   unit: string;
+  // Замяна: true → линията се връща ОТ клиента; false/undefined → линията
+  // се дава НА клиента. Игнорира се за обикновени поръчки.
+  is_returning?: boolean;
 }
 
 export interface PackingLabelData {
@@ -43,6 +46,9 @@ export interface PackingLabelData {
   deliveryLabel: string;
   notes?: string | null;
   outputPath: string;
+  // Когато true, бележката се рендерира с "ЗАМЯНА" значка и две секции
+  // — "Дай на клиента" и "Приеми обратно" — разделени по `is_returning`.
+  isReplacement?: boolean;
 }
 
 function formatDate(d: Date): string {
@@ -83,10 +89,13 @@ export async function generatePackingLabelPdf(
 
     let y = MARGIN;
     const L = MARGIN;
+    const isReplacement = Boolean(data.isReplacement);
 
     // Order number — big and bold, full width, centred. Visible from
-    // across the warehouse.
-    doc.font("MainBold").fontSize(20).fillColor("#000");
+    // across the warehouse. За замяна слагаме малко по-малък шрифт за
+    // заглавието, така че значката "ЗАМЯНА" да се събере на същия ред.
+    const titleFontSize = isReplacement ? 18 : 20;
+    doc.font("MainBold").fontSize(titleFontSize).fillColor("#000");
     doc.text(`ПОРЪЧКА #${data.orderNumber}`, L, y, {
       width: CONTENT_W,
       align: "center",
@@ -95,6 +104,26 @@ export async function generatePackingLabelPdf(
       doc.heightOfString(`ПОРЪЧКА #${data.orderNumber}`, {
         width: CONTENT_W,
       }) + 4;
+
+    // ЗАМЯНА badge — inverted (white text on black pill), centred under
+    // the title. Без емоджи, защото Roboto няма емоджи глифове и ще
+    // рендерира кутийки на термалния принтер.
+    if (isReplacement) {
+      const badgeText = "ЗАМЯНА";
+      doc.font("MainBold").fontSize(10);
+      const badgeTextW = doc.widthOfString(badgeText);
+      const badgeW = badgeTextW + 14;
+      const badgeH = 14;
+      const badgeX = L + (CONTENT_W - badgeW) / 2;
+      doc.roundedRect(badgeX, y, badgeW, badgeH, 3).fillColor("#000").fill();
+      doc.fillColor("#fff").text(badgeText, badgeX, y + 2, {
+        width: badgeW,
+        align: "center",
+        lineBreak: false,
+      });
+      doc.fillColor("#000");
+      y += badgeH + 3;
+    }
 
     // Heavy divider under the title
     doc
@@ -144,11 +173,6 @@ export async function generatePackingLabelPdf(
       .stroke();
     y += 4;
 
-    // Items header
-    doc.font("MainBold").fontSize(9);
-    doc.text("Артикули:", L, y, { width: CONTENT_W });
-    y += 11;
-
     // Items list — squeeze rows into whatever vertical space remains.
     // Bottom budget reserves room for the "Общо артикули" footer.
     const qtyW = 50;
@@ -156,21 +180,82 @@ export async function generatePackingLabelPdf(
     const bottomBudget = 24;
     const maxY = PAGE_H - MARGIN - bottomBudget;
 
-    doc.font("Main").fontSize(8);
-    let truncated = 0;
-    for (let i = 0; i < data.items.length; i++) {
-      const it = data.items[i];
-      const nameH = doc.heightOfString(it.name_bg, { width: nameW });
-      if (y + nameH > maxY) {
-        truncated = data.items.length - i;
-        break;
+    // Render a list of items; returns the new y and how many were
+    // truncated for lack of vertical space. Caller draws the "още X"
+    // hint after BOTH sections (so we don't waste a line per section).
+    const renderItems = (
+      list: PackingLabelItem[],
+      startY: number,
+    ): { y: number; truncated: number } => {
+      let cursor = startY;
+      doc.font("Main").fontSize(8).fillColor("#000");
+      for (let i = 0; i < list.length; i++) {
+        const it = list[i];
+        const nameH = doc.heightOfString(it.name_bg, { width: nameW });
+        if (cursor + nameH > maxY) {
+          return { y: cursor, truncated: list.length - i };
+        }
+        doc.text(it.name_bg, L, cursor, { width: nameW });
+        doc.text(
+          `${formatQty(it.quantity)} ${it.unit}`,
+          L + nameW + 4,
+          cursor,
+          {
+            width: qtyW,
+            align: "right",
+          },
+        );
+        cursor += Math.max(nameH, 9) + 1;
       }
-      doc.text(it.name_bg, L, y, { width: nameW });
-      doc.text(`${formatQty(it.quantity)} ${it.unit}`, L + nameW + 4, y, {
-        width: qtyW,
-        align: "right",
-      });
-      y += Math.max(nameH, 9) + 1;
+      return { y: cursor, truncated: 0 };
+    };
+
+    let truncated = 0;
+    if (isReplacement) {
+      const giveItems = data.items.filter((i) => !i.is_returning);
+      const returnItems = data.items.filter((i) => Boolean(i.is_returning));
+
+      // Section 1 — give to customer
+      doc.font("MainBold").fontSize(9).fillColor("#000");
+      doc.text("Дай на клиента:", L, y, { width: CONTENT_W });
+      y += 11;
+      if (giveItems.length === 0) {
+        doc.font("Main").fontSize(8).fillColor("#666");
+        doc.text("— няма —", L, y, { width: CONTENT_W });
+        doc.fillColor("#000");
+        y += 10;
+      } else {
+        const r1 = renderItems(giveItems, y);
+        y = r1.y;
+        truncated += r1.truncated;
+      }
+
+      y += 2;
+
+      // Section 2 — return from customer
+      if (y + 11 <= maxY) {
+        doc.font("MainBold").fontSize(9).fillColor("#000");
+        doc.text("Приеми обратно:", L, y, { width: CONTENT_W });
+        y += 11;
+      }
+      if (returnItems.length === 0) {
+        doc.font("Main").fontSize(8).fillColor("#666");
+        doc.text("— няма —", L, y, { width: CONTENT_W });
+        doc.fillColor("#000");
+        y += 10;
+      } else {
+        const r2 = renderItems(returnItems, y);
+        y = r2.y;
+        truncated += r2.truncated;
+      }
+    } else {
+      doc.font("MainBold").fontSize(9);
+      doc.text("Артикули:", L, y, { width: CONTENT_W });
+      y += 11;
+
+      const r = renderItems(data.items, y);
+      y = r.y;
+      truncated = r.truncated;
     }
 
     if (truncated > 0) {
@@ -183,7 +268,8 @@ export async function generatePackingLabelPdf(
       y += 10;
     }
 
-    // Footer divider + total count
+    // Footer divider + total count. За замяна показваме две числа
+    // (give / return), за обикновена поръчка — общо.
     if (y < maxY + 4) {
       doc
         .moveTo(L, y)
@@ -193,8 +279,18 @@ export async function generatePackingLabelPdf(
         .stroke();
       y += 3;
     }
-    doc.font("MainBold").fontSize(9);
-    doc.text(`Общо артикули: ${data.items.length}`, L, PAGE_H - MARGIN - 11, {
+    doc.font("MainBold").fontSize(9).fillColor("#000");
+    let footerText: string;
+    if (isReplacement) {
+      const giveCount = data.items.filter((i) => !i.is_returning).length;
+      const returnCount = data.items.filter((i) =>
+        Boolean(i.is_returning),
+      ).length;
+      footerText = `Дай: ${giveCount}  •  Приеми: ${returnCount}`;
+    } else {
+      footerText = `Общо артикули: ${data.items.length}`;
+    }
+    doc.text(footerText, L, PAGE_H - MARGIN - 11, {
       width: CONTENT_W,
       align: "left",
       lineBreak: false,

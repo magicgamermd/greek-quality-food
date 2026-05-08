@@ -3918,10 +3918,12 @@ export default async function orderRoutes(app: FastifyInstance) {
           name_bg: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
           quantity: it.quantity,
           unit: it.unit || "бр.",
+          is_returning: Boolean(it.is_returning),
         })),
         deliveryLabel,
         notes: order.notes ?? null,
         outputPath,
+        isReplacement: Boolean(order.is_replacement),
       });
 
       const stream = fs.createReadStream(outputPath);
