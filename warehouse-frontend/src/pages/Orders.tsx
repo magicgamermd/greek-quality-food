@@ -2156,7 +2156,20 @@ function OrderDetailModal({
                 detail.status !== "cancelled" && (
                   <Button
                     variant="outline"
-                    onClick={() => onRecordPayment(detail)}
+                    onClick={() =>
+                      // Pass the currently-selected footer payment method
+                      // along with the order. RecordPaymentModal reads
+                      // order.payment_method as the default, instead of
+                      // always defaulting to "В брой".
+                      onRecordPayment({
+                        ...detail,
+                        payment_method: paymentMethod as
+                          | "cash"
+                          | "bank"
+                          | "cod"
+                          | "pos",
+                      })
+                    }
                     className="border-emerald-500 text-emerald-700 hover:bg-emerald-50"
                   >
                     <CreditCard className="h-4 w-4" />

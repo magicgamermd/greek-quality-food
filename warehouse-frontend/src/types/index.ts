@@ -246,6 +246,12 @@ export interface Order {
   // Product replacement — true when this order is a replacement (mixed
   // give/return items). Backend computes total as |give − return|.
   is_replacement?: boolean;
+  // Local override carried by the drawer: когато касиерът е избрал
+  // начин на плащане в footer-а ("Банков превод" / "ПОС" / …) и
+  // отвори "Запиши плащане" dialog-а, тази стойност се ползва като
+  // default за payment_method. Без него dialog-ът върви на "В брой".
+  // Не е persisted в backend-а (само в-сесията), затова е optional.
+  payment_method?: "cash" | "bank" | "cod" | "pos";
   // Search by article — populated by GET /orders?article=...
   matched_items?: Array<{
     name_bg: string;

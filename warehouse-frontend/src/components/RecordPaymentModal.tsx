@@ -51,12 +51,25 @@ const getInvoiceRemaining = (inv: Invoice): number => {
 const getOrderTotalToCollect = (order: Order): number =>
   Number(order.total_amount);
 
-// Default payment method for an order: when the order is configured
-// for Econt delivery with a COD amount (waybill already created OR
-// just COD intent set), the money will arrive via Econt's COD
-// service, so the user is recording a 'наложен платеж' collection.
-// Otherwise default to cash.
-const getDefaultMethodForOrder = (order: Order): "cod" | "cash" | "bank" => {
+// Default payment method for an order:
+// 1. Ако order-ът носи payment_method override (касиерът е избрал
+//    "Банков превод" / "ПОС" в drawer footer-а преди да отвори
+//    dialog-а) — ползваме него.
+// 2. Иначе при Econt-COD доставка money-то се събира от куриера →
+//    'наложен платеж'.
+// 3. Default: "В брой".
+const getDefaultMethodForOrder = (
+  order: Order,
+): "cod" | "cash" | "bank" | "pos" => {
+  const carried = order.payment_method;
+  if (
+    carried === "bank" ||
+    carried === "cash" ||
+    carried === "cod" ||
+    carried === "pos"
+  ) {
+    return carried;
+  }
   const codAmount = Number(order.econt_cod_amount ?? 0);
   if (order.econt_shipment_number || codAmount > 0) return "cod";
   return "cash";
