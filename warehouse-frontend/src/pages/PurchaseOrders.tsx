@@ -284,6 +284,11 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
   const [notes, setNotes] = useState("");
   const [expectedDate, setExpectedDate] = useState("");
   const [items, setItems] = useState<PurchaseOrderItem[]>([emptyItem()]);
+  // Кой product ред е в "редактирай име" режим. По default няма;
+  // кликът на pencil-а до името превключва него; blur/Enter го затваря.
+  const [editingNameProductId, setEditingNameProductId] = useState<
+    number | null
+  >(null);
   // Keyboard flow refs:
   //   - qtyInputRefs: focus the qty cell of the row just added
   //   - productPickerRef: focus the product search after Enter in qty
@@ -656,34 +661,59 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                             {item.product_code || "—"}
                           </TableCell>
                           <TableCell className="text-sm">
-                            <Input
-                              value={item.product_name ?? ""}
-                              disabled={isReadOnly}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setItems((prev) =>
-                                  prev.map((it) =>
-                                    it.product_id === item.product_id
-                                      ? { ...it, product_name: v }
-                                      : it,
-                                  ),
-                                );
-                              }}
-                              onBlur={(e) =>
-                                commitProductName(
-                                  item.product_id,
-                                  e.target.value,
-                                )
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  (e.target as HTMLInputElement).blur();
-                                }
-                              }}
-                              className="h-8 text-sm border-transparent hover:border-gray-300 focus:border-[#f97316]"
-                              title="Редактирай името — промяната се отразява глобално в каталога"
-                            />
+                            {editingNameProductId === item.product_id &&
+                            !isReadOnly ? (
+                              <Input
+                                autoFocus
+                                value={item.product_name ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setItems((prev) =>
+                                    prev.map((it) =>
+                                      it.product_id === item.product_id
+                                        ? { ...it, product_name: v }
+                                        : it,
+                                    ),
+                                  );
+                                }}
+                                onBlur={(e) => {
+                                  commitProductName(
+                                    item.product_id,
+                                    e.target.value,
+                                  );
+                                  setEditingNameProductId(null);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    (e.target as HTMLInputElement).blur();
+                                  } else if (e.key === "Escape") {
+                                    e.preventDefault();
+                                    setEditingNameProductId(null);
+                                  }
+                                }}
+                                className="h-8 text-sm"
+                              />
+                            ) : (
+                              <div className="flex items-center gap-1.5 group">
+                                <span className="flex-1 truncate">
+                                  {item.product_name}
+                                </span>
+                                {!isReadOnly && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingNameProductId(item.product_id)
+                                    }
+                                    className="opacity-40 group-hover:opacity-100 hover:text-[#f97316] p-1 rounded transition"
+                                    title="Редактирай името (промяната се отразява глобално в каталога)"
+                                    aria-label="Редактирай името"
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="text-right text-sm">
                             {(() => {
