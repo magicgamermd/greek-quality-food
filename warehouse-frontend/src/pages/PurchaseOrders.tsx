@@ -430,6 +430,38 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       toast.error(getApiErrorMessage(err, "Грешка при обединяване")),
   });
 
+  // Inline edit на product name. Касиерът често забелязва грешно
+  // изписани имена в каталога точно когато прави заявка ("видях, че
+  // пише ШЕИКЪР вместо ШЕЙКЪР"); вместо да отваря Products page и да
+  // редактира там, го прави direct в реда. Update-ва глобалния
+  // products.name_bg → отразява се навсякъде в системата.
+  const updateProductNameMut = useMutation({
+    mutationFn: ({ id, name_bg }: { id: number; name_bg: string }) =>
+      api.put(`/products/${id}`, { name_bg }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["purchase-orders"] });
+      toast.success("Името е обновено");
+    },
+    onError: (err) =>
+      toast.error(getApiErrorMessage(err, "Грешка при запис на името")),
+  });
+
+  const commitProductName = (productId: number, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    const item = items.find((i) => i.product_id === productId);
+    if (!item) return;
+    if (trimmed === (item.product_name ?? "").trim()) return; // няма промяна
+    // Optimistic local update — items state reflects новото име веднага.
+    setItems((prev) =>
+      prev.map((it) =>
+        it.product_id === productId ? { ...it, product_name: trimmed } : it,
+      ),
+    );
+    updateProductNameMut.mutate({ id: productId, name_bg: trimmed });
+  };
+
   const handleAddProduct = (p: ProductOption["product"]) => {
     setItems((prev) => {
       // Skip if already present — but still focus its qty input so the
@@ -624,7 +656,34 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                             {item.product_code || "—"}
                           </TableCell>
                           <TableCell className="text-sm">
-                            {item.product_name}
+                            <Input
+                              value={item.product_name ?? ""}
+                              disabled={isReadOnly}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setItems((prev) =>
+                                  prev.map((it) =>
+                                    it.product_id === item.product_id
+                                      ? { ...it, product_name: v }
+                                      : it,
+                                  ),
+                                );
+                              }}
+                              onBlur={(e) =>
+                                commitProductName(
+                                  item.product_id,
+                                  e.target.value,
+                                )
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  (e.target as HTMLInputElement).blur();
+                                }
+                              }}
+                              className="h-8 text-sm border-transparent hover:border-gray-300 focus:border-[#f97316]"
+                              title="Редактирай името — промяната се отразява глобално в каталога"
+                            />
                           </TableCell>
                           <TableCell className="text-right text-sm">
                             {(() => {
