@@ -540,21 +540,24 @@ export function Invoices() {
 
   // Status filter pill list — invoices have a Сторнирани/Анулирани pill
   // pair, razpiska doesn't (no КИ/анулиране flow), so trim those out.
+  // "Неплатени" е на първа позиция (default focus за касиера — той най-
+  // често гледа кой не е платил още). "Всички" е накрая като escape
+  // hatch.
   const statusFilters =
     view === "invoices"
       ? [
-          { value: "", label: "Всички" },
           { value: "unpaid", label: "Неплатени" },
           { value: "partial", label: "Частично платени" },
           { value: "paid", label: "Платени" },
           { value: "storno", label: "Сторнирани" },
           { value: "cancelled", label: "Анулирани" },
+          { value: "", label: "Всички" },
         ]
       : [
-          { value: "", label: "Всички" },
           { value: "unpaid", label: "Неплатени" },
           { value: "partial", label: "Частично платени" },
           { value: "paid", label: "Платени" },
+          { value: "", label: "Всички" },
         ];
 
   return (
