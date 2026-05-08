@@ -168,6 +168,10 @@ const ProductPicker = forwardRef<
     const params = new URLSearchParams();
     if (q.trim()) params.set("search", q.trim());
     params.set("limit", "30");
+    // Заявката към доставчик е точно за продукти, които ни нямаме —
+    // active_only=true (default) ги изключваше, затова кешъра виждаше
+    // "Няма резултати" за код от каталога, който още не е постъпил.
+    params.set("active_only", "false");
     const res = await api.get(`/products?${params}`);
     const raw = res.data;
     const data = Array.isArray(raw) ? raw : (raw?.data ?? []);

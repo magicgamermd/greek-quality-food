@@ -257,16 +257,36 @@ export default async function productRoutes(app: FastifyInstance) {
     }
 
     if (trimmedSearch) {
-      // Transliteration-aware: normalize_search() folds Cyrillic→Latin and
-      // collapses glide-y so "bakalia" matches "БАКАЛИЯ" and vice versa.
+      // Transliteration-aware match за names: normalize_search() folds
+      // Cyrillic→Latin (В→v, Е→e и т.н.) и collapses glide-y, така че
+      // "bakalia" match-ва "БАКАЛИЯ".
+      //
+      // SKU са специални: Microinvest export-ът дава кодове като "CHВЕ3045"
+      // където H е латинско, но В и Е са КИРИЛСКИ хомоглифи (изглеждат
+      // еднакво с латинските B и E). normalize_search ги превежда на
+      // "chve3045", което не match-ва интуитивните "chbe" / "chb"
+      // queries. Затова ползваме translate() с homoglyph map:
+      // визуално еднаквите кирилски букви → ASCII еквиваленти (А→A,
+      // В→B, Е→E, К→K, …). Прилага се и на DB колоната, и на input-а,
+      // така че и потребители които пишат с кирилица, и тези с
+      // латиница, попадат на същите products.
+      const HOMOGLYPHS_FROM = "АВЕКМНОРСТХаверстх";
+      const HOMOGLYPHS_TO = "ABEKMHOPCTXaepctx";
       where += ` AND (
         normalize_search(p.name_bg) ILIKE '%' || normalize_search($${paramIdx}) || '%'
         OR normalize_search(p.name_en) ILIKE '%' || normalize_search($${paramIdx}) || '%'
         OR p.sku ILIKE $${paramIdx + 1}
+        OR translate(p.sku, $${paramIdx + 2}, $${paramIdx + 3})
+           ILIKE '%' || translate($${paramIdx}, $${paramIdx + 2}, $${paramIdx + 3}) || '%'
         OR p.brand ILIKE $${paramIdx + 1}
       )`;
-      params.push(trimmedSearch, `%${trimmedSearch}%`);
-      paramIdx += 2;
+      params.push(
+        trimmedSearch,
+        `%${trimmedSearch}%`,
+        HOMOGLYPHS_FROM,
+        HOMOGLYPHS_TO,
+      );
+      paramIdx += 4;
     }
 
     if (supplier_group) {
