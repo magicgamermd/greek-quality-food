@@ -2748,20 +2748,21 @@ function OrderDetailModal({
                 (it) => (it.line_status ?? "normal") !== "awaiting",
               );
               const includeVat = Boolean((detail as any)?.include_vat ?? true);
-              // Live preview: сума на избраните × избраното qty × unit_price.
-              // Backend-ът прави същата калкулация (qty × unit_price = net,
-              // 20% VAT, gross = net + vat при include_vat=true).
-              let netSum = 0;
+              // Live preview: сума = sum(qty × unit_price). order_items
+              // съхраняват unit_price като ГРОС (с ДДС включено) в
+              // целия проект — invoice creation прави totalGross =
+              // SUM(total_price) и нетно се изчислява чрез / 1.2.
+              // Затова grossSum е директно "сума с ДДС" — НЕ добавяме
+              // отново 20% (би било double VAT).
+              let grossSum = 0;
               for (const it of cnEligible) {
                 const sel = creditNoteSelection[it.id];
                 if (!sel || !sel.checked) continue;
                 const qty = Number.isFinite(sel.qty) ? sel.qty : 0;
                 if (qty <= 0) continue;
                 const unitPrice = parseFloat(String(it.unit_price ?? 0));
-                netSum += qty * unitPrice;
+                grossSum += qty * unitPrice;
               }
-              const vatSum = includeVat ? netSum * 0.2 : 0;
-              const grossSum = netSum + vatSum;
               // Validation: има ли поне 1 ред със checked + qty > 0
               const hasAnySelected = cnEligible.some((it) => {
                 const sel = creditNoteSelection[it.id];

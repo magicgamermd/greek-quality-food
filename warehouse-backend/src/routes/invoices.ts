@@ -1602,19 +1602,25 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             }
             selectedItems.push({ ...oi, _partialQty: req.quantity });
           }
-          // Sum net от selected: net = qty × unit_price (unit_price е stored
-          // като net в order_items — invoice-ът добавя ДДС отгоре). VAT 20%
-          // е стандартен в БГ; включен само ако include_vat=true.
-          let sumNet = 0;
+          // Sum gross от selected: order_items.unit_price е stored като
+          // ГРОС цена (с ДДС включено) — всички цени в МЕРТ-М са retail
+          // gross. При invoice creation (по-горе в този файл):
+          //   totalGross = SUM(total_price)
+          //   totalNet   = totalGross / 1.2  (при include_vat=true)
+          //   totalVat   = totalGross - totalNet
+          // Mirror-ваме същия mapping за partial КИ, иначе бихме начислили
+          // ДДС двойно (gross прибавено + 20% още отгоре).
+          let sumGross = 0;
           for (const sel of selectedItems) {
-            sumNet += sel._partialQty * parseFloat(sel.unit_price);
+            sumGross += sel._partialQty * parseFloat(sel.unit_price);
           }
-          totalNet = -Math.abs(sumNet);
-          totalVat = includeVat ? -Math.abs(sumNet * 0.2) : 0;
-          // Round към 2 знака за стабилност на сравненията в PDF/UI
-          totalNet = Math.round(totalNet * 100) / 100;
-          totalVat = Math.round(totalVat * 100) / 100;
-          totalGross = Math.round((totalNet + totalVat) * 100) / 100;
+          sumGross = Math.round(sumGross * 100) / 100;
+          const vatMul = 1.2; // 20% БГ standard, mirror на invoice creation
+          const sumNet = includeVat ? sumGross / vatMul : sumGross;
+          const sumVat = includeVat ? sumGross - sumNet : 0;
+          totalNet = -Math.abs(Math.round(sumNet * 100) / 100);
+          totalVat = -Math.abs(Math.round(sumVat * 100) / 100);
+          totalGross = -Math.abs(sumGross);
         } else {
           // Full credit note — negate parent invoice totals (backward-compat)
           selectedItems = allOrderItems.map((it) => ({

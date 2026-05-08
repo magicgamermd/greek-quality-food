@@ -188,7 +188,7 @@ describe("POST /invoices/credit-note — partial", () => {
     }
   });
 
-  it("partial — single line full quantity → totals from selected", async () => {
+  it("partial — single line full quantity → totals from selected (gross-based)", async () => {
     const clientQuery = buildClientQuery({
       invoice: baseInvoice,
       orderId: 50,
@@ -206,7 +206,7 @@ describe("POST /invoices/credit-note — partial", () => {
         payload: {
           related_invoice_id: 100,
           reason: "Returned 1 fryer",
-          // Refund-ваме целия Fryer (item 12, qty=1, unit=100)
+          // Refund-ваме целия Fryer (item 12, qty=1, unit_price=100 gross)
           items: [{ order_item_id: 12, quantity: 1 }],
         },
       });
@@ -215,16 +215,17 @@ describe("POST /invoices/credit-note — partial", () => {
         String(c[0]).includes("INSERT INTO invoices"),
       );
       const params = insertCall![1] as any[];
-      // 1 × 100 = 100 net, 20% VAT = 20, gross = 120
-      expect(params[2]).toBeCloseTo(-100, 2);
-      expect(params[3]).toBeCloseTo(-20, 2);
-      expect(params[4]).toBeCloseTo(-120, 2);
+      // unit_price=100 е gross (с ДДС). totalGross = 1 × 100 = 100;
+      // totalNet = 100 / 1.2 = 83.33; totalVat = 100 - 83.33 = 16.67
+      expect(params[2]).toBeCloseTo(-83.33, 2);
+      expect(params[3]).toBeCloseTo(-16.67, 2);
+      expect(params[4]).toBeCloseTo(-100, 2);
     } finally {
       await app.close();
     }
   });
 
-  it("partial — multiple lines, fractional quantities", async () => {
+  it("partial — multiple lines, fractional quantities (gross-based)", async () => {
     const clientQuery = buildClientQuery({
       invoice: baseInvoice,
       orderId: 50,
@@ -243,8 +244,8 @@ describe("POST /invoices/credit-note — partial", () => {
           related_invoice_id: 100,
           reason: "Partial",
           items: [
-            { order_item_id: 11, quantity: 1 }, // 1 × 50 = 50
-            { order_item_id: 12, quantity: 0.5 }, // 0.5 × 100 = 50
+            { order_item_id: 11, quantity: 1 }, // 1 × 50 = 50 gross
+            { order_item_id: 12, quantity: 0.5 }, // 0.5 × 100 = 50 gross
           ],
         },
       });
@@ -253,10 +254,46 @@ describe("POST /invoices/credit-note — partial", () => {
         String(c[0]).includes("INSERT INTO invoices"),
       );
       const params = insertCall![1] as any[];
-      // 50 + 50 = 100 net; 20% VAT = 20; gross = 120
+      // totalGross = 100; totalNet = 100/1.2 = 83.33; totalVat = 16.67
+      expect(params[2]).toBeCloseTo(-83.33, 2);
+      expect(params[3]).toBeCloseTo(-16.67, 2);
+      expect(params[4]).toBeCloseTo(-100, 2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("partial with include_vat=false → net = gross (no VAT extracted)", async () => {
+    const noVatInvoice = { ...baseInvoice, include_vat: false };
+    const clientQuery = buildClientQuery({
+      invoice: noVatInvoice,
+      orderId: 50,
+      orderItems: baseOrderItems,
+    });
+    mockTransaction.mockImplementation(async (cb: any) =>
+      cb({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/invoices/credit-note",
+        payload: {
+          related_invoice_id: 100,
+          reason: "Non-VAT partial",
+          items: [{ order_item_id: 12, quantity: 1 }],
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      const insertCall = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("INSERT INTO invoices"),
+      );
+      const params = insertCall![1] as any[];
+      // Без ДДС: totalNet = totalGross = 100; totalVat = 0
       expect(params[2]).toBeCloseTo(-100, 2);
-      expect(params[3]).toBeCloseTo(-20, 2);
-      expect(params[4]).toBeCloseTo(-120, 2);
+      expect(params[3]).toBeCloseTo(0, 2);
+      expect(params[4]).toBeCloseTo(-100, 2);
     } finally {
       await app.close();
     }
