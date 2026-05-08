@@ -3910,11 +3910,23 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
       const outputPath = path.join(pdfDir, `packing-label-${id}.pdf`);
 
+      // Бележката за пакетиране е чисто складов документ — кешъра/
+      // склада физически вземат само "normal" линиите. paid_not_taken
+      // (клиентът вече е платил, ще си го вземе при следващо посещение)
+      // и awaiting (pre-order, чака стока) не отиват в пакета и не
+      // трябва да присъстват в принтираната бележка, иначе склада
+      // случайно ще опакова неправилни количества. UI-ът на /warehouse
+      // вече ги отделя в "Не пакетирай (още)" секция; backend-ът трябва
+      // да следва същата логика и за PDF-а.
+      const packingItems = items.filter(
+        (it: any) => (it.line_status ?? "normal") === "normal",
+      );
+
       await generatePackingLabelPdf({
         orderNumber: order.order_number ?? order.id,
         partnerName: receiver.name || `Партньор #${order.partner_id}`,
         preparedAt: new Date(),
-        items: items.map((it: any) => ({
+        items: packingItems.map((it: any) => ({
           name_bg: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
           quantity: it.quantity,
           unit: it.unit || "бр.",

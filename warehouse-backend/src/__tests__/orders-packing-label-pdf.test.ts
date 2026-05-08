@@ -104,6 +104,76 @@ describe("GET /orders/:id/packing-label-pdf", () => {
     expect(res.headers["content-type"]).toMatch(/application\/pdf/);
   });
 
+  it("excludes paid_not_taken and awaiting lines from the PDF (warehouse only sees normal)", async () => {
+    // Поръчка #185 от screenshot — има 3 normal линии + 1 paid_not_taken.
+    // Складът не пакетира платените невзети (касата ги държи в офис
+    // частта); те не трябва да попадат на принтираната бележка.
+    mockQuery.mockResolvedValueOnce(
+      rows([
+        {
+          id: 185,
+          order_number: 185,
+          partner_id: 9,
+          partner_name: "Физическо лице — краен потребител",
+          econt_city: null,
+        },
+      ]),
+    );
+    mockQuery.mockResolvedValueOnce(
+      rows([
+        {
+          id: 5001,
+          order_id: 185,
+          name_bg: "АБРАЗИВ К-Т 10 КАРТОФОБЕЛАЧКА",
+          quantity: "25",
+          unit: "pcs",
+          line_status: "normal",
+        },
+        {
+          id: 5002,
+          order_id: 185,
+          name_bg: "АБРАЗИВ К-Т X15D1",
+          quantity: "3",
+          unit: "pcs",
+          line_status: "normal",
+        },
+        {
+          id: 5003,
+          order_id: 185,
+          name_bg: "АБРАЗИВ ДЪНО X15C",
+          quantity: "19",
+          unit: "pcs",
+          line_status: "normal",
+        },
+        {
+          id: 5004,
+          order_id: 185,
+          name_bg: "АБРАЗИВ ДЪНО X15C",
+          quantity: "1",
+          unit: "pcs",
+          line_status: "paid_not_taken",
+        },
+      ]),
+    );
+
+    app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders/185/packing-label-pdf",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mockGen).toHaveBeenCalledTimes(1);
+    const callArg = mockGen.mock.calls[0][0];
+    // Само 3-те normal items — paid_not_taken (id 5004) трябва да е
+    // филтрирана преди да стигне PDF generator-а.
+    expect(callArg.items).toHaveLength(3);
+    expect(callArg.items.map((it: any) => it.name_bg)).toEqual([
+      "АБРАЗИВ К-Т 10 КАРТОФОБЕЛАЧКА",
+      "АБРАЗИВ К-Т X15D1",
+      "АБРАЗИВ ДЪНО X15C",
+    ]);
+  });
+
   it("passes replacement flag and per-item is_returning to the generator", async () => {
     // Замяна order (#181 от UI screenshot-a): two give lines, two return
     // lines. Ензикалият тест е, че route-ът пробутва is_replacement и
