@@ -440,6 +440,13 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
   // пише ШЕИКЪР вместо ШЕЙКЪР"); вместо да отваря Products page и да
   // редактира там, го прави direct в реда. Update-ва глобалния
   // products.name_bg → отразява се навсякъде в системата.
+  //
+  // editingNameOriginalRef snapshot-ва оригиналното име когато
+  // user-ът отвори edit mode-а. Ако blur-не с празна стойност,
+  // restoring-ваме snapshot-а (no-op в backend) — защита срещу
+  // accidental clear на имена в каталога.
+  const editingNameOriginalRef = useRef<string>("");
+
   const updateProductNameMut = useMutation({
     mutationFn: ({ id, name_bg }: { id: number; name_bg: string }) =>
       api.put(`/products/${id}`, { name_bg }).then((r) => r.data),
@@ -454,10 +461,22 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
 
   const commitProductName = (productId: number, newName: string) => {
     const trimmed = newName.trim();
-    if (!trimmed) return;
+    const original = editingNameOriginalRef.current;
+    if (!trimmed) {
+      // Празно име — restore-ваме snapshot-а в local state. Без toast
+      // можем да объркаме user-а ако само е натиснал Escape; затова
+      // показваме съобщение само при blur с реално празна стойност.
+      toast.error("Името не може да е празно");
+      setItems((prev) =>
+        prev.map((it) =>
+          it.product_id === productId ? { ...it, product_name: original } : it,
+        ),
+      );
+      return;
+    }
     const item = items.find((i) => i.product_id === productId);
     if (!item) return;
-    if (trimmed === (item.product_name ?? "").trim()) return; // няма промяна
+    if (trimmed === original.trim()) return; // няма промяна
     // Optimistic local update — items state reflects новото име веднага.
     setItems((prev) =>
       prev.map((it) =>
@@ -465,6 +484,14 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
       ),
     );
     updateProductNameMut.mutate({ id: productId, name_bg: trimmed });
+  };
+
+  // Snapshot оригиналното име при влизане в edit mode-а; ползваме го
+  // за restore при празен blur и за no-op detection.
+  const startEditingName = (productId: number) => {
+    const item = items.find((i) => i.product_id === productId);
+    editingNameOriginalRef.current = (item?.product_name ?? "").trim();
+    setEditingNameProductId(productId);
   };
 
   const handleAddProduct = (p: ProductOption["product"]) => {
@@ -689,6 +716,16 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                                     (e.target as HTMLInputElement).blur();
                                   } else if (e.key === "Escape") {
                                     e.preventDefault();
+                                    // Cancel — restore-ваме оригинала в
+                                    // local state, без mutation.
+                                    const orig = editingNameOriginalRef.current;
+                                    setItems((prev) =>
+                                      prev.map((it) =>
+                                        it.product_id === item.product_id
+                                          ? { ...it, product_name: orig }
+                                          : it,
+                                      ),
+                                    );
                                     setEditingNameProductId(null);
                                   }
                                 }}
@@ -703,7 +740,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      setEditingNameProductId(item.product_id)
+                                      startEditingName(item.product_id)
                                     }
                                     className="opacity-40 group-hover:opacity-100 hover:text-[#f97316] p-1 rounded transition"
                                     title="Редактирай името (промяната се отразява глобално в каталога)"
