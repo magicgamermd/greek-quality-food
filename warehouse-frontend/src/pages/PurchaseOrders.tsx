@@ -448,12 +448,51 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
   const editingNameOriginalRef = useRef<string>("");
 
   const updateProductNameMut = useMutation({
-    mutationFn: ({ id, name_bg }: { id: number; name_bg: string }) =>
-      api.put(`/products/${id}`, { name_bg }).then((r) => r.data),
-    onSuccess: () => {
+    mutationFn: ({
+      id,
+      name_bg,
+    }: {
+      id: number;
+      name_bg: string;
+      // previous + isUndo идват само за UI feedback, backend не ги
+      // ползва. previous захранва "Отмени" бутона на toast-а; isUndo
+      // спира verige-та (undo на undo не показваме отново).
+      previous?: string;
+      isUndo?: boolean;
+    }) => api.put(`/products/${id}`, { name_bg }).then((r) => r.data),
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["purchase-orders"] });
-      toast.success("Името е обновено");
+      // Само за основната промяна показваме undo бутон. Самият undo
+      // (vars.isUndo=true) показва обикновен toast — иначе ще се
+      // получи безкраен flip между две версии.
+      if (vars.isUndo || !vars.previous) {
+        toast.success("Името е обновено");
+        return;
+      }
+      const productId = vars.id;
+      const previous = vars.previous;
+      toast.success("Името е обновено", {
+        action: {
+          label: "Отмени",
+          onClick: () => {
+            // Restore old name in UI immediately + ask backend to revert.
+            setItems((prev) =>
+              prev.map((it) =>
+                it.product_id === productId
+                  ? { ...it, product_name: previous }
+                  : it,
+              ),
+            );
+            updateProductNameMut.mutate({
+              id: productId,
+              name_bg: previous,
+              isUndo: true,
+            });
+          },
+        },
+        duration: 8000, // 8 сек, малко повече за рекакция при бързи commit-и
+      });
     },
     onError: (err) =>
       toast.error(getApiErrorMessage(err, "Грешка при запис на името")),
@@ -483,7 +522,11 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
         it.product_id === productId ? { ...it, product_name: trimmed } : it,
       ),
     );
-    updateProductNameMut.mutate({ id: productId, name_bg: trimmed });
+    updateProductNameMut.mutate({
+      id: productId,
+      name_bg: trimmed,
+      previous: original,
+    });
   };
 
   // Snapshot оригиналното име при влизане в edit mode-а; ползваме го
