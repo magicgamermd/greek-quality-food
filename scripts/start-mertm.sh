@@ -158,8 +158,38 @@ case "${1:-start}" in
     fi
     print_status
     ;;
+  --daemon|daemon)
+    # Launchd режим: стартираме всичко, после БЛОКИРАМЕ безкрайно.
+    # Без блокирането, scripts exit-ва с 0 → launchd с KeepAlive=true
+    # го рестартира всеки 10 сек → cycle: kill running services →
+    # start новi → exit → launchd kill again. С блокиране launchd
+    # вижда скрипта като "живо", и единствено рестартира при реален
+    # crash. Tail-ваме backend log-а за визуална обратна връзка в
+    # launchd-stdout.
+    stop_dev_processes
+    ensure_docker
+    start_backend
+    start_frontend
+    start_ai || warn "ai-service did not start (check log)"
+    wait_for_health || warn "Initial health check did not pass — но launchd ще опита отново ако умре."
+    print_status
+    info "Daemon mode — blocking. Press Ctrl+C to stop."
+    # Изчакваме backend tsx процеса. Когато умре, exec-ът завършва →
+    # launchd го рестартира (със стопа отново на цикъла).
+    backend_pid=$(lsof -tiTCP:3004 -sTCP:LISTEN 2>/dev/null | head -1)
+    if [[ -n "$backend_pid" ]]; then
+      # Poll-ваме съществуването на процеса. Без -lt fork-бомба guard.
+      while kill -0 "$backend_pid" 2>/dev/null; do sleep 5; done
+      warn "Backend process $backend_pid died — exit-ва script-а."
+      exit 1
+    else
+      # Backend не стартира изобщо — exit с non-zero, launchd ще опита пак.
+      err "Backend never started — exit-вам."
+      exit 1
+    fi
+    ;;
   *)
-    echo "Usage: $0 [start|--status|--stop]"
+    echo "Usage: $0 [start|--daemon|--status|--stop]"
     exit 2
     ;;
 esac
