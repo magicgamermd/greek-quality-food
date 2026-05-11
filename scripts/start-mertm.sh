@@ -41,11 +41,22 @@ probe_http() {
 
 stop_dev_processes() {
   info "Stopping any existing MERT-M dev processes..."
-  pkill -f "mert-m/warehouse-backend.*tsx" 2>/dev/null || true
-  pkill -f "mert-m/warehouse-frontend.*vite" 2>/dev/null || true
-  pkill -f "mert-m/ai-service.*uvicorn" 2>/dev/null || true
-  # ai-service may have been started with shared-venv path; match by port too
-  if pid=$(lsof -tiTCP:8000 -sTCP:LISTEN 2>/dev/null); then kill -9 "$pid" 2>/dev/null || true; fi
+  # Case-insensitive (-i) защото path-овете на client-а са uppercase
+  # /Applications/MERT-M/..., а development checkout-а е lowercase
+  # /Users/magic/Projects/mert-m/... — без -i pkill пропускаше едната
+  # вариант, оставяше stale tsx → EADDRINUSE crash при следващ старт.
+  pkill -if "mert.m/warehouse-backend.*tsx" 2>/dev/null || true
+  pkill -if "mert.m/warehouse-backend.*nodemon" 2>/dev/null || true
+  pkill -if "mert.m/warehouse-frontend.*vite" 2>/dev/null || true
+  pkill -if "mert.m/ai-service.*uvicorn" 2>/dev/null || true
+  # Port-based kill като safety net — ако path-pattern-ите пропускат
+  # някой процес заради exotic command-line, listening port-ът все
+  # пак идентифицира runaway-а.
+  for port in 3004 5174 8000; do
+    if pid=$(lsof -tiTCP:$port -sTCP:LISTEN 2>/dev/null); then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
   sleep 1
 }
 
