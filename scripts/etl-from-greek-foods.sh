@@ -88,8 +88,11 @@ migrate_table() {
   "${PSQL_TGT[@]}" -c "TRUNCATE $table RESTART IDENTITY CASCADE" >/dev/null
 
   echo "    copying..."
+  # session_replication_role = replica → деактивира FK + trigger checks
+  # за тази сесия. Иначе orders.invoice_id (→ invoices) и similar
+  # циклични FK-та биха блокирали COPY-то.
   "${PSQL_SRC[@]}" -c "COPY (SELECT $cols FROM $table) TO STDOUT" \
-    | "${PSQL_TGT[@]}" -c "COPY $table ($cols) FROM STDIN" >/dev/null
+    | "${PSQL_TGT[@]}" -c "SET session_replication_role = 'replica'; COPY $table ($cols) FROM STDIN; SET session_replication_role = 'origin';" >/dev/null
 
   local tgt_count
   tgt_count=$("${PSQL_TGT[@]}" -tAc "SELECT count(*) FROM $table")
@@ -122,7 +125,9 @@ echo "============================================="
 echo "  Greek Foods → Greek Quality Food  ETL"
 echo "============================================="
 
-# Order matters: parents → children
+# Order matters: parents → children. Foreign-key references принуждават
+# определен ред: products преди batches/inventory, partners преди orders,
+# orders преди invoices/payments, и т.н.
 migrate_table warehouses
 migrate_table categories
 migrate_table partners
@@ -131,6 +136,24 @@ migrate_table products
 migrate_table product_aliases
 migrate_table supplier_aliases
 migrate_table partner_order_objects
+# Складово състояние: входящи стоки → партиди → наличности → бракуване.
+# Това дава консистентен initial state (текущ инвентар на склада).
+#
+# Поръчки / фактури / плащания НЕ ги мигрираме, защото:
+#   1. В Greek Foods backup-а има само 2 тестови поръчки и 2 тестови
+#      фактури — не са production trade history.
+#   2. MERT-M добави NOT NULL колони (order_items.name_bg_snapshot и пр.)
+#      които source-ът няма — INSERT би се провалил без synthetic
+#      populate, а GQF така или иначе започва на чисто за продажбите.
+#
+# audit_events / notifications също се пропускат — те reflect-ват
+# Greek Foods специфични user actions, не са полезни в GQF.
+migrate_table incoming_goods
+migrate_table batches
+migrate_table inventory
+migrate_table incoming_items
+migrate_table stock_writeoffs
+migrate_table document_counters
 
 echo ""
 echo "==> ETL приключен"
@@ -141,7 +164,9 @@ SELECT
   (SELECT count(*) FROM products) AS products,
   (SELECT count(*) FROM categories) AS categories,
   (SELECT count(*) FROM warehouses) AS warehouses,
-  (SELECT count(*) FROM product_aliases) AS product_aliases,
-  (SELECT count(*) FROM supplier_aliases) AS supplier_aliases,
-  (SELECT count(*) FROM partner_order_objects) AS partner_objects;
+  (SELECT count(*) FROM batches) AS batches,
+  (SELECT count(*) FROM inventory) AS inventory,
+  (SELECT count(*) FROM incoming_goods) AS incoming,
+  (SELECT count(*) FROM incoming_items) AS incoming_items,
+  (SELECT count(*) FROM stock_writeoffs) AS writeoffs;
 "
