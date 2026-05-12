@@ -50,7 +50,7 @@ import { EcontShipmentActions } from "@/components/EcontShipmentActions";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { OrderActionsMenu } from "@/components/OrderActionsMenu";
 import { RecordPaymentModal } from "@/components/RecordPaymentModal";
-import type { Order, OrderItem, Partner } from "@/types";
+import type { Order, OrderItem, Partner, PartnerOrderObject } from "@/types";
 import {
   formatDate,
   formatCurrency,
@@ -246,6 +246,11 @@ interface OrderItemRow {
   /** Batch F1 — per-line state. Defaults to 'normal'. paid_not_taken
    *  and awaiting opt out of the oversell guard (split-on-oversell UI). */
   line_status: "normal" | "paid_not_taken" | "awaiting";
+  /** GQF: партида от която се продава (FEFO логика — auto-select
+   *  най-близкия срок на годност). Показва се в "Партида" колоната. */
+  batch_id: string;
+  /** Срок на годност на избраната партида (read-only display). */
+  expiry_date: string;
 }
 
 let orderItemRowSeq = 0;
@@ -265,6 +270,8 @@ const makeOrderItemRow = (
   weight_kg: "",
   original_weight_kg: null,
   line_status: "normal",
+  batch_id: "",
+  expiry_date: "",
   ...overrides,
 });
 
@@ -4132,7 +4139,9 @@ function EditOrderItemsModal({
               <Table className="min-w-[1000px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="min-w-[320px]">Продукт</TableHead>
+                    <TableHead className="min-w-[280px]">Продукт</TableHead>
+                    <TableHead className="w-32">Партида</TableHead>
+                    <TableHead className="w-28">Годност</TableHead>
                     <TableHead className="w-24">Наличност</TableHead>
                     <TableHead className="w-28">Количество</TableHead>
                     <TableHead className="w-32">Ед. цена</TableHead>
@@ -4207,6 +4216,30 @@ function EditOrderItemsModal({
                                 disabled={false}
                               />
                             </ProductSearchBoundary>
+                          )}
+                        </TableCell>
+                        {/* GQF: Партида клетка — auto-select FEFO от backend
+                         *  (read-only display). Натиснете edit drawer за ръчен
+                         *  избор на конкретна партида. */}
+                        <TableCell>
+                          {item.batch_id ? (
+                            <span className="text-xs font-mono text-gray-700">
+                              {item.batch_id}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">
+                              {item.product_id ? "авто (FEFO)" : "—"}
+                            </span>
+                          )}
+                        </TableCell>
+                        {/* GQF: Срок на годност клетка */}
+                        <TableCell>
+                          {item.expiry_date ? (
+                            <span className="text-xs text-gray-700">
+                              {item.expiry_date}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
                           )}
                         </TableCell>
                         <TableCell>
@@ -4657,6 +4690,11 @@ function CreateOrderModal({
     partner_id: "",
     delivery_date: today,
     notes: "",
+    // GQF: Greek Foods полета върнати (Номер на заявка + Обект/магазин)
+    request_number: "",
+    partner_object_id: "",
+    object_name: "",
+    object_code: "",
     econt_delivery_type: "office" as "office" | "address",
     econt_receiver_name: "",
     econt_receiver_phone: "",
@@ -4683,6 +4721,19 @@ function CreateOrderModal({
   // го проверяваме за да не показваме празно място между бележки и
   // total-а в new-order диалога.
   const { econtEnabled } = useAppSettings();
+
+  // GQF: партньорски обекти/магазини (Kaufland Бургас 7 / BGS-007 и пр.).
+  // Зависят от избрания партньор — refetch при смяна на partner_id.
+  const { data: partnerObjects = [] } = useQuery<PartnerOrderObject[]>({
+    queryKey: ["partner-order-objects", form.partner_id],
+    queryFn: () =>
+      api.get(`/partners/${form.partner_id}/order-objects`).then((r) => {
+        const d = r.data;
+        return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+      }),
+    enabled: Boolean(form.partner_id),
+    staleTime: 60_000,
+  });
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
   const [stockWarnings, setStockWarnings] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -4855,6 +4906,10 @@ function CreateOrderModal({
         partner_id: "",
         delivery_date: today,
         notes: "",
+        request_number: "",
+        partner_object_id: "",
+        object_name: "",
+        object_code: "",
         econt_delivery_type: "office",
         econt_receiver_name: "",
         econt_receiver_phone: "",
@@ -5229,6 +5284,12 @@ function CreateOrderModal({
           payment_method: replacementState.paymentMethod,
           delivery_date: form.delivery_date || undefined,
           notes: form.notes || undefined,
+          request_number: form.request_number.trim() || undefined,
+          partner_object_id: form.partner_object_id
+            ? Number(form.partner_object_id)
+            : undefined,
+          object_name: form.object_name.trim() || undefined,
+          object_code: form.object_code.trim() || undefined,
         });
         return res;
       }
@@ -5237,6 +5298,12 @@ function CreateOrderModal({
         partner_id: Number(form.partner_id),
         delivery_date: form.delivery_date || undefined,
         notes: form.notes || undefined,
+        request_number: form.request_number.trim() || undefined,
+        partner_object_id: form.partner_object_id
+          ? Number(form.partner_object_id)
+          : undefined,
+        object_name: form.object_name.trim() || undefined,
+        object_code: form.object_code.trim() || undefined,
         econt_receiver_name: form.econt_receiver_name.trim() || undefined,
         econt_receiver_phone: form.econt_receiver_phone.trim() || undefined,
         econt_delivery_type: form.econt_city
@@ -5263,6 +5330,8 @@ function CreateOrderModal({
           discount_percent: Number(i.discount_percent) || 0,
           // Batch F1 — tunnel through the line state set by split-on-oversell
           line_status: (i as any).line_status ?? undefined,
+          // GQF: партида (ако не е подадена, backend FEFO я избира)
+          batch_id: i.batch_id ? Number(i.batch_id) : undefined,
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
         status: vars.asQuoted ? "quoted" : undefined,
@@ -5733,6 +5802,91 @@ function CreateOrderModal({
               </div>
             </div>
 
+            {/* GQF: Номер на заявка + Обект/магазин (от Greek Foods).
+             * За вериги клиенти (Kaufland Бургас 7 / BGS-007) — позволява
+             * избор от съществуващи обекти или ad-hoc въвеждане. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Номер на заявка</Label>
+                <Input
+                  value={form.request_number}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, request_number: e.target.value }))
+                  }
+                  placeholder="напр. Z-2026-0412"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Обект / магазин</Label>
+                <select
+                  value={form.partner_object_id || "__new__"}
+                  disabled={!form.partner_id}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "__new__") {
+                      setForm((f) => ({
+                        ...f,
+                        partner_object_id: "",
+                        object_name: "",
+                        object_code: "",
+                      }));
+                      return;
+                    }
+                    const sel = partnerObjects.find(
+                      (obj) => String(obj.id) === val,
+                    );
+                    setForm((f) => ({
+                      ...f,
+                      partner_object_id: val,
+                      object_name: sel?.object_name ?? "",
+                      object_code: sel?.object_code ?? "",
+                    }));
+                  }}
+                  className="w-full h-9 rounded-md border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] disabled:bg-gray-50 disabled:text-gray-400"
+                >
+                  <option value="__new__">
+                    {form.partner_id
+                      ? "+ Нов обект..."
+                      : "Избери партньор първо..."}
+                  </option>
+                  {partnerObjects.map((obj) => (
+                    <option key={obj.id} value={String(obj.id)}>
+                      {obj.object_code
+                        ? `${obj.object_code} · ${obj.object_name}`
+                        : obj.object_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {!form.partner_object_id && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Име на обект</Label>
+                  <Input
+                    value={form.object_name}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, object_name: e.target.value }))
+                    }
+                    placeholder="напр. Kaufland Бургас 7"
+                    disabled={!form.partner_id}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Код на обект</Label>
+                  <Input
+                    value={form.object_code}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, object_code: e.target.value }))
+                    }
+                    placeholder="напр. BGS-007"
+                    disabled={!form.partner_id}
+                  />
+                </div>
+              </div>
+            )}
+
             {isReplacement ? (
               <ReplacementForm
                 partnerId={form.partner_id}
@@ -5855,9 +6009,11 @@ function CreateOrderModal({
                     <Table className="min-w-[1000px]">
                       <TableHeader>
                         <TableRow>
-                          <TableHead className="min-w-[320px]">
+                          <TableHead className="min-w-[280px]">
                             Продукт
                           </TableHead>
+                          <TableHead className="w-32">Партида</TableHead>
+                          <TableHead className="w-28">Годност</TableHead>
                           <TableHead className="w-24">Наличност</TableHead>
                           <TableHead className="w-28">Количество</TableHead>
                           <TableHead className="w-32">Ед. цена</TableHead>
@@ -5946,6 +6102,30 @@ function CreateOrderModal({
                                       disabled={!form.partner_id}
                                     />
                                   </ProductSearchBoundary>
+                                )}
+                              </TableCell>
+                              {/* GQF: Партида (auto FEFO от backend) */}
+                              <TableCell>
+                                {item.batch_id ? (
+                                  <span className="text-xs font-mono text-gray-700">
+                                    {item.batch_id}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-gray-400">
+                                    {item.product_id ? "авто (FEFO)" : "—"}
+                                  </span>
+                                )}
+                              </TableCell>
+                              {/* GQF: Срок на годност */}
+                              <TableCell>
+                                {item.expiry_date ? (
+                                  <span className="text-xs text-gray-700">
+                                    {item.expiry_date}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-gray-400">
+                                    —
+                                  </span>
                                 )}
                               </TableCell>
                               <TableCell>
