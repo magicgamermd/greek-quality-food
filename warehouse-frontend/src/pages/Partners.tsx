@@ -266,14 +266,14 @@ function PartnerModal({
                     value={form.eik}
                     onChange={(e) => set("eik", e.target.value)}
                     onBlur={(e) => handleEikLookup(e.target.value)}
-                    className={eikWarning ? "border-orange-400" : ""}
+                    className={eikWarning ? "border-violet-400" : ""}
                   />
                   {eikLoading && (
                     <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-gray-400" />
                   )}
                 </div>
                 {eikWarning && (
-                  <p className="text-xs text-orange-500">{eikWarning}</p>
+                  <p className="text-xs text-violet-500">{eikWarning}</p>
                 )}
                 {eikAutoFilled && (
                   <p className="text-xs text-green-600 flex items-center gap-1">
@@ -598,7 +598,7 @@ function PriceGroupSelect({
       // actionable; the native caret keeps it keyboard-accessible.
       className={
         "px-2 py-0.5 rounded-full border text-xs font-semibold cursor-pointer " +
-        "focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:ring-offset-1 " +
+        "focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:ring-offset-1 " +
         (isEmpty
           ? "border-gray-200 bg-gray-50 text-gray-400"
           : "border-transparent bg-blue-100 text-blue-700")
@@ -811,7 +811,7 @@ export function Partners() {
                               p.category === "Магазин"
                                 ? "bg-blue-50 text-blue-700"
                                 : p.category === "Ресторант"
-                                  ? "bg-orange-50 text-orange-700"
+                                  ? "bg-violet-50 text-violet-700"
                                   : "bg-gray-50 text-gray-600"
                             }`}
                           >
@@ -847,7 +847,7 @@ export function Partners() {
                         {p.phone ? (
                           <a
                             href={`tel:${p.phone}`}
-                            className="flex items-center gap-1 text-sm text-[#f97316] hover:underline"
+                            className="flex items-center gap-1 text-sm text-[#6c3dff] hover:underline"
                           >
                             <Phone className="h-3.5 w-3.5" />
                             {p.phone}
@@ -860,7 +860,7 @@ export function Partners() {
                         {p.email ? (
                           <a
                             href={`mailto:${p.email}`}
-                            className="flex items-center gap-1 text-sm text-[#f97316] hover:underline"
+                            className="flex items-center gap-1 text-sm text-[#6c3dff] hover:underline"
                           >
                             <Mail className="h-3.5 w-3.5" />
                             {p.email}
@@ -871,7 +871,7 @@ export function Partners() {
                       </TableCell>
                       <TableCell className="text-center">
                         {orderCounts[p.id] ? (
-                          <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-semibold bg-[#f97316]/10 text-[#f97316]">
+                          <span className="inline-flex items-center justify-center min-w-[28px] px-2 py-0.5 rounded-full text-xs font-semibold bg-[#6c3dff]/10 text-[#6c3dff]">
                             {orderCounts[p.id]}
                           </span>
                         ) : (

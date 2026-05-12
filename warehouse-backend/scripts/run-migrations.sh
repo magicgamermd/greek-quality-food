@@ -79,10 +79,10 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   # lock (same key every run). ON_ERROR_STOP + single-transaction means a
   # single failing statement rolls back the whole migration file.
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction <<SQL
-SELECT pg_advisory_lock(hashtext('mertm_migrations'));
+SELECT pg_advisory_lock(hashtext('greekquality_migrations'));
 \i $migration
 INSERT INTO _migrations (${migration_key_column}) VALUES ('$filename');
-SELECT pg_advisory_unlock(hashtext('mertm_migrations'));
+SELECT pg_advisory_unlock(hashtext('greekquality_migrations'));
 SQL
   echo "OK: $filename"
 done

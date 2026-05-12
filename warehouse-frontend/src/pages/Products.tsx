@@ -810,7 +810,7 @@ export function Products() {
           }}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             stockTab === "active"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -818,7 +818,7 @@ export function Products() {
           <span
             className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
               stockTab === "active"
-                ? "bg-[#f97316]/10 text-[#f97316]"
+                ? "bg-[#6c3dff]/10 text-[#6c3dff]"
                 : "bg-gray-100 text-gray-500"
             }`}
           >
@@ -832,7 +832,7 @@ export function Products() {
           }}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             stockTab === "catalog"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -840,7 +840,7 @@ export function Products() {
           <span
             className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
               stockTab === "catalog"
-                ? "bg-[#f97316]/10 text-[#f97316]"
+                ? "bg-[#6c3dff]/10 text-[#6c3dff]"
                 : "bg-gray-100 text-gray-500"
             }`}
           >
@@ -940,7 +940,7 @@ export function Products() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5 text-[#f97316]" />
+            <Package className="h-5 w-5 text-[#6c3dff]" />
             {pagination.total} продукта
           </CardTitle>
         </CardHeader>

@@ -136,13 +136,13 @@ function AdjustStockModal({
                 hasDelta
                   ? deltaNum > 0
                     ? "border-emerald-500 text-emerald-700"
-                    : "border-orange-500 text-orange-700"
+                    : "border-violet-500 text-violet-700"
                   : ""
               }
             />
             {hasDelta && (
               <div
-                className={`text-xs ${deltaNum > 0 ? "text-emerald-700" : "text-orange-700"}`}
+                className={`text-xs ${deltaNum > 0 ? "text-emerald-700" : "text-violet-700"}`}
               >
                 Ново общо:{" "}
                 <span className="font-mono font-medium">
@@ -312,7 +312,7 @@ export function Inventory() {
             }}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === key
-                ? "border-[#f97316] text-[#f97316]"
+                ? "border-[#6c3dff] text-[#6c3dff]"
                 : "border-transparent text-gray-500 hover:text-gray-700"
             }`}
           >

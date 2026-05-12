@@ -1,7 +1,7 @@
 {
-  "name": "mertm-warehouse-backend",
+  "name": "greekquality-warehouse-backend",
   "version": "1.0.0",
-  "description": "MERT-M Warehouse Management System — Backend API",
+  "description": "Greek Quality Food Warehouse Management System — Backend API",
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon --watch src --ext ts,js,json --exec tsx src/index.ts",

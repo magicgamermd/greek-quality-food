@@ -493,7 +493,7 @@ function ItemRow({
                 ...base,
                 minHeight: "40px",
                 borderColor: "#d1d5db",
-                "&:hover": { borderColor: "#f97316" },
+                "&:hover": { borderColor: "#6c3dff" },
                 boxShadow: "none",
               }),
             }}
@@ -520,7 +520,7 @@ function ItemRow({
                     </div>
                     <div className="text-right ml-4 shrink-0">
                       <div
-                        className={`text-sm font-medium ${price > 0 ? "text-emerald-600" : "text-orange-500"}`}
+                        className={`text-sm font-medium ${price > 0 ? "text-emerald-600" : "text-violet-500"}`}
                       >
                         {price > 0 ? formatCurrency(price) : "без цена"}
                       </div>

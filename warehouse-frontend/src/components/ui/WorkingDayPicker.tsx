@@ -292,11 +292,11 @@ export function WorkingDayPicker({
                       ? "text-gray-300 line-through cursor-not-allowed"
                       : "",
                     isSelected
-                      ? "bg-[#f97316] text-white font-semibold"
+                      ? "bg-[#6c3dff] text-white font-semibold"
                       : !blocked && inMonth
                         ? advisory
-                          ? "hover:bg-orange-50 text-gray-500 italic"
-                          : "hover:bg-orange-50 text-gray-900"
+                          ? "hover:bg-violet-50 text-gray-500 italic"
+                          : "hover:bg-violet-50 text-gray-900"
                         : "",
                   ].join(" ")}
                 >

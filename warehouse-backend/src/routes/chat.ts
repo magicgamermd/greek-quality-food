@@ -402,7 +402,7 @@ export default async function chatRoutes(app: FastifyInstance) {
 
     const systemPrompt =
       body.system_context ||
-      "You are the МЕРТ-М warehouse assistant. Respond in Bulgarian.";
+      "You are the Greek Quality Food warehouse assistant. Respond in Bulgarian.";
 
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },

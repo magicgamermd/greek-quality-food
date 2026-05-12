@@ -270,7 +270,7 @@ export function Settings() {
           onClick={() => setActiveTab("categories")}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === "categories"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -280,7 +280,7 @@ export function Settings() {
           onClick={() => setActiveTab("users")}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === "users"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -290,7 +290,7 @@ export function Settings() {
           onClick={() => setActiveTab("company")}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === "company"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -300,7 +300,7 @@ export function Settings() {
           onClick={() => setActiveTab("documents")}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === "documents"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -310,7 +310,7 @@ export function Settings() {
           onClick={() => setActiveTab("fiscal")}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === "fiscal"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -320,7 +320,7 @@ export function Settings() {
           onClick={() => setActiveTab("export")}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === "export"
-              ? "border-[#f97316] text-[#f97316]"
+              ? "border-[#6c3dff] text-[#6c3dff]"
               : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
@@ -331,7 +331,7 @@ export function Settings() {
             onClick={() => setActiveTab("data")}
             className={`px-4 py-2 font-medium border-b-2 transition-colors ${
               activeTab === "data"
-                ? "border-[#f97316] text-[#f97316]"
+                ? "border-[#6c3dff] text-[#6c3dff]"
                 : "border-transparent text-gray-500 hover:text-gray-700"
             }`}
           >
@@ -685,7 +685,7 @@ export function Settings() {
                     onChange={(e) =>
                       handleCompanyFormChange("company_name", e.target.value)
                     }
-                    placeholder="Например: МЕРТ-М ЕООД"
+                    placeholder="Например: Greek Quality Food ЕООД"
                   />
                 </div>
 
@@ -936,7 +936,7 @@ export function Settings() {
                         fiscal_enabled: e.target.checked,
                       }))
                     }
-                    className="h-4 w-4 rounded border-gray-300 text-[#f97316]"
+                    className="h-4 w-4 rounded border-gray-300 text-[#6c3dff]"
                   />
                   <Label htmlFor="fiscal_enabled">
                     Активирай фискален принтер
@@ -1068,7 +1068,7 @@ export function Settings() {
                             fiscal_auto_print: e.target.checked,
                           }))
                         }
-                        className="h-4 w-4 rounded border-gray-300 text-[#f97316]"
+                        className="h-4 w-4 rounded border-gray-300 text-[#6c3dff]"
                       />
                       <Label htmlFor="fiscal_auto_print">
                         Автоматичен печат при изпълнение на поръчка
@@ -1201,7 +1201,7 @@ export function Settings() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <FileSpreadsheet className="h-5 w-5 text-[#f97316]" />
+              <FileSpreadsheet className="h-5 w-5 text-[#6c3dff]" />
               Експорт за Делта Про
             </CardTitle>
           </CardHeader>

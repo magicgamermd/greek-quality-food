@@ -9,13 +9,13 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-[#f97316] text-white hover:bg-[#ea580c] focus-visible:ring-[#f97316]",
+          "bg-[#6c3dff] text-white hover:bg-[#5a30d9] focus-visible:ring-[#6c3dff]",
         destructive: "bg-red-500 text-white hover:bg-red-600",
         outline:
           "border border-gray-300 bg-white hover:bg-gray-50 text-gray-700",
         secondary: "bg-gray-100 text-gray-900 hover:bg-gray-200",
         ghost: "hover:bg-gray-100 text-gray-700",
-        link: "text-[#f97316] underline-offset-4 hover:underline",
+        link: "text-[#6c3dff] underline-offset-4 hover:underline",
       },
       size: {
         // Touch-friendly sizes — desktop default 40px, mobile minimum 44px via CSS

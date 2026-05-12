@@ -85,7 +85,7 @@ function pillClass(active: boolean) {
   return (
     "px-3 py-1 rounded-full text-xs font-medium border transition-colors " +
     (active
-      ? "bg-[#f97316] text-white border-[#f97316]"
+      ? "bg-[#6c3dff] text-white border-[#6c3dff]"
       : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50")
   );
 }

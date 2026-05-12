@@ -312,7 +312,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
                       className={
                         hasPriorPayments
                           ? "font-medium"
-                          : "font-bold text-[#f97316]"
+                          : "font-bold text-[#6c3dff]"
                       }
                     >
                       {formatCurrency(gross)}
@@ -328,7 +328,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
                       </div>
                       <div className="flex justify-between pt-1 border-t border-gray-200">
                         <span className="text-gray-500">Остатък:</span>
-                        <span className="font-bold text-[#f97316]">
+                        <span className="font-bold text-[#6c3dff]">
                           {formatCurrency(remaining)}
                         </span>
                       </div>
@@ -369,7 +369,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
                       className={
                         hasPriorPayments
                           ? "font-medium"
-                          : "font-bold text-[#f97316]"
+                          : "font-bold text-[#6c3dff]"
                       }
                     >
                       {formatCurrency(total)}
@@ -385,7 +385,7 @@ export function RecordPaymentModal({ open, onClose, context }: Props) {
                       </div>
                       <div className="flex justify-between pt-1 border-t border-amber-200">
                         <span className="text-gray-500">Остатък:</span>
-                        <span className="font-bold text-[#f97316]">
+                        <span className="font-bold text-[#6c3dff]">
                           {formatCurrency(remaining)}
                         </span>
                       </div>

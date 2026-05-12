@@ -1,11 +1,15 @@
 @import "tailwindcss";
 
+/* Greek Foods Platform branding (наследена). Greek Quality Food ползва
+ * същата лилава палитра, защото е sibling брандиран продукт на същия
+ * дистрибутор (хранителни стоки, нетрайни). MERT-M (kitchen equipment)
+ * ползва оранжев accent — нашият е лилавият. */
 @theme {
-  --color-sidebar: #0a1628;
-  --color-sidebar-hover: #0f1f3a;
-  --color-accent: #f97316;
-  --color-accent-hover: #ea580c;
-  --color-accent-light: #fff7ed;
+  --color-sidebar: #1a1a2e;
+  --color-sidebar-hover: #16213e;
+  --color-accent: #6c3dff;
+  --color-accent-hover: #5a30d9;
+  --color-accent-light: #ede9ff;
 }
 
 /* ── iOS mobile / PWA fixes ────────────────────────────────────────────
@@ -27,7 +31,7 @@
 
 html,
 body {
-  background-color: #0a1628; /* matches theme-color meta */
+  background-color: #0b1222; /* matches theme-color meta */
   margin: 0;
 }
 

@@ -41,7 +41,7 @@ export function BakaliqLoader({ text = "Сканиране..." }: { text?: strin
           `}</style>
           <radialGradient id="bl-oliveGrad" cx="35%" cy="35%" r="65%">
             <stop offset="0%" stopColor="#fbbf77" />
-            <stop offset="100%" stopColor="#ea580c" />
+            <stop offset="100%" stopColor="#5a30d9" />
           </radialGradient>
         </defs>
 
@@ -51,7 +51,7 @@ export function BakaliqLoader({ text = "Сканиране..." }: { text?: strin
           cy="90"
           r="50"
           fill="none"
-          stroke="#fff7ed"
+          stroke="#ede9ff"
           strokeWidth="3"
         />
 
@@ -61,7 +61,7 @@ export function BakaliqLoader({ text = "Сканиране..." }: { text?: strin
           cy="90"
           r="50"
           fill="none"
-          stroke="#0a1628"
+          stroke="#1a1a2e"
           strokeWidth="4"
           strokeDasharray="90 224"
           strokeLinecap="round"
@@ -74,7 +74,7 @@ export function BakaliqLoader({ text = "Сканиране..." }: { text?: strin
           cy="90"
           r="42"
           fill="none"
-          stroke="#f97316"
+          stroke="#6c3dff"
           strokeWidth="2"
           strokeDasharray="40 223"
           strokeLinecap="round"
@@ -83,12 +83,12 @@ export function BakaliqLoader({ text = "Сканиране..." }: { text?: strin
 
         {/* Floating spark */}
         <g className="bl-float-olive">
-          <path d="M 114 62 Q 130 50 135 65 Q 120 75 114 62 Z" fill="#f97316" />
+          <path d="M 114 62 Q 130 50 135 65 Q 120 75 114 62 Z" fill="#6c3dff" />
           <path d="M 108 70 Q 92 58 88 70 Q 100 82 108 70 Z" fill="#fb923c" />
           <path
             d="M 103 76 Q 106 66 114 62"
             fill="none"
-            stroke="#0a1628"
+            stroke="#1a1a2e"
             strokeWidth="2"
             strokeLinecap="round"
           />
@@ -117,12 +117,12 @@ export function BakaliqLoader({ text = "Сканиране..." }: { text?: strin
           fontFamily="system-ui, -apple-system, sans-serif"
           fontWeight="800"
           fontSize="14"
-          fill="#0a1628"
+          fill="#1a1a2e"
           textAnchor="middle"
           letterSpacing="2"
           className="bl-pulse-text"
         >
-          МЕРТ-М
+          GQF
         </text>
       </svg>
 

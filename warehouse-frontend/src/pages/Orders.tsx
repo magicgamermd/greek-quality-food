@@ -526,7 +526,7 @@ const ProductSearch = forwardRef<
               </div>
               <div className="text-right ml-4 shrink-0">
                 <div
-                  className={`text-sm font-medium ${price > 0 ? "text-emerald-600" : "text-orange-500"}`}
+                  className={`text-sm font-medium ${price > 0 ? "text-emerald-600" : "text-violet-500"}`}
                 >
                   {price > 0 ? formatCurrency(price) : "без цена"}
                 </div>
@@ -1968,14 +1968,14 @@ function OrderDetailModal({
                             isDone
                               ? "bg-green-500 text-white"
                               : isCurrent
-                                ? "bg-[#f97316] text-white ring-2 ring-[#f97316]/30"
+                                ? "bg-[#6c3dff] text-white ring-2 ring-[#6c3dff]/30"
                                 : "bg-gray-200 text-gray-400"
                           }`}
                         >
                           {isDone ? "✓" : idx + 1}
                         </div>
                         <div
-                          className={`text-[10px] mt-0.5 ${isCurrent ? "font-bold text-[#f97316]" : isDone ? "text-green-600" : "text-gray-400"}`}
+                          className={`text-[10px] mt-0.5 ${isCurrent ? "font-bold text-[#6c3dff]" : isDone ? "text-green-600" : "text-gray-400"}`}
                         >
                           {step.label}
                         </div>
@@ -2199,8 +2199,8 @@ function OrderDetailModal({
                           type="button"
                           className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition ${
                             includeVat
-                              ? "bg-[#f97316] text-white hover:bg-[#ea580c]"
-                              : "bg-orange-500 text-white hover:bg-orange-600"
+                              ? "bg-[#6c3dff] text-white hover:bg-[#5a30d9]"
+                              : "bg-violet-500 text-white hover:bg-violet-600"
                           }`}
                           title="Смени режим на ДДС"
                         >
@@ -2215,7 +2215,7 @@ function OrderDetailModal({
                         <DropdownMenuItem
                           onSelect={() => setIncludeVat(true)}
                           className={
-                            includeVat ? "bg-[#f97316]/10 text-[#f97316]" : ""
+                            includeVat ? "bg-[#6c3dff]/10 text-[#6c3dff]" : ""
                           }
                         >
                           С ДДС
@@ -2223,7 +2223,7 @@ function OrderDetailModal({
                         <DropdownMenuItem
                           onSelect={() => setIncludeVat(false)}
                           className={
-                            !includeVat ? "bg-orange-50 text-orange-700" : ""
+                            !includeVat ? "bg-violet-50 text-violet-700" : ""
                           }
                         >
                           Без ДДС
@@ -2237,8 +2237,8 @@ function OrderDetailModal({
                     <span
                       className={`px-2.5 py-1 text-xs font-medium rounded-md ${
                         invoiceIncludesVat !== false
-                          ? "bg-[#f97316]/10 text-[#f97316] border border-[#f97316]/20"
-                          : "bg-orange-50 text-orange-600 border border-orange-200"
+                          ? "bg-[#6c3dff]/10 text-[#6c3dff] border border-[#6c3dff]/20"
+                          : "bg-violet-50 text-violet-600 border border-violet-200"
                       }`}
                     >
                       {invoiceIncludesVat !== false ? "С ДДС" : "Без ДДС"}
@@ -2256,7 +2256,7 @@ function OrderDetailModal({
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-[#f97316] text-white hover:bg-[#ea580c]"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-[#6c3dff] text-white hover:bg-[#5a30d9]"
                           title="Смени начин на плащане"
                         >
                           {INVOICE_PAYMENT_METHOD_LABELS[paymentMethod] ??
@@ -2276,7 +2276,7 @@ function OrderDetailModal({
                               onSelect={() => setPaymentMethod(opt.value)}
                               className={
                                 isCurrent
-                                  ? "bg-[#f97316]/10 text-[#f97316]"
+                                  ? "bg-[#6c3dff]/10 text-[#6c3dff]"
                                   : ""
                               }
                             >
@@ -2300,7 +2300,7 @@ function OrderDetailModal({
                         regenerateInvoiceMutation.isPending
                       }
                       onClick={() => setPaymentMenuOpen((v) => !v)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-[#f97316]/10 text-[#f97316] border border-[#f97316]/20 hover:bg-[#f97316]/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-[#6c3dff]/10 text-[#6c3dff] border border-[#6c3dff]/20 hover:bg-[#6c3dff]/20 disabled:opacity-60 disabled:cursor-not-allowed"
                       title="Натисни за смяна — фактурата ще се регенерира"
                     >
                       {regenerateInvoiceMutation.isPending ? (
@@ -2333,7 +2333,7 @@ function OrderDetailModal({
                               }}
                               className={`w-full text-left px-3 py-1.5 text-xs ${
                                 isCurrent
-                                  ? "bg-[#f97316]/10 text-[#f97316] cursor-default"
+                                  ? "bg-[#6c3dff]/10 text-[#6c3dff] cursor-default"
                                   : "text-gray-700 hover:bg-gray-100"
                               }`}
                             >
@@ -2389,7 +2389,7 @@ function OrderDetailModal({
                       <Button
                         onClick={() => invoiceMutation.mutate(detail.id)}
                         disabled={invoiceMutation.isPending}
-                        className="bg-[#f97316] hover:bg-[#ea580c]"
+                        className="bg-[#6c3dff] hover:bg-[#5a30d9]"
                       >
                         {invoiceMutation.isPending ? (
                           <Spinner size="sm" />
@@ -2458,7 +2458,7 @@ function OrderDetailModal({
                         onClick={() =>
                           void openInvoicePdf(effectiveInvoiceId!, 1)
                         }
-                        className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5 rounded-r-none border-r-0"
+                        className="border-[#6c3dff]/40 text-[#6c3dff] hover:bg-[#6c3dff]/5 rounded-r-none border-r-0"
                         title="Принтирай 1 копие (Оригинал)"
                       >
                         <FileText className="h-4 w-4" />
@@ -2468,7 +2468,7 @@ function OrderDetailModal({
                         <DropdownMenuTrigger asChild>
                           <Button
                             variant="outline"
-                            className="border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/5 rounded-l-none px-2"
+                            className="border-[#6c3dff]/40 text-[#6c3dff] hover:bg-[#6c3dff]/5 rounded-l-none px-2"
                             title="Избери брой копия"
                             aria-label="Избери брой копия"
                           >
@@ -2500,7 +2500,7 @@ function OrderDetailModal({
                         regenerateInvoiceMutation.mutate(effectiveInvoiceId!)
                       }
                       disabled={regenerateInvoiceMutation.isPending}
-                      className="text-orange-600 border-orange-300 hover:bg-orange-50 px-2"
+                      className="text-violet-600 border-violet-300 hover:bg-violet-50 px-2"
                       title="Регенерирай фактурата (пресъздай PDF)"
                       aria-label="Регенерирай фактурата"
                     >
@@ -4056,7 +4056,7 @@ function EditOrderItemsModal({
 
   return (
     <Dialog open={open} onOpenChange={onClose} modal={false}>
-      <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col border-2 border-[#f97316] shadow-[0_0_0_1px_rgba(249,115,22,0.25)]">
+      <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col border-2 border-[#6c3dff] shadow-[0_0_0_1px_rgba(249,115,22,0.25)]">
         <DialogHeader className="shrink-0">
           <DialogTitle>
             Редакция на поръчка #{order.order_number ?? order.id}
@@ -5597,7 +5597,7 @@ function CreateOrderModal({
               <div className="flex items-center gap-2">
                 <DialogTitle>Нова поръчка</DialogTitle>
                 {isReplacement && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700">
                     <RefreshCcw className="h-3 w-3" />
                     Замяна
                   </span>
@@ -6122,7 +6122,7 @@ function CreateOrderModal({
                                   }}
                                   className={`w-28 ${
                                     noPrice
-                                      ? "border-orange-400"
+                                      ? "border-violet-400"
                                       : belowCost
                                         ? "border-amber-500 text-amber-700"
                                         : ""
@@ -6135,7 +6135,7 @@ function CreateOrderModal({
                                   }
                                 />
                                 {noPrice && (
-                                  <div className="text-xs text-orange-500 mt-0.5">
+                                  <div className="text-xs text-violet-500 mt-0.5">
                                     задай цена
                                   </div>
                                 )}
@@ -6436,7 +6436,7 @@ function CreateOrderModal({
             )}
 
             {hasStockIssues && !confirmOverstock && (
-              <div className="flex items-start gap-2 p-2 bg-orange-50 border border-orange-200 rounded text-sm text-orange-700 mb-2">
+              <div className="flex items-start gap-2 p-2 bg-violet-50 border border-violet-200 rounded text-sm text-violet-700 mb-2">
                 <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                 <div>
                   <div className="font-medium mb-1">
@@ -7269,7 +7269,7 @@ export function Orders() {
               !hasAwaiting &&
               !hasCod &&
               filterReplacement !== "only"
-                ? "bg-[#f97316] text-white"
+                ? "bg-[#6c3dff] text-white"
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
           >
@@ -7281,7 +7281,7 @@ export function Orders() {
             onClick={() => selectFilter("below_cost")}
             className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
               belowCostOnly
-                ? "bg-[#f97316] text-white"
+                ? "bg-[#6c3dff] text-white"
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
             title="Покажи само поръчки с одобрение под доставна цена"
@@ -7295,7 +7295,7 @@ export function Orders() {
           onClick={() => selectFilter("paid_not_taken")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasPaidNotTaken
-              ? "bg-[#f97316] text-white"
+              ? "bg-[#6c3dff] text-white"
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само поръчки с платени-невзети редове"
@@ -7307,7 +7307,7 @@ export function Orders() {
           onClick={() => selectFilter("awaiting")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasAwaiting
-              ? "bg-[#f97316] text-white"
+              ? "bg-[#6c3dff] text-white"
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само поръчки с редове на изчакване (pre-order)"
@@ -7323,7 +7323,7 @@ export function Orders() {
           onClick={() => selectFilter("cod")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             hasCod
-              ? "bg-[#f97316] text-white"
+              ? "bg-[#6c3dff] text-white"
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само поръчки с Еконт товарителница и наложен платеж"
@@ -7336,7 +7336,7 @@ export function Orders() {
           onClick={() => selectFilter("replacement")}
           className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
             filterReplacement === "only"
-              ? "bg-[#f97316] text-white"
+              ? "bg-[#6c3dff] text-white"
               : "bg-gray-100 text-gray-600 hover:bg-gray-200"
           }`}
           title="Покажи само замени"
@@ -7553,7 +7553,7 @@ export function Orders() {
                       <TableCell className="font-mono">
                         {order.is_replacement && (
                           <span
-                            className="mr-1.5 inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-700"
+                            className="mr-1.5 inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700"
                             title="Замяна — двупосочно движение на стока"
                           >
                             <RefreshCcw className="h-2.5 w-2.5" />
@@ -7657,7 +7657,7 @@ export function Orders() {
                                     ? "text-amber-700 line-through decoration-amber-500/60"
                                     : order.invoice_status === "cancelled"
                                       ? "text-red-600 line-through"
-                                      : "text-[#f97316]"
+                                      : "text-[#6c3dff]"
                                 }`}
                                 title="Отвори в страница Фактури"
                               >
@@ -7672,7 +7672,7 @@ export function Orders() {
                                   );
                                 }}
                                 disabled={regenerateInvoiceMutation.isPending}
-                                className="text-gray-400 hover:text-[#f97316] p-0.5 rounded"
+                                className="text-gray-400 hover:text-[#6c3dff] p-0.5 rounded"
                                 title="Регенерирай фактура"
                               >
                                 <RefreshCw
@@ -7696,7 +7696,7 @@ export function Orders() {
                                     );
                                   }
                                 }}
-                                className="flex items-center gap-1 text-xs text-orange-700 hover:underline font-mono w-fit"
+                                className="flex items-center gap-1 text-xs text-violet-700 hover:underline font-mono w-fit"
                                 title="Отвори кредитното известие"
                               >
                                 <RotateCcw className="h-3 w-3" />
@@ -7766,7 +7766,7 @@ export function Orders() {
                                     e.stopPropagation();
                                     handleInvoicePrint(order.invoice_id!);
                                   }}
-                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition"
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 transition"
                                   title="Печат фактура"
                                 >
                                   <FileText className="h-3 w-3" />
@@ -8029,7 +8029,7 @@ export function Orders() {
                                 }}
                                 title="Запиши плащане"
                                 aria-label="Запиши плащане"
-                                className="text-orange-600 hover:bg-orange-50"
+                                className="text-violet-600 hover:bg-violet-50"
                               >
                                 <CreditCard className="h-3.5 w-3.5" />
                               </Button>

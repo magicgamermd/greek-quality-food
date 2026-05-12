@@ -37,8 +37,8 @@ export function NoteCard({ note, selected, onToggle, onOpen }: NoteCardProps) {
       className={
         "relative flex flex-col bg-white border rounded-lg p-3 cursor-pointer transition-all " +
         (selected
-          ? "border-[#f97316] ring-2 ring-orange-200"
-          : "border-gray-200 hover:border-[#f97316]")
+          ? "border-[#6c3dff] ring-2 ring-violet-200"
+          : "border-gray-200 hover:border-[#6c3dff]")
       }
       onClick={onOpen}
     >
@@ -48,7 +48,7 @@ export function NoteCard({ note, selected, onToggle, onOpen }: NoteCardProps) {
         className={
           "absolute top-2.5 right-2.5 w-4 h-4 rounded border-[1.5px] flex items-center justify-center " +
           (selected
-            ? "bg-[#f97316] border-[#f97316]"
+            ? "bg-[#6c3dff] border-[#6c3dff]"
             : "bg-white border-gray-300")
         }
         onClick={(e) => {
@@ -68,11 +68,11 @@ export function NoteCard({ note, selected, onToggle, onOpen }: NoteCardProps) {
         <span className="text-[11px] text-gray-400">{tsLabel}</span>
       </div>
 
-      <ul className="m-0 pl-3.5 text-xs leading-[1.55] text-gray-700 marker:text-[#f97316]">
+      <ul className="m-0 pl-3.5 text-xs leading-[1.55] text-gray-700 marker:text-[#6c3dff]">
         {visible.map((item, idx) => (
           <li key={`${item.product_id}-${idx}`}>
             {item.product_name ?? `Продукт #${item.product_id}`}{" "}
-            <span className="font-semibold text-[#f97316]">
+            <span className="font-semibold text-[#6c3dff]">
               ×{item.quantity}
             </span>
           </li>
@@ -84,7 +84,7 @@ export function NoteCard({ note, selected, onToggle, onOpen }: NoteCardProps) {
           {note.item_count} продукта · {note.total_quantity} бр.
         </span>
         {hidden > 0 && (
-          <span className="text-[#f97316] font-semibold">+ {hidden} още →</span>
+          <span className="text-[#6c3dff] font-semibold">+ {hidden} още →</span>
         )}
       </div>
     </div>

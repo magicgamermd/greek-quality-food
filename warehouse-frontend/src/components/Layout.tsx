@@ -229,7 +229,7 @@ export function Layout() {
       {/* Sidebar */}
       <aside
         className={cn(
-          "flex flex-col bg-[#0a1628] text-white transition-all duration-300 shrink-0",
+          "flex flex-col bg-[#1a1a2e] text-white transition-all duration-300 shrink-0",
           isMobile
             ? cn(
                 "fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300",
@@ -242,12 +242,14 @@ export function Layout() {
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/10">
-          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-[#f97316] shrink-0">
-            <span className="text-white font-bold text-sm">ММ</span>
+          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-[#6c3dff] shrink-0">
+            <span className="text-white font-bold text-sm">GQ</span>
           </div>
           {(sidebarOpen || isMobile) && (
             <div className="overflow-hidden">
-              <p className="font-bold text-sm leading-tight">МЕРТ-М</p>
+              <p className="font-bold text-sm leading-tight">
+                Greek Quality Food
+              </p>
               <p className="text-xs text-white/50">Складова система</p>
             </div>
           )}
@@ -267,7 +269,7 @@ export function Layout() {
                 cn(
                   "flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors group relative",
                   isActive
-                    ? "bg-[#f97316] text-white"
+                    ? "bg-[#6c3dff] text-white"
                     : "text-white/70 hover:bg-white/10 hover:text-white",
                 )
               }
@@ -289,7 +291,7 @@ export function Layout() {
         <div className="border-t border-white/10 p-4">
           {sidebarOpen || isMobile ? (
             <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-full bg-[#f97316] flex items-center justify-center shrink-0">
+              <div className="h-8 w-8 rounded-full bg-[#6c3dff] flex items-center justify-center shrink-0">
                 <span className="text-xs font-bold">
                   {user?.name?.charAt(0)}
                 </span>
@@ -334,7 +336,7 @@ export function Layout() {
 
           {/* Breadcrumb */}
           <div className="flex items-center gap-1 text-sm text-gray-500">
-            <span>МЕРТ-М</span>
+            <span>Greek Quality Food</span>
             <ChevronRight className="h-4 w-4" />
             <span className="text-gray-900 font-medium">
               {currentRouteName}
@@ -368,7 +370,7 @@ export function Layout() {
                   {unreadCount > 0 && (
                     <button
                       onClick={() => markAllReadMutation.mutate()}
-                      className="flex items-center gap-1 text-xs text-[#f97316] hover:underline"
+                      className="flex items-center gap-1 text-xs text-[#6c3dff] hover:underline"
                       disabled={markAllReadMutation.isPending}
                     >
                       <CheckCheck className="h-3.5 w-3.5" />
@@ -408,7 +410,7 @@ export function Layout() {
                                   className={`mt-1 text-xs shrink-0 ${
                                     n.is_read
                                       ? "text-gray-400"
-                                      : "text-[#f97316]"
+                                      : "text-[#6c3dff]"
                                   }`}
                                   aria-hidden="true"
                                 >
@@ -448,7 +450,7 @@ export function Layout() {
 
           {/* User */}
           <div className="flex items-center gap-2 text-sm">
-            <div className="h-8 w-8 rounded-full bg-[#f97316] flex items-center justify-center">
+            <div className="h-8 w-8 rounded-full bg-[#6c3dff] flex items-center justify-center">
               <span className="text-xs text-white font-bold">
                 {user?.name?.charAt(0)}
               </span>

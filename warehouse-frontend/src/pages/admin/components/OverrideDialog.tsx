@@ -61,7 +61,7 @@ export function OverrideDialog({
           </button>
           <button
             onClick={() => onConfirm(reason.trim() || null)}
-            className="px-3 py-1.5 rounded bg-[#f97316] text-white text-sm"
+            className="px-3 py-1.5 rounded bg-[#6c3dff] text-white text-sm"
           >
             Потвърди
           </button>

@@ -210,7 +210,7 @@ const ProductPicker = forwardRef<
           ...base,
           minHeight: "40px",
           borderColor: "#d1d5db",
-          "&:hover": { borderColor: "#f97316" },
+          "&:hover": { borderColor: "#6c3dff" },
           boxShadow: "none",
         }),
       }}
@@ -720,7 +720,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                       .filter((i) => i.product_id > 0)
                       .map((item, idx) => (
                         <TableRow key={`${item.product_id}-${idx}`}>
-                          <TableCell className="font-mono font-bold text-[#f97316]">
+                          <TableCell className="font-mono font-bold text-[#6c3dff]">
                             {item.product_code || "—"}
                           </TableCell>
                           <TableCell className="text-sm">
@@ -779,7 +779,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                                       onClick={() =>
                                         startEditingName(item.product_id)
                                       }
-                                      className="opacity-40 group-hover:opacity-100 hover:text-[#f97316] p-1 rounded transition"
+                                      className="opacity-40 group-hover:opacity-100 hover:text-[#6c3dff] p-1 rounded transition"
                                       title="Редактирай името (промяната се отразява глобално в каталога)"
                                       aria-label="Редактирай името"
                                     >
@@ -916,7 +916,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                 Свързано приемане на стока:{" "}
                 <a
                   href={`/incoming?id=${detail.incoming_goods_id}`}
-                  className="text-[#f97316] underline"
+                  className="text-[#6c3dff] underline"
                 >
                   #{detail.incoming_goods_id}
                 </a>
@@ -1121,7 +1121,7 @@ export default function PurchaseOrders() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Package className="h-6 w-6 text-[#f97316]" />
+            <Package className="h-6 w-6 text-[#6c3dff]" />
             Заявки
           </h1>
           <p className="text-gray-500 text-sm mt-1">
@@ -1144,8 +1144,8 @@ export default function PurchaseOrders() {
       />
 
       {selectedIds.size >= 1 && (
-        <div className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
-          <span className="text-sm text-orange-900">
+        <div className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-lg px-3 py-2">
+          <span className="text-sm text-violet-900">
             {!sameSupplier ? (
               <span className="text-red-600">
                 Бележките трябва да са от един и същ доставчик

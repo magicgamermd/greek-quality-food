@@ -33,6 +33,12 @@ import reportsRoutes from "./routes/reports.js";
 import chatRoutes from "./routes/chat.js";
 import agentRoutes from "./routes/agent.js";
 import permissionsRoutes from "./routes/permissions.js";
+// Greek Quality Food: батчи + бракуване — върнати от Greek Foods Platform.
+// MERT-M беше форк без партиди (durable goods); за GQF (хранителни стоки)
+// са нужни batch tracking + срокове на годност + write-offs.
+import batchRoutes from "./routes/batches.js";
+import writeoffRoutes from "./routes/writeoffs.js";
+import writeoffPdfHandler from "./routes/writeoff-pdf-handler.js";
 
 dotenv.config();
 
@@ -182,7 +188,7 @@ export async function build() {
 
       request.user = {
         id: "ai-service",
-        email: "ai@mertm.bg",
+        email: "ai@greek-quality-food.bg",
         role: "admin",
         name: "AI Service",
       };
@@ -262,6 +268,11 @@ export async function build() {
   await app.register(chatRoutes);
   await app.register(agentRoutes, { prefix: "/agent" });
 
+  // Greek Quality Food: партиди + бракуване
+  await app.register(batchRoutes, { prefix: "/batches" });
+  await app.register(writeoffRoutes, { prefix: "/writeoffs" });
+  await app.register(writeoffPdfHandler, { prefix: "/writeoffs" });
+
   return app;
 }
 
@@ -305,7 +316,9 @@ async function start() {
   const host = process.env.HOST || "0.0.0.0";
 
   await app.listen({ port, host });
-  console.log(`🏛️  МЕРТ-М Warehouse API running on http://${host}:${port}`);
+  console.log(
+    `🇬🇷  Greek Quality Food Warehouse API running on http://${host}:${port}`,
+  );
 }
 
 // Auto-start when running the server directly. Skipped under Vitest so

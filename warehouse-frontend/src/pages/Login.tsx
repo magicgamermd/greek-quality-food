@@ -21,7 +21,7 @@ interface LoginProps {
 
 export function Login({
   redirectTo = "/",
-  appTitle = "МЕРТ-М Склад",
+  appTitle = "Greek Quality Food — Склад",
   subtitle = "Влезте в системата за управление на склад",
   loginHeading = "Вход в системата",
   theme = "default",
@@ -100,7 +100,7 @@ export function Login({
               "inline-flex items-center justify-center h-16 w-16 rounded-2xl mb-4",
               isOwnerTheme
                 ? "border border-[#243055] bg-[#12162a] text-[#4f7cff]"
-                : "bg-[#f97316] text-white",
+                : "bg-[#6c3dff] text-white",
             )}
           >
             <span className="font-bold text-2xl">ММ</span>

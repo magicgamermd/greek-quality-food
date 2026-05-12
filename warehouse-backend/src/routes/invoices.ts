@@ -1220,7 +1220,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           // on-disk invoice cache so the 1-page version stays intact.
           const tmpPath = path.join(
             os.tmpdir(),
-            `mertm-invoice-${invoice.id}-2copies-${randomUUID()}.pdf`,
+            `gqf-invoice-${invoice.id}-2copies-${randomUUID()}.pdf`,
           );
           try {
             await generateInvoicePdf({
@@ -1452,10 +1452,10 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         });
 
         await transporter.sendMail({
-          from: process.env.SMTP_FROM || "invoices@mertm.bg",
+          from: process.env.SMTP_FROM || "invoices@greek-quality-food.bg",
           to: recipientEmail,
-          subject: `Фактура ${invoice.invoice_number} — МЕРТ-М`,
-          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} лв.\n\nС уважение,\nМЕРТ-М ЕООД`,
+          subject: `Фактура ${invoice.invoice_number} — Greek Quality Food`,
+          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} лв.\n\nС уважение,\nGreek Quality Food ЕООД`,
           attachments: [
             {
               filename: `${invoice.invoice_number}.pdf`,

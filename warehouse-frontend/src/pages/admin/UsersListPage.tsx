@@ -31,7 +31,7 @@ export function UsersListPage() {
         <h1 className="text-2xl font-semibold">Потребители</h1>
         <Link
           to="/settings/users/new"
-          className="px-3 py-1.5 rounded bg-[#f97316] text-white text-sm"
+          className="px-3 py-1.5 rounded bg-[#6c3dff] text-white text-sm"
         >
           + Нов user
         </Link>

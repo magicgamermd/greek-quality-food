@@ -47,8 +47,8 @@ const kpiCards = [
     key: "total_stock_value",
     label: "Стойност на склада",
     icon: TrendingUp,
-    color: "text-orange-600",
-    bg: "bg-orange-50",
+    color: "text-violet-600",
+    bg: "bg-violet-50",
     format: (v: number) => formatCurrency(v),
     link: "/inventory",
   },
@@ -74,8 +74,8 @@ const kpiCards = [
     key: "pending_payments",
     label: "Неплатени фактури",
     icon: CreditCard,
-    color: "text-orange-600",
-    bg: "bg-orange-50",
+    color: "text-violet-600",
+    bg: "bg-violet-50",
     format: (v: number) => formatCurrency(v),
     link: "/invoices?status=unpaid",
   },
@@ -433,12 +433,12 @@ export function Dashboard() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="flex items-center gap-2">
-                <ShoppingCart className="h-5 w-5 text-[#f97316]" />
+                <ShoppingCart className="h-5 w-5 text-[#6c3dff]" />
                 Последни поръчки
               </CardTitle>
               <button
                 onClick={() => navigate("/orders")}
-                className="text-sm text-[#f97316] hover:underline flex items-center gap-1"
+                className="text-sm text-[#6c3dff] hover:underline flex items-center gap-1"
               >
                 Виж всички
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -499,7 +499,7 @@ export function Dashboard() {
               </CardTitle>
               <button
                 onClick={() => navigate("/inventory?tab=low-stock")}
-                className="text-sm text-[#f97316] hover:underline flex items-center gap-1"
+                className="text-sm text-[#6c3dff] hover:underline flex items-center gap-1"
               >
                 Виж всички
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -568,7 +568,7 @@ export function Dashboard() {
             <Button
               onClick={() => void downloadDailyReport()}
               disabled={isDownloading}
-              className="bg-[#f97316] hover:bg-[#ea580c]"
+              className="bg-[#6c3dff] hover:bg-[#5a30d9]"
             >
               <Printer className="h-4 w-4" />
               {isDownloading ? "Сваляне…" : "Свали PDF"}
@@ -605,7 +605,7 @@ export function Dashboard() {
             <Button
               onClick={() => void downloadMonthlyReport()}
               disabled={isDownloading}
-              className="bg-[#f97316] hover:bg-[#ea580c]"
+              className="bg-[#6c3dff] hover:bg-[#5a30d9]"
             >
               <Printer className="h-4 w-4" />
               {isDownloading ? "Сваляне…" : "Свали PDF"}

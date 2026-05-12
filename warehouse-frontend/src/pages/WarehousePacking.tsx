@@ -207,7 +207,7 @@ export function WarehousePacking() {
     <div className="min-h-screen bg-[#0f172a] p-6">
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
-          <Package className="h-8 w-8 text-orange-400" />
+          <Package className="h-8 w-8 text-violet-400" />
           <h1 className="text-3xl font-bold text-white">Склад — Пакетиране</h1>
         </div>
         <div className="flex items-center gap-2 text-white/60 text-lg">
@@ -292,7 +292,7 @@ export function WarehousePacking() {
                           Поръчка #{order.order_number ?? order.id}
                         </h2>
                         {isReplacement && (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700">
                             <RefreshCcw className="h-3 w-3" />
                             Замяна
                           </span>
@@ -360,7 +360,7 @@ export function WarehousePacking() {
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => toggleItem(order.id, item.id)}
-                                className="h-6 w-6 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
+                                className="h-6 w-6 rounded border-gray-300 text-violet-500 focus:ring-violet-500 cursor-pointer"
                               />
                               <div
                                 className={`flex-1 text-lg ${isChecked ? "line-through text-gray-400" : "text-gray-900"}`}
@@ -556,8 +556,8 @@ export function WarehousePacking() {
                         disabled={fulfillMutation.isPending}
                         className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-base font-medium transition-colors ${
                           allChecked
-                            ? "bg-orange-500 hover:bg-orange-600 text-white"
-                            : "bg-orange-200 hover:bg-orange-300 text-orange-800"
+                            ? "bg-violet-500 hover:bg-violet-600 text-white"
+                            : "bg-violet-200 hover:bg-violet-300 text-violet-800"
                         }`}
                       >
                         {fulfillMutation.isPending ? (
@@ -638,7 +638,7 @@ function PackingItemSection({
                     type="checkbox"
                     checked={isChecked}
                     onChange={() => onToggle(item.id)}
-                    className="h-6 w-6 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
+                    className="h-6 w-6 rounded border-gray-300 text-violet-500 focus:ring-violet-500 cursor-pointer"
                   />
                   <div
                     className={`flex-1 text-lg ${isChecked ? "line-through text-gray-400" : "text-gray-900"}`}

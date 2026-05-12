@@ -226,7 +226,7 @@ export function Payments() {
     <div className="payments-page p-6 space-y-6">
       <div className="print-only print-title">
         <h1>
-          МЕРТ-М — Дневен отчет (
+          Greek Quality Food — Дневен отчет (
           {activeTab === "invoice" ? "Фактурни" : "По разписки"})
         </h1>
         <p>
@@ -256,7 +256,7 @@ export function Payments() {
             <button
               className={`py-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === "invoice"
-                  ? "border-[#f97316] text-[#f97316]"
+                  ? "border-[#6c3dff] text-[#6c3dff]"
                   : "border-transparent text-gray-500 hover:text-gray-700"
               }`}
               onClick={() => setActiveTab("invoice")}
@@ -266,7 +266,7 @@ export function Payments() {
             <button
               className={`py-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === "razpiska"
-                  ? "border-[#f97316] text-[#f97316]"
+                  ? "border-[#6c3dff] text-[#6c3dff]"
                   : "border-transparent text-gray-500 hover:text-gray-700"
               }`}
               onClick={() => setActiveTab("razpiska")}
@@ -305,12 +305,12 @@ export function Payments() {
                 {formatCurrency(posTotal)}
               </p>
             </div>
-            <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
-              <p className="text-sm text-orange-600">Общо за деня</p>
-              <p className="text-2xl font-bold text-orange-700 mt-1">
+            <div className="rounded-xl bg-violet-50 border border-violet-200 p-4">
+              <p className="text-sm text-violet-600">Общо за деня</p>
+              <p className="text-2xl font-bold text-violet-700 mt-1">
                 {formatCurrency(totalReceived)}
               </p>
-              <p className="text-xs text-orange-500 mt-1">
+              <p className="text-xs text-violet-500 mt-1">
                 {payments.length} плащания
               </p>
             </div>
@@ -329,9 +329,9 @@ export function Payments() {
                 {unpaidInvoices.length}
               </p>
             </div>
-            <div className="rounded-xl bg-orange-50 border border-orange-200 p-4">
-              <p className="text-sm text-orange-600">Общо транзакции</p>
-              <p className="text-2xl font-bold text-orange-700 mt-1">
+            <div className="rounded-xl bg-violet-50 border border-violet-200 p-4">
+              <p className="text-sm text-violet-600">Общо транзакции</p>
+              <p className="text-2xl font-bold text-violet-700 mt-1">
                 {payments.length}
               </p>
             </div>
@@ -379,7 +379,7 @@ export function Payments() {
                 <Label className="text-xs">Период</Label>
                 <button
                   type="button"
-                  className="text-xs text-[#f97316] hover:underline"
+                  className="text-xs text-[#6c3dff] hover:underline"
                   onClick={() => {
                     const t = todayIso();
                     setFilters((prev) => ({
@@ -496,7 +496,7 @@ export function Payments() {
                 ) : (
                   payments.map((p) => (
                     <TableRow key={p.id}>
-                      <TableCell className="font-mono text-[#f97316]">
+                      <TableCell className="font-mono text-[#6c3dff]">
                         {(() => {
                           const isCancelled =
                             activeTab === "razpiska"

@@ -1475,7 +1475,7 @@ export function IncomingGoods() {
                   setNewDeliveryMenu(false);
                 }}
               >
-                <Camera className="h-4 w-4 text-[#f97316]" />
+                <Camera className="h-4 w-4 text-[#6c3dff]" />
                 Сканиране на документ
               </button>
               <button
@@ -2415,7 +2415,7 @@ export function IncomingGoods() {
         <DialogContent className="max-w-2xl">
           <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
-              <Camera className="h-5 w-5 text-[#f97316]" />
+              <Camera className="h-5 w-5 text-[#6c3dff]" />
               Нова доставка — Сканиране на документ
             </DialogTitle>
           </DialogHeader>
@@ -2424,7 +2424,7 @@ export function IncomingGoods() {
             {/* Upload */}
             {!scanned && (
               <div
-                className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-[#f97316] transition-colors"
+                className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-[#6c3dff] transition-colors"
                 onClick={() => fileRef.current?.click()}
               >
                 {scanning ? (
@@ -2689,7 +2689,7 @@ export function IncomingGoods() {
                                     База: {dbPrice.toFixed(2)}€
                                     {priceDiff != null &&
                                     Math.abs(priceDiff) >= 0.01 ? (
-                                      <span className="text-orange-600 font-semibold">
+                                      <span className="text-violet-600 font-semibold">
                                         {" "}
                                         ({priceDiff > 0 ? "+" : ""}
                                         {priceDiff.toFixed(2)}€)

@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mertm-ai-service"
+name = "greekquality-ai-service"
 version = "1.0.0"
-description = "AI microservice for MERT-M warehouse management"
+description = "AI microservice for Greek Quality Food warehouse management"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.111.0",

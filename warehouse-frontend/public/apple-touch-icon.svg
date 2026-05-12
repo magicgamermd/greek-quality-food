@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180">
-  <rect width="180" height="180" rx="22" fill="#0a1628"/>
-  <text x="90" y="100" font-family="Arial, sans-serif" font-size="68" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">ММ</text>
-  <text x="90" y="142" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#f97316" text-anchor="middle">СКЛАД</text>
+  <rect width="180" height="180" rx="22" fill="#0b1222"/>
+  <text x="90" y="100" font-family="Arial, sans-serif" font-size="68" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">GF</text>
+  <text x="90" y="142" font-family="Arial, sans-serif" font-size="18" fill="rgba(255,255,255,0.8)" text-anchor="middle">Owner</text>
 </svg>

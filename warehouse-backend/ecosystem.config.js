@@ -10,7 +10,7 @@
 module.exports = {
   apps: [
     {
-      name: "mertm-backend",
+      name: "greekquality-backend",
       script: "./dist/index.js",
       // Cluster mode: one instance per CPU core
       instances: "max",

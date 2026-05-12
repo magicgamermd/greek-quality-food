@@ -25,10 +25,10 @@ export default defineConfig({
         "apple-touch-icon.svg",
       ],
       manifest: {
-        name: "МЕРТ-М Owner PWA",
-        short_name: "МЕРТ-М",
+        name: "Greek Quality Food Owner PWA",
+        short_name: "GQF",
         description:
-          "Анализи на собственика и приемане на входяща стока за МЕРТ-М",
+          "Анализи на собственика и приемане на входяща стока за Greek Quality Food",
         id: "/owner",
         start_url: "/owner/dashboard",
         scope: "/owner",
@@ -36,6 +36,8 @@ export default defineConfig({
         display_override: ["standalone", "browser"],
         theme_color: "#0b1222",
         background_color: "#0b1222",
+        /* Greek Foods → Greek Quality Food: тъмен navy background,
+         * лилав accent (#6c3dff) — наследен от Greek Foods Platform. */
         icons: [
           {
             src: "/icon-192.svg",
@@ -122,14 +124,14 @@ export default defineConfig({
     // Vite defaults to localhost only and `http://192.168.x.x:5173`
     // from a phone returns "connection refused".
     host: "0.0.0.0",
-    // Port 5174 (Greek Foods държи 5173) — да можем двата dev сървъра
-    // да работят паралелно без сблъсък. Backend proxy 3004 (Greek Foods
-    // държи 3003).
-    port: 5174,
+    // Port 5175: 5173 = Greek Foods, 5174 = MERT-M, 5175 = Greek Quality
+    // Food. Да можем трите dev сървъра да работят паралелно. Backend
+    // proxy 3005 (Greek Foods :3003, MERT-M :3004).
+    port: 5175,
     allowedHosts: true,
     proxy: {
       "/api": {
-        target: "http://localhost:3004",
+        target: "http://localhost:3005",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
         secure: true,

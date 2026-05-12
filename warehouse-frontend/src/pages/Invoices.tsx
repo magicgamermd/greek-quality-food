@@ -639,7 +639,7 @@ export function Invoices() {
                 onClick={() => setStatusFilter(f.value)}
                 className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                   statusFilter === f.value
-                    ? "bg-[#f97316] text-white"
+                    ? "bg-[#6c3dff] text-white"
                     : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                 }`}
               >
@@ -656,7 +656,7 @@ export function Invoices() {
               onChange={(e) =>
                 setFilters((prev) => ({ ...prev, search: e.target.value }))
               }
-              className="pl-9 pr-3 py-1.5 text-sm border rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-[#f97316]/30 focus:border-[#f97316]"
+              className="pl-9 pr-3 py-1.5 text-sm border rounded-lg w-64 focus:outline-none focus:ring-2 focus:ring-[#6c3dff]/30 focus:border-[#6c3dff]"
             />
           </div>
         </div>
@@ -669,7 +669,7 @@ export function Invoices() {
               onChange={(e) =>
                 setFilters((prev) => ({ ...prev, date_from: e.target.value }))
               }
-              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f97316]/30 focus:border-[#f97316]"
+              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6c3dff]/30 focus:border-[#6c3dff]"
             />
           </div>
           <div className="space-y-1">
@@ -680,7 +680,7 @@ export function Invoices() {
               onChange={(e) =>
                 setFilters((prev) => ({ ...prev, date_to: e.target.value }))
               }
-              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#f97316]/30 focus:border-[#f97316]"
+              className="px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#6c3dff]/30 focus:border-[#6c3dff]"
             />
           </div>
           {(filters.search ||
@@ -783,7 +783,7 @@ export function Invoices() {
                                 : isCancelled
                                   ? "bg-gray-100 opacity-70"
                                   : hasCN
-                                    ? "bg-orange-50"
+                                    ? "bg-violet-50"
                                     : ""
                           }`}
                         >
@@ -838,7 +838,7 @@ export function Invoices() {
                                     }));
                                     setHighlightedRowId(inv.credit_note_id!);
                                   }}
-                                  className="text-xs text-orange-700 hover:underline flex items-center gap-1 w-fit"
+                                  className="text-xs text-violet-700 hover:underline flex items-center gap-1 w-fit"
                                   title="Отвори кредитното известие"
                                 >
                                   <RotateCcw className="h-3 w-3" />
@@ -869,7 +869,7 @@ export function Invoices() {
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">
-                              <div className="font-mono font-medium text-[#f97316]">
+                              <div className="font-mono font-medium text-[#6c3dff]">
                                 {inv.invoice_number}
                               </div>
                               {isCancelled && (
@@ -908,7 +908,7 @@ export function Invoices() {
                             ) : hasCN ? (
                               <Badge
                                 variant="warning"
-                                className="text-xs bg-orange-100 text-orange-700 border-orange-300"
+                                className="text-xs bg-violet-100 text-violet-700 border-violet-300"
                               >
                                 Сторнирана
                               </Badge>
@@ -946,7 +946,7 @@ export function Invoices() {
                               <button
                                 onClick={() => markSentMutation.mutate(inv.id)}
                                 disabled={markSentMutation.isPending}
-                                className="flex items-center gap-1 text-gray-400 hover:text-[#f97316] text-sm transition-colors"
+                                className="flex items-center gap-1 text-gray-400 hover:text-[#6c3dff] text-sm transition-colors"
                                 title="Маркирай като изпратена"
                               >
                                 <span className="text-gray-300">—</span>
@@ -965,10 +965,10 @@ export function Invoices() {
                                         regenerateMutation.mutate(inv.id)
                                       }
                                       disabled={regenerateMutation.isPending}
-                                      className="text-orange-600 hover:text-orange-700"
+                                      className="text-violet-600 hover:text-violet-700"
                                     >
                                       {regenerateMutation.isPending ? (
-                                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-orange-300 border-t-orange-600" />
+                                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-violet-300 border-t-violet-600" />
                                       ) : (
                                         <RefreshCw className="h-4 w-4" />
                                       )}
@@ -1516,7 +1516,7 @@ function RazpiskaTable({
                 return (
                   <TableRow key={o.id}>
                     <TableCell>
-                      <div className="font-mono font-medium text-[#f97316]">
+                      <div className="font-mono font-medium text-[#6c3dff]">
                         {razpiskaNumber}
                       </div>
                     </TableCell>

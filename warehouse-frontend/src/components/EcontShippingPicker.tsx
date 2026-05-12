@@ -242,14 +242,14 @@ export function EcontShippingPicker({
   });
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden border-l-4 border-l-[#f97316]">
+    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden border-l-4 border-l-[#6c3dff]">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
       >
         <div className="flex items-center gap-2">
-          <Truck className="h-5 w-5 text-[#f97316]" />
+          <Truck className="h-5 w-5 text-[#6c3dff]" />
           <span className="font-medium text-gray-900">Доставка с Еконт</span>
         </div>
         {open ? (
@@ -268,7 +268,7 @@ export function EcontShippingPicker({
                 Получател
               </label>
               <input
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                 placeholder="Име на получател"
                 value={value.econt_receiver_name ?? ""}
                 onChange={(e) =>
@@ -281,7 +281,7 @@ export function EcontShippingPicker({
                 Телефон
               </label>
               <input
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                 placeholder="0888 123 456"
                 value={value.econt_receiver_phone ?? ""}
                 onChange={(e) =>
@@ -298,7 +298,7 @@ export function EcontShippingPicker({
                 Тип доставка
               </label>
               <select
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                 value={deliveryType}
                 onChange={(e) => {
                   const next = e.target.value as "office" | "address";
@@ -330,7 +330,7 @@ export function EcontShippingPicker({
                   Град
                 </label>
                 <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                   placeholder="Започнете да пишете..."
                   value={cityInput}
                   onChange={(e) => {
@@ -376,7 +376,7 @@ export function EcontShippingPicker({
                 Офис на Еконт
               </label>
               <select
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400"
                 value={value.econt_office_code ?? ""}
                 disabled={!cityInput}
                 onChange={(e) => {
@@ -408,7 +408,7 @@ export function EcontShippingPicker({
                     Улица
                   </label>
                   <input
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                     placeholder={
                       cityId
                         ? "Започни да пишеш — Еконт ще предложи улици"
@@ -436,7 +436,7 @@ export function EcontShippingPicker({
                     №
                   </label>
                   <input
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                     placeholder="№"
                     value={value.econt_street_num ?? ""}
                     onChange={(e) =>
@@ -496,7 +496,7 @@ export function EcontShippingPicker({
                 type="number"
                 min="0.1"
                 step="0.1"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                 placeholder="0.0"
                 value={value.econt_weight ?? ""}
                 onChange={(e) =>
@@ -514,7 +514,7 @@ export function EcontShippingPicker({
                   onClick={() => onChange({ econt_payer: "sender" })}
                   className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors border ${
                     payer === "sender"
-                      ? "bg-[#f97316] border-[#f97316] text-white"
+                      ? "bg-[#6c3dff] border-[#6c3dff] text-white"
                       : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
                   }`}
                 >
@@ -526,7 +526,7 @@ export function EcontShippingPicker({
                   onClick={() => onChange({ econt_payer: "receiver" })}
                   className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors border ${
                     payer === "receiver"
-                      ? "bg-[#f97316] border-[#f97316] text-white"
+                      ? "bg-[#6c3dff] border-[#6c3dff] text-white"
                       : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
                   }`}
                 >
@@ -543,7 +543,7 @@ export function EcontShippingPicker({
               Съдържание на пратката *
             </label>
             <input
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
               placeholder="напр. Кухненско оборудване, хардуерни артикули, мрежи..."
               value={value.econt_shipment_description ?? ""}
               onChange={(e) =>
@@ -573,7 +573,7 @@ export function EcontShippingPicker({
                       : 0,
                   });
                 }}
-                className="h-4 w-4 rounded border-gray-300 text-[#f97316] focus:ring-[#f97316]"
+                className="h-4 w-4 rounded border-gray-300 text-[#6c3dff] focus:ring-[#6c3dff]"
               />
               <span className="text-sm font-medium text-gray-700">
                 Наложен платеж
@@ -585,7 +585,7 @@ export function EcontShippingPicker({
                   type="number"
                   min="0"
                   step="0.01"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:border-transparent"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#6c3dff] focus:border-transparent"
                   placeholder="Сума (€)"
                   value={value.econt_cod_amount ?? ""}
                   onChange={(e) =>
@@ -603,12 +603,12 @@ export function EcontShippingPicker({
             <div className="text-xs text-gray-500">Калкулация…</div>
           )}
           {priceQuery.data && !priceQuery.isFetching && (
-            <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm">
-              <div className="flex items-center gap-2 font-semibold text-[#f97316] mb-1">
+            <div className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3 text-sm">
+              <div className="flex items-center gap-2 font-semibold text-[#6c3dff] mb-1">
                 <Truck className="h-4 w-4" />
                 Доставка с Еконт
               </div>
-              <div className="text-xs text-orange-900/80 leading-relaxed">
+              <div className="text-xs text-violet-900/80 leading-relaxed">
                 {senderInfoQuery.data?.city && (
                   <>
                     {senderInfoQuery.data.city}
@@ -632,7 +632,7 @@ export function EcontShippingPicker({
                   </>
                 )}
               </div>
-              <div className="text-xs text-orange-900/80">
+              <div className="text-xs text-violet-900/80">
                 Тегло: {Number(weight).toFixed(1)} кг
               </div>
               <div className="text-base font-bold text-gray-900 mt-2">
