@@ -6638,6 +6638,10 @@ export function Orders() {
   const navigate = useNavigate();
   const { hasPermission } = usePermissions();
   const canSeeBelowCostFilter = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
+  // Econt-зависим master switch — крие "Наложен платеж" филтъра и
+  // "товарителница" search input-а, когато Еконт е изключен в
+  // Настройки (мигр. 081). COD-ът няма смисъл без куриер.
+  const { econtEnabled } = useAppSettings();
   const [statusFilter, setStatusFilter] = useState("");
   const [belowCostOnly, setBelowCostOnly] = useState(false);
   // Batch F1 filter pills — surface only orders containing the matching
@@ -7206,22 +7210,23 @@ export function Orders() {
           <Hourglass className="h-3.5 w-3.5" />
           На изчакване
         </button>
-        {/* Econt COD filter — show only orders with a courier shipment
-            attached AND a cod_amount > 0. Combined with the new
-            "товарителница" search input, gives the cashier a fast path
-            to "find me everything Econt is bringing money in for". */}
-        <button
-          onClick={() => selectFilter("cod")}
-          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-            hasCod
-              ? "bg-[#6c3dff] text-white"
-              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-          }`}
-          title="Покажи само поръчки с Еконт товарителница и наложен платеж"
-        >
-          <Truck className="h-3.5 w-3.5" />
-          Наложен платеж
-        </button>
+        {/* Econt COD filter — само ако Еконт е активен в Настройки.
+            COD-ът представлява "наложен платеж по куриер" — без
+            куриерска интеграция филтърът няма смисъл. */}
+        {econtEnabled && (
+          <button
+            onClick={() => selectFilter("cod")}
+            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              hasCod
+                ? "bg-[#6c3dff] text-white"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+            title="Покажи само поръчки с Еконт товарителница и наложен платеж"
+          >
+            <Truck className="h-3.5 w-3.5" />
+            Наложен платеж
+          </button>
+        )}
         {/* Замени filter — toggle "show only replacement orders" */}
         <button
           onClick={() => selectFilter("replacement")}
@@ -7330,20 +7335,21 @@ export function Orders() {
             className="pl-7 h-8 text-xs"
           />
         </div>
-        {/* Shipment-number search — paste an Econt tracking ID from the
-            email and the matching order pops up. Backend match is
-            ILIKE on econt_shipment_number, so partial codes work too. */}
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
-          <Input
-            value={filters.shipment}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, shipment: e.target.value }))
-            }
-            placeholder="№ товарителница"
-            className="pl-7 h-8 text-xs"
-          />
-        </div>
+        {/* Shipment-number search — Econt-only (товарителница);
+            крие се при изключен Еконт в Настройки. */}
+        {econtEnabled && (
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
+            <Input
+              value={filters.shipment}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, shipment: e.target.value }))
+              }
+              placeholder="№ товарителница"
+              className="pl-7 h-8 text-xs"
+            />
+          </div>
+        )}
         {/* Article search — finds orders containing this product (snapshot match) */}
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
