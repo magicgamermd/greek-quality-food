@@ -38,7 +38,6 @@ import permissionsRoutes from "./routes/permissions.js";
 // са нужни batch tracking + срокове на годност + write-offs.
 import batchRoutes from "./routes/batches.js";
 import writeoffRoutes from "./routes/writeoffs.js";
-import writeoffPdfHandler from "./routes/writeoff-pdf-handler.js";
 
 dotenv.config();
 
@@ -82,17 +81,19 @@ export async function build() {
     "http://127.0.0.1:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5174",
-    // Tauri desktop app (mertm-desktop). The bundled webview serves the
-    // built frontend from `tauri://localhost` on macOS, so API calls from
-    // the desktop client carry that origin.
+    // Greek Quality Food dev frontend
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+    // Tauri desktop app. The bundled webview serves the built frontend
+    // from `tauri://localhost` on macOS.
     "tauri://localhost",
     "http://tauri.localhost",
   ];
   const devCorsPatterns = [
-    // LAN access on port 5173 or 5174
-    /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):517[34]$/,
+    // LAN access on port 5173/5174/5175
+    /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):517[345]$/,
     // Tailscale CGNAT range 100.64.0.0/10
-    /^http:\/\/100\.\d{1,3}\.\d{1,3}\.\d{1,3}:517[34]$/,
+    /^http:\/\/100\.\d{1,3}\.\d{1,3}\.\d{1,3}:517[345]$/,
   ];
 
   await app.register(cors, {
@@ -269,9 +270,10 @@ export async function build() {
   await app.register(agentRoutes, { prefix: "/agent" });
 
   // Greek Quality Food: партиди + бракуване
+  // writeoff-pdf-handler е merged вътре в writeoffs.ts (Greek Foods pattern)
+  // и се регистрира под /inventory/write-offs prefix.
   await app.register(batchRoutes, { prefix: "/batches" });
-  await app.register(writeoffRoutes, { prefix: "/writeoffs" });
-  await app.register(writeoffPdfHandler, { prefix: "/writeoffs" });
+  await app.register(writeoffRoutes, { prefix: "/inventory/write-offs" });
 
   return app;
 }

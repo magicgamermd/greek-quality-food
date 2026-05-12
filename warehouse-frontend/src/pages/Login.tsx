@@ -103,7 +103,7 @@ export function Login({
                 : "bg-[#6c3dff] text-white",
             )}
           >
-            <span className="font-bold text-2xl">ММ</span>
+            <span className="font-bold text-2xl">GQ</span>
           </div>
           <h1 className="text-2xl font-bold text-white">{appTitle}</h1>
           <p
