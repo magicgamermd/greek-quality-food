@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Truck, ChevronDown, ChevronUp } from "lucide-react";
 import { WorkingDayPicker } from "@/components/ui/WorkingDayPicker";
+import { useAppSettings } from "@/hooks/useAppSettings";
 
 interface City {
   id: number;
@@ -99,6 +100,11 @@ export function EcontShippingPicker({
   defaultOpen = true,
   defaultCodAmount,
 }: EcontShippingPickerProps) {
+  // Master switch: ако админът е изключил Еконт в Настройки → не
+  // рендерираме picker-а изобщо (мигр. 081). Запазваме hook order
+  // консистентен — useAppSettings първи, после early return.
+  const { econtEnabled } = useAppSettings();
+  if (!econtEnabled) return null;
   const [open, setOpen] = useState(defaultOpen);
   const deliveryType = value.econt_delivery_type || "office";
   const cityInput = value.econt_city ?? "";

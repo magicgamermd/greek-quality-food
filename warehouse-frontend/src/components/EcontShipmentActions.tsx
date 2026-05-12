@@ -7,6 +7,7 @@ import {
   EcontShippingPicker,
   type EcontShippingValue,
 } from "./EcontShippingPicker";
+import { useAppSettings } from "@/hooks/useAppSettings";
 
 interface Props {
   order: Order;
@@ -94,9 +95,13 @@ export function EcontShipmentActions({
   token,
   onOrderUpdated,
 }: Props) {
+  const { econtEnabled } = useAppSettings();
   const qc = useQueryClient();
   const hasShipment = !!order.econt_shipment_number;
   const hasEcontData = !!order.econt_city;
+  // Master switch: ако Еконт е изключен в Настройки, не показваме
+  // нито товарителницата, нито бутоните за editing/create (мигр. 081).
+  if (!econtEnabled) return null;
 
   const [isEditing, setIsEditing] = useState(false);
   const [form, setForm] = useState<Partial<EcontShippingValue>>(() =>

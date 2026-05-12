@@ -62,6 +62,9 @@ interface CompanySettings {
   show_bgn_on_invoice?: boolean;
   // CUPS queue name for the Zebra label printer (waybills + stock dispatch)
   zebra_printer_name?: string;
+  // Master switch за Econt UI интеграцията (мигр. 081). При FALSE се
+  // скрива Econt секцията навсякъде в UI-а.
+  econt_enabled?: boolean;
 }
 
 export function Settings() {
@@ -73,6 +76,7 @@ export function Settings() {
     | "company"
     | "documents"
     | "fiscal"
+    | "integrations"
     | "export"
     | "data"
   >("categories");
@@ -245,7 +249,7 @@ export function Settings() {
     toast.error(msg);
   };
 
-  const handleCompanyFormChange = (field: string, value: string) => {
+  const handleCompanyFormChange = (field: string, value: string | boolean) => {
     setCompanyForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -315,6 +319,16 @@ export function Settings() {
           }`}
         >
           Фискален принтер
+        </button>
+        <button
+          onClick={() => setActiveTab("integrations")}
+          className={`px-4 py-2 font-medium border-b-2 transition-colors ${
+            activeTab === "integrations"
+              ? "border-[#6c3dff] text-[#6c3dff]"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Интеграции
         </button>
         <button
           onClick={() => setActiveTab("export")}
@@ -1191,6 +1205,71 @@ export function Settings() {
                 </div>
               </form>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* TAB: Integrations — master switch за външни системи (Econt и пр.) */}
+      {activeTab === "integrations" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Интеграции</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-6">
+              <div className="rounded-lg border border-gray-200 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base font-semibold">
+                        Доставки с Еконт
+                      </span>
+                      {companyForm.econt_enabled !== false ? (
+                        <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded">
+                          Активна
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
+                          Изключена
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-gray-600">
+                      Когато е изключена, всички Еконт елементи се крият от UI-а
+                      (нова поръчка, пакетиране, експедиране). Конфигурацията в
+                      .env остава непокътната — само превключи отново, за да
+                      продължиш да я ползваш.
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={companyForm.econt_enabled !== false}
+                      onChange={(e) =>
+                        handleCompanyFormChange(
+                          "econt_enabled",
+                          e.target.checked,
+                        )
+                      }
+                    />
+                    <span className="relative w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-violet-300 rounded-full peer-checked:bg-[#6c3dff] transition-colors">
+                      <span className="absolute left-[2px] top-[2px] bg-white w-5 h-5 rounded-full transition-transform peer-checked:translate-x-5 shadow"></span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2 border-t">
+                <Button
+                  onClick={() => saveCompanyMutation.mutate()}
+                  disabled={saveCompanyMutation.isPending}
+                  className="bg-[#6c3dff] hover:bg-[#5a30d9]"
+                >
+                  {saveCompanyMutation.isPending ? "Запазване..." : "Запази"}
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}

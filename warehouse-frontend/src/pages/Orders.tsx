@@ -47,6 +47,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
+import { useAppSettings } from "@/hooks/useAppSettings";
 import { OrderActionsMenu } from "@/components/OrderActionsMenu";
 import { RecordPaymentModal } from "@/components/RecordPaymentModal";
 import type { Order, OrderItem, Partner } from "@/types";
@@ -4199,7 +4200,6 @@ function EditOrderItemsModal({
                     <TableHead className="min-w-[320px]">Продукт</TableHead>
                     <TableHead className="w-24">Наличност</TableHead>
                     <TableHead className="w-28">Количество</TableHead>
-                    <TableHead className="w-24">Кг</TableHead>
                     <TableHead className="w-32">Ед. цена</TableHead>
                     <TableHead className="w-20">Отст. %</TableHead>
                     <TableHead className="w-28">Сума</TableHead>
@@ -4305,27 +4305,6 @@ function EditOrderItemsModal({
                               handleEditCellArrowKey(e, i, "qty")
                             }
                             disabled={!item.product_id}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              editKgRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={item.weight_kg}
-                            onChange={(e) =>
-                              setItem(i, "weight_kg", e.target.value)
-                            }
-                            onKeyDown={(e) =>
-                              handleEditCellArrowKey(e, i, "kg")
-                            }
-                            className="w-20"
-                            disabled={!item.product_id}
-                            placeholder="0"
-                            title="Тегло (кг)"
                           />
                         </TableCell>
                         <TableCell>
@@ -4764,6 +4743,11 @@ function CreateOrderModal({
     })(),
   });
   const { token: authToken } = useAuth();
+  // Master switch за Econt UI (settings.econt_enabled, мигр. 081).
+  // EcontShippingPicker сам прави early-return при false, но и тук
+  // го проверяваме за да не показваме празно място между бележки и
+  // total-а в new-order диалога.
+  const { econtEnabled } = useAppSettings();
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
   const [stockWarnings, setStockWarnings] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -5941,7 +5925,6 @@ function CreateOrderModal({
                           </TableHead>
                           <TableHead className="w-24">Наличност</TableHead>
                           <TableHead className="w-28">Количество</TableHead>
-                          <TableHead className="w-24">Кг</TableHead>
                           <TableHead className="w-32">Ед. цена</TableHead>
                           <TableHead className="w-20">Отст. %</TableHead>
                           <TableHead className="w-28">Сума</TableHead>
@@ -6070,33 +6053,6 @@ function CreateOrderModal({
                                     max {availableStock}
                                   </div>
                                 )}
-                              </TableCell>
-                              <TableCell>
-                                <Input
-                                  ref={(el) => {
-                                    kgRefs.current[item.row_key] = el;
-                                  }}
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  value={item.weight_kg}
-                                  onChange={(e) =>
-                                    setItem(i, "weight_kg", e.target.value)
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (handleCellArrowKey(e, i, "kg")) return;
-                                    if (e.key === "Enter") {
-                                      e.preventDefault();
-                                      focusAndSelect(
-                                        priceRefs.current[item.row_key],
-                                      );
-                                    }
-                                  }}
-                                  className="w-20"
-                                  disabled={!item.product_id}
-                                  placeholder="0"
-                                  title="Тегло (кг) — ще се запамети към продукта и ще се използва за Еконт"
-                                />
                               </TableCell>
                               <TableCell>
                                 <Input
@@ -6327,7 +6283,7 @@ function CreateOrderModal({
                   />
                 </div>
 
-                {authToken && (
+                {authToken && econtEnabled && (
                   <EcontShippingPicker
                     value={{
                       econt_delivery_type: form.econt_delivery_type,

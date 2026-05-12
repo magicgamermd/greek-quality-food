@@ -36,6 +36,11 @@ const updateSettingsSchema = z.object({
   // stock-dispatch labels). When set, /print/zebra ships the PDF
   // straight to that printer via `lp -d`.
   zebra_printer_name: z.string().max(120).nullish(),
+  // Integration master switches — UI-level toggle. При FALSE се скрива
+  // Econt секцията навсякъде (Orders, Packing, Dispatch, отчети).
+  // Backend Econt routes остават регистрирани (за интеграционни
+  // тестове), но UI-ът не ги извиква.
+  econt_enabled: z.boolean().optional(),
 });
 
 async function requireAuth(request: FastifyRequest) {
@@ -173,6 +178,7 @@ export default async function settingsRoutes(app: FastifyInstance) {
           ["writeoff_commission_member2", body.writeoff_commission_member2],
           ["show_bgn_on_invoice", body.show_bgn_on_invoice],
           ["zebra_printer_name", body.zebra_printer_name],
+          ["econt_enabled", body.econt_enabled],
         ];
 
         for (const [field, value] of fields) {
