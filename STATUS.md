@@ -32,20 +32,47 @@ Project клониран от MERT-M (`/Users/magic/Projects/mert-m`) с пъл�
 
 - [ ] Branding: цветове на Greek Foods (`#6c3dff` лилав вместо `#f97316` оранжев)
 - [ ] UI текстове: "МЕРТ-М" → "Greek Quality Food" (Dashboard, sidebar, login)
-- [ ] Лого/favicon на Greek Foods (копиране от `/Users/magic/Projects/greek-foods-platform/warehouse-frontend/public/`)
-- [ ] Връщане на партиди (batches): миграция + routes + UI от Greek Foods
-- [ ] Връщане на бракуване (writeoffs): миграция + routes + UI от Greek Foods
-- [ ] Връщане на срокове на годност (FEFO): свързано с партидите
-- [ ] Verify partner objects/sites (обекти/магазини) UI works
-- [ ] Миграция на данни от Greek Foods DB: партньори, доставчици, продукти
-- [ ] Smoke test: docker compose up без конфликти с оригиналите
+- [x] Лого/favicon на Greek Foods (копирани)
+- [x] Връщане на партиди (batches): миграция 080 + routes + ETL данни
+- [x] Връщане на бракуване (writeoffs): routes + UI наследени
+- [x] Връщане на срокове на годност: в batches schema
+- [x] Verify partner objects/sites UI — Greek Foods полета върнати в Orders
+- [x] Миграция на данни от Greek Foods DB: 1799 продукта + 428 партньори + 64 доставчици + 13 батча + 12 inventory
+- [x] Smoke test: 3 проекта работят паралелно без конфликти
+
+## Допълнителни Greek Foods features възстановени
+
+- Номер на заявка + Обект/магазин dropdown + Име/Код на обект (Orders new dialog)
+- Партида + Годност колони в линиите на продукта (FEFO auto-select)
+- CompanyBook API ключ (споделен с MERT-M, от `~/.openclaw/auth/key-companybook.key`)
+- Econt master switch в Settings → Интеграции (мигр. 081)
+- ВКЛ ДДС логика винаги (премахнати "с/без ДДС" dropdown-ите)
+
+## AI Service
+
+GQF има отделна ai-service инстанция на host port **8001**
+(MERT-M / Greek Foods ползват :8000). Конфиг в
+`ai-service/.env`: WAREHOUSE_API_URL=http://127.0.0.1:3005,
+INTERNAL_API_KEY=devinternal_gqf_001234567890.
+
+Стартиране:
+
+```bash
+cd ai-service
+.venv311/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+Endpoints: /ai/scan-invoice, /ai/quick-invoice-check,
+/ai/confirm-invoice-template, /ai/match-products, /ai/forecast,
+/ai/anomalies.
 
 ## Ports cheat sheet
 
-| Service        | Greek Foods | MERT-M | **Greek Quality Food** |
-| -------------- | ----------- | ------ | ---------------------- |
-| Backend        | 3003        | 3004   | **3005**               |
-| Frontend dev   | 5173        | 5174   | **5175**               |
-| Postgres       | 5432        | 5433   | **5434**               |
-| Redis          | 6379        | 6380   | **6381**               |
-| Docker project | greekfoods  | mertm  | **greekquality**       |
+| Service        | Greek Foods               | MERT-M | **Greek Quality Food** |
+| -------------- | ------------------------- | ------ | ---------------------- |
+| Backend        | 3003                      | 3004   | **3005**               |
+| Frontend dev   | 5173                      | 5174   | **5175**               |
+| Postgres       | 5432                      | 5433   | **5434**               |
+| Redis          | 6379                      | 6380   | **6381**               |
+| AI Service     | 8000 (shared with MERT-M) | 8000   | **8001**               |
+| Docker project | greekfoods                | mertm  | **greekquality**       |
