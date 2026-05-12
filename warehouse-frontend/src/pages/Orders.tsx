@@ -2189,50 +2189,12 @@ function OrderDetailModal({
                   Фактура:
                 </span>
 
-                {/* VAT toggle / indicator — dropdown за компактност, тъй
-                    като "Без ДДС" се ползва рядко. По default = С ДДС. */}
-                {!hasInvoice ? (
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
-                    <span className="text-xs text-gray-500">ДДС:</span>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition ${
-                            includeVat
-                              ? "bg-[#6c3dff] text-white hover:bg-[#5a30d9]"
-                              : "bg-violet-500 text-white hover:bg-violet-600"
-                          }`}
-                          title="Смени режим на ДДС"
-                        >
-                          {includeVat ? "С ДДС" : "Без ДДС"}
-                          <ChevronDown className="h-3 w-3" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent
-                        align="start"
-                        className="min-w-[120px]"
-                      >
-                        <DropdownMenuItem
-                          onSelect={() => setIncludeVat(true)}
-                          className={
-                            includeVat ? "bg-[#6c3dff]/10 text-[#6c3dff]" : ""
-                          }
-                        >
-                          С ДДС
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => setIncludeVat(false)}
-                          className={
-                            !includeVat ? "bg-violet-50 text-violet-700" : ""
-                          }
-                        >
-                          Без ДДС
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                ) : (
+                {/* GQF: винаги "С ДДС" — за хранителни стоки цените са
+                 * с включено ДДС (gross). Премахваме MERT-M dropdown-а
+                 * "С ДДС / Без ДДС" — никой няма да издава фактура без
+                 * ДДС на търговец / клиент в България. Запазваме само
+                 * fallback индикатора при наличие на готова фактура. */}
+                {!hasInvoice ? null : (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
                     <span className="text-xs text-gray-500">ДДС:</span>
                     <span
@@ -2636,51 +2598,24 @@ function OrderDetailModal({
                 <span className="text-xs text-gray-500 uppercase tracking-wide shrink-0">
                   Документи:
                 </span>
-                <div className="inline-flex">
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      handleDocDownload(detail.id, "stock-dispatch", {
-                        pricingMode: "gross",
-                      })
-                    }
-                    className="text-emerald-700 border-emerald-400 hover:bg-emerald-50 rounded-r-none border-r-0"
-                    title="Стокова разписка с ДДС (по подразбиране)"
-                  >
-                    <ClipboardList className="h-4 w-4" />
-                    Стокова разписка
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className="text-emerald-700 border-emerald-400 hover:bg-emerald-50 rounded-l-none px-2"
-                        title="Избери дали с или без ДДС"
-                        aria-label="Избери дали с или без ДДС"
-                      >
-                        <ChevronDown className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuItem
-                        onClick={() =>
-                          handleDocDownload(detail.id, "stock-dispatch", {
-                            pricingMode: "gross",
-                          })
-                        }
-                      >
-                        💶 Стокова разписка (с ДДС)
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() =>
-                          handleDocDownload(detail.id, "stock-dispatch")
-                        }
-                      >
-                        🧾 Стокова разписка (без ДДС)
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+                {/* GQF: Стокова разписка винаги се генерира с цени с
+                 * ВКЛЮЧЕНО ДДС (gross), точно както в Greek Foods Platform.
+                 * Премахваме "(с ДДС / без ДДС)" dropdown-а на MERT-M —
+                 * хранителни стоки се продават с retail цена включваща
+                 * ДДС, така че документът е директен. */}
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    handleDocDownload(detail.id, "stock-dispatch", {
+                      pricingMode: "gross",
+                    })
+                  }
+                  className="text-emerald-700 border-emerald-400 hover:bg-emerald-50"
+                  title="Стокова разписка"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Стокова разписка
+                </Button>
                 <Button
                   variant="outline"
                   onClick={() => {
