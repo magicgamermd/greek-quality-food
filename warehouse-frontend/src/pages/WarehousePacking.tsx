@@ -250,7 +250,7 @@ export function WarehousePacking() {
             // платена-невзета стока, status='fulfilled').
             return items.some((it) => {
               const ls = it.line_status ?? "normal";
-              return ls === "normal" || ls === "pending_pickup";
+              return ls === "normal" || (ls as string) === "pending_pickup";
             });
           })
           .map((order) => {
@@ -262,10 +262,12 @@ export function WarehousePacking() {
             // "Потвърди предаване" → handover endpoint.
             const isPickupMode =
               order.status === "fulfilled" &&
-              allItems.some((it) => it.line_status === "pending_pickup");
-            const packStatus: OrderItem["line_status"] = isPickupMode
-              ? "pending_pickup"
-              : "normal";
+              allItems.some(
+                (it) => (it.line_status as string) === "pending_pickup",
+              );
+            const packStatus = (
+              isPickupMode ? "pending_pickup" : "normal"
+            ) as OrderItem["line_status"];
             const items = allItems.filter(
               (it) => (it.line_status ?? "normal") === packStatus,
             );
@@ -396,7 +398,7 @@ export function WarehousePacking() {
                         (it) => it.line_status === "awaiting",
                       ).length;
                       const pendingCount = skipped.filter(
-                        (it) => it.line_status === "pending_pickup",
+                        (it) => (it.line_status as string) === "pending_pickup",
                       ).length;
                       const messages: string[] = [];
                       if (paidCount > 0) {
