@@ -54,6 +54,7 @@ import type { Order, OrderItem, Partner, PartnerOrderObject } from "@/types";
 import {
   formatDate,
   formatCurrency,
+  formatOrderTotal,
   isoDateToday,
   getApiErrorMessage,
   stockColorClass,
@@ -1956,7 +1957,7 @@ function OrderDetailModal({
                       {items.length} артикул{items.length !== 1 ? "а" : ""}
                     </div>
                     <div className="text-lg font-bold">
-                      {formatCurrency(detail.total_amount || orderTotal)}
+                      {formatOrderTotal(detail.total_amount || orderTotal)}
                     </div>
                   </div>
                 </div>
@@ -7740,7 +7741,7 @@ export function Orders() {
                       <TableCell className="font-medium text-right whitespace-nowrap">
                         {order.is_replacement
                           ? formatReplacementTotal(order.total_amount)
-                          : formatCurrency(order.total_amount)}
+                          : formatOrderTotal(order.total_amount)}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5 flex-wrap">

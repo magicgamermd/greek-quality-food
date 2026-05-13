@@ -44,12 +44,14 @@ const getInvoiceRemaining = (inv: Invoice): number => {
   return Number(inv.total_gross) - paid;
 };
 
-// Razpiska (no-invoice) payments collect the order's stored
-// total_amount as-is. No VAT line is added — a shipment receipt is
-// not a tax document. Invoices, in contrast, carry the VAT split
-// inside total_net / total_vat / total_gross.
-const getOrderTotalToCollect = (order: Order): number =>
-  Number(order.total_amount);
+// GQF: orders.total_amount е NET (sum от line.total_price = qty ×
+// unit_price, без ДДС). За razpiska плащане касиерът събира GROSS
+// сумата (NET + 20% ДДС). Invoices пазят gross в total_gross
+// директно, така че те не минават през тоя helper.
+const getOrderTotalToCollect = (order: Order): number => {
+  const net = Number(order.total_amount) || 0;
+  return Math.round(net * 1.2 * 100) / 100;
+};
 
 // Default payment method for an order:
 // 1. Ако order-ът носи payment_method override (касиерът е избрал

@@ -52,6 +52,24 @@ export function formatCurrency(
   return EUR_FORMATTER.format(toEurAmount(n, sourceCurrency));
 }
 
+/**
+ * GQF: orders.total_amount е NET (без ДДС). За UI display на "Общо" —
+ * сумата която клиентът трябва да плати — добавяме ДДС (× 1.2).
+ *
+ * Ползва се навсякъде където показваме order-level total в листа,
+ * детайл drawer-а, dashboard, history и т.н. Helper-ът централизира
+ * правилото — ако VAT rate се сменя, го променяме само тук.
+ */
+export function formatOrderTotal(
+  netAmount: number | string | null | undefined,
+  sourceCurrency?: string | null,
+): string {
+  const n =
+    typeof netAmount === "string" ? parseFloat(netAmount) : Number(netAmount);
+  if (!Number.isFinite(n)) return EUR_FORMATTER.format(0);
+  return EUR_FORMATTER.format(toEurAmount(n * 1.2, sourceCurrency));
+}
+
 export const unitLabels: Record<string, string> = {
   kg: "кг",
   g: "г",

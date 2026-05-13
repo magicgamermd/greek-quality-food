@@ -22,7 +22,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
-import { formatCurrency, formatUnit, formatDate } from "@/lib/utils";
+import {
+  formatCurrency,
+  formatOrderTotal,
+  formatUnit,
+  formatDate,
+} from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
@@ -468,7 +473,7 @@ export function Dashboard() {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-sm font-medium">
-                        {formatCurrency(order.total_amount)}
+                        {formatOrderTotal(order.total_amount)}
                       </span>
                       <Badge
                         variant={

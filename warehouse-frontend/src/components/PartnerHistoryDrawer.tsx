@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Order } from "@/types";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatOrderTotal, formatDate } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Sheet,
@@ -344,7 +344,7 @@ function OrderCard({
           >
             {isReplacement
               ? formatReplacementTotal(order.total_amount)
-              : formatCurrency(order.total_amount)}
+              : formatOrderTotal(order.total_amount)}
           </span>
           {expanded ? (
             <ChevronUp className="h-4 w-4 text-gray-400" />
