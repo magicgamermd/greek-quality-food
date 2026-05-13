@@ -177,6 +177,17 @@ function fmtEur(v: number | string): string {
   return formatEurAmount(v) + " €";
 }
 
+/**
+ * GQF: orders.total_amount е NET (без ДДС). За display в дневния
+ * отчет добавяме 20% ДДС, за да съответства със стоковите разписки
+ * и плащане диалозите (които показват GROSS).
+ */
+function fmtEurGross(v: number | string): string {
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  if (!Number.isFinite(n)) return "0,00 €";
+  return formatEurAmount(n * 1.2) + " €";
+}
+
 export async function generateDailyReportPdf(
   data: DailyReportData,
 ): Promise<void> {
@@ -199,7 +210,7 @@ export async function generateDailyReportPdf(
     // subtitle line under it, then a 3-card KPI strip summarising
     // the day's money flow.
     doc.font("MainBold").fontSize(16).fillColor("#0f172a");
-    doc.text("МЕРТ-М — Дневен отчет на плащания", L, doc.y, {
+    doc.text("Greek Quality Food — Дневен отчет на плащания", L, doc.y, {
       width: pageW,
       align: "left",
     });
@@ -372,7 +383,7 @@ export async function generateDailyReportPdf(
           `#${r.order_number}`,
           shortPartner(r.partner_name),
           r.method ? (PAYMENT_LABEL_SHORT_BG[r.method] ?? r.method) : "—",
-          fmtEur(r.total_amount),
+          fmtEurGross(r.total_amount),
           r.paid_amount > 0 ? fmtEur(r.paid_amount) : "—",
           STATUS_LABEL[r.payment_status] ?? r.payment_status,
         ];

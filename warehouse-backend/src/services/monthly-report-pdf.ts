@@ -221,7 +221,7 @@ export async function generateMonthlyReportPdf(
 
     // ── Header ───────────────────────────────────────────
     doc.font("MainBold").fontSize(16).fillColor("#0f172a");
-    doc.text("МЕРТ-М — Месечен отчет на плащания", L, doc.y, {
+    doc.text("Greek Quality Food — Месечен отчет на плащания", L, doc.y, {
       width: pageW,
       align: "left",
     });

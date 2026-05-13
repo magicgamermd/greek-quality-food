@@ -186,12 +186,15 @@ async function assembleRangeSummary(from: string, to: string) {
     [from, to],
   );
 
+  // GQF: order_items.total_price + orders.total_amount са NET.
+  // Multiply by 1.2 (20% ДДС) за да показваме GROSS в отчетите —
+  // съвпада с display във frontend listing-а.
   const { rows: topProducts } = await query(
     `SELECT
         oi.name_bg_snapshot AS name,
         oi.sku_snapshot AS sku,
         SUM(oi.quantity)::numeric AS qty,
-        SUM(oi.total_price)::numeric AS total
+        (SUM(oi.total_price) * 1.2)::numeric AS total
        FROM order_items oi
        JOIN orders o ON o.id = oi.order_id
       WHERE DATE(o.order_date) BETWEEN $1 AND $2
@@ -205,7 +208,7 @@ async function assembleRangeSummary(from: string, to: string) {
   const { rows: topPartners } = await query(
     `SELECT p.name AS partner_name,
             COUNT(*)::int AS order_count,
-            COALESCE(SUM(o.total_amount), 0)::numeric AS total
+            COALESCE(SUM(o.total_amount) * 1.2, 0)::numeric AS total
        FROM orders o
        LEFT JOIN partners p ON p.id = o.partner_id
       WHERE DATE(o.order_date) BETWEEN $1 AND $2
@@ -635,11 +638,14 @@ async function assembleDailyReportData(
       let count = 0;
       let total = 0;
       for (const r of orderPaymentRows) {
-        const totalAmt = parseFloat(r.total_amount ?? 0);
+        // GQF: orders.total_amount е NET (без ДДС). За remaining
+        // изчислението го конвертираме към GROSS (× 1.2), за да
+        // съответства с paid (касиерът въвежда gross сумата).
+        const totalAmtGross = parseFloat(r.total_amount ?? 0) * 1.2;
         const paid = parseFloat(r.paid_amount ?? 0);
         if (r.status === "cancelled") continue;
         const billed =
-          r.is_replacement === true ? Math.abs(totalAmt) : totalAmt;
+          r.is_replacement === true ? Math.abs(totalAmtGross) : totalAmtGross;
         const remaining = billed - paid;
         if (remaining > 0.001) {
           count++;
