@@ -921,30 +921,26 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         doc.font("Main").fontSize(7);
       };
 
-      // VAT-registered invoices show NET prices in the table (matching the
-      // "Данъчна основа" footer line). order_items prices are stored GROSS,
-      // so we divide them out here. For non-VAT invoices the price is shown
-      // as-is (no breakdown).
-      const vatDiv = showVat ? 1 + (data.vatRate ?? 20) / 100 : 1;
+      // GQF: order_items.total_price е NET (без ДДС). Greek Quality
+      // Food пази unit_price като net стойност и ДДС се добавя отгоре.
+      // Затова "Цена" + "Стойност" колоните в таблицата показват NET
+      // (както въведено от касиера), а Данъчна основа / ДДС / Сума за
+      // получаване в footer-а изчисляват разбивката:
+      //   Данъчна основа 20% = sum(line.total_price)  // вече NET
+      //   ДДС 20%             = base × 0.20
+      //   Сума за получаване = base + vat
       for (let idx = 0; idx < data.items.length; idx += 1) {
         const item = data.items[idx];
         const qty = toNum(item.quantity);
-        const grossTotal = toNum(item.total_price);
+        const netTotal = toNum(item.total_price);
         // Discount колоната е премахната → показваме EFFECTIVE цена
         // (post-discount), за да съответства Цена × Кол = Стойност на
-        // печатния документ. Иначе клиент който прави бърза проверка ще
-        // види несъответствие (sticker price × qty ≠ показаната
-        // стойност). При qty=0 fallback-ваме към storage-натия unit_price
-        // — единствено за да не делим на 0; реално qty=0 не би стигнало
-        // до PDF-а.
-        const effectiveGrossPrice =
-          qty > 0 ? grossTotal / qty : toNum(item.unit_price);
-        // GQF: храните се продават с retail (gross) цена — на фактурата
-        // показваме gross "Цена" и gross "Стойност". Данъчната основа +
-        // ДДС отделно се изчисляват във footer-а (Данъчна основа 20% +
-        // ДДС 20% + Сума за получаване).
-        const price = effectiveGrossPrice;
-        const total = grossTotal;
+        // печатния документ. При qty=0 fallback-ваме към storage-натия
+        // unit_price (per-unit net).
+        const effectiveNetPrice =
+          qty > 0 ? netTotal / qty : toNum(item.unit_price);
+        const price = effectiveNetPrice;
+        const total = netTotal;
         const description = item.name_bg || item.name_en;
         const unit = mapUnit(item.unit);
         // Per-line discount колоната беше премахната — на печатния

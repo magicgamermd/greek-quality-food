@@ -1429,12 +1429,11 @@ export async function generateStockDispatchPdf(
       data.warehouse_name,
     );
 
-    // МЕРТ-М: order_items.unit_price is GROSS (price already includes VAT).
-    // - pricing_mode="gross" (default for Стокова разписка): show price
-    //   AS-IS, single "Общо" line at the bottom (no VAT breakdown).
-    // - pricing_mode="net": divide gross price by (1+vat) to display net
-    //   base + VAT line + total breakdown.
-    const pricingMode: "net" | "gross" = data.pricing_mode ?? "gross";
+    // GQF: order_items.unit_price е NET (без ДДС). Greek Quality Food
+    // пази unit_price като net стойност — ДДС се добавя ОТГОРЕ. На
+    // стокова разписка показваме:
+    //   "Цена" + "Ст-ст" колоните = NET (както въведено)
+    //   Totals footer: Сума без ДДС / ДДС 20% / Общо с ДДС
     const vatMultiplier = 1 + data.vat_rate / 100;
     let subtotalEur = 0;
     const rows: string[][] = [];
@@ -1447,16 +1446,10 @@ export async function generateStockDispatchPdf(
       const lineTotal = explicitTotal > 0 ? explicitTotal : baseTotal;
       subtotalEur += lineTotal;
 
-      // На стокова разписка не показваме per-line отстъпка — само
-      // финалната цена (post-discount). За да съответства Цена×Кол =
-      // Стойност, "Цена" е effective post-discount unit price.
+      // Effective post-discount цена (NET).
       const effectivePrice = qty > 0 ? lineTotal / qty : price;
-      const displayPrice =
-        pricingMode === "gross"
-          ? effectivePrice
-          : effectivePrice / vatMultiplier;
-      const displayLineTotal =
-        pricingMode === "gross" ? lineTotal : lineTotal / vatMultiplier;
+      const displayPrice = effectivePrice;
+      const displayLineTotal = lineTotal;
 
       rows.push([
         String(idx + 1),
@@ -1511,13 +1504,13 @@ export async function generateStockDispatchPdf(
       },
     });
 
-    // subtotalEur is the sum of GROSS line totals (price stored gross).
-    // For "gross" mode the total IS the gross sum (no breakdown).
-    // For "net" mode we extract the net base + VAT from the gross sum.
-    const totalGrossEur = subtotalEur;
-    const totalNetEur =
-      pricingMode === "gross" ? subtotalEur : subtotalEur / vatMultiplier;
-    const vatAmountEur = totalGrossEur - totalNetEur;
+    // GQF: subtotalEur е sum of NET line totals. ДДС се добавя отгоре:
+    //   totalNet = sum (както е)
+    //   vatAmount = totalNet × (vat_rate / 100)
+    //   totalGross = totalNet + vatAmount
+    const totalNetEur = subtotalEur;
+    const vatAmountEur = totalNetEur * (data.vat_rate / 100);
+    const totalGrossEur = totalNetEur + vatAmountEur;
 
     ensurePageSpace(doc, 110, drawContinuationHeading);
     drawStockDispatchTotalsBlock(
@@ -1527,7 +1520,10 @@ export async function generateStockDispatchPdf(
       totalNetEur,
       vatAmountEur,
       totalGrossEur,
-      pricingMode,
+      // GQF: винаги показваме breakdown (Сума + ДДС + Общо) —
+      // unit_price е NET, така че документът разписва как се
+      // натрупва ДДС.
+      "net",
       data.show_bgn === true,
     );
 

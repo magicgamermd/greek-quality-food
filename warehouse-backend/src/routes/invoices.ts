@@ -607,19 +607,22 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           clientDisplayAddress = null;
         }
 
-        // Calculate totals — order_items.total_price is GROSS (price already
-        // includes VAT, since МЕРТ-М stores Microinvest gross prices and
-        // doesn't add VAT on top). For VAT-registered invoices we extract
-        // the base + VAT FROM the gross amount; for no-VAT invoices the
-        // gross IS the total with no breakdown.
-        const totalGross = items.reduce(
+        // GQF: order_items.total_price е NET (без ДДС). Greek Quality
+        // Food пази цените като net стойности — за разлика от MERT-M,
+        // където са gross. ДДС се добавя ОТГОРЕ:
+        //   total_net = sum(line.total_price)
+        //   total_vat = total_net × vat_rate
+        //   total_gross = total_net + total_vat
+        const totalNetLines = items.reduce(
           (sum: number, i: any) => sum + parseFloat(i.total_price),
           0,
         );
         const effectiveVatRate = body.include_vat ? body.vat_rate : 0;
-        const vatMul = 1 + body.vat_rate / 100;
-        const totalNet = body.include_vat ? totalGross / vatMul : totalGross;
-        const totalVat = body.include_vat ? totalGross - totalNet : 0;
+        const totalNet = totalNetLines;
+        const totalVat = body.include_vat
+          ? (totalNet * body.vat_rate) / 100
+          : 0;
+        const totalGross = totalNet + totalVat;
 
         // Generate invoice number
         const {
@@ -786,19 +789,18 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           invoice.partner_id,
         ]);
 
-        // Recalculate totals — order_items.total_price is GROSS (МЕРТ-М
-        // stores Microinvest gross prices; we extract net + VAT from
-        // gross on VAT-registered invoices, and emit gross-only when
-        // the invoice is no-VAT). Matches POST /invoices.
-        const totalGross = items.reduce(
+        // GQF: order_items.total_price е NET (без ДДС). Recalculate
+        // съответства на POST /invoices: total_vat = total_net × rate,
+        // total_gross = total_net + total_vat.
+        const totalNetLines = items.reduce(
           (sum: number, i: any) => sum + parseFloat(i.total_price),
           0,
         );
         const includeVat = invoice.include_vat !== false;
         const vatRate = includeVat ? 20 : 0;
-        const vatMul = 1 + vatRate / 100;
-        const totalNet = includeVat ? totalGross / vatMul : totalGross;
-        const totalVat = includeVat ? totalGross - totalNet : 0;
+        const totalNet = totalNetLines;
+        const totalVat = includeVat ? (totalNet * vatRate) / 100 : 0;
+        const totalGross = totalNet + totalVat;
 
         const {
           rows: [{ total: paidTotal }],
@@ -1602,25 +1604,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             }
             selectedItems.push({ ...oi, _partialQty: req.quantity });
           }
-          // Sum gross от selected: order_items.unit_price е stored като
-          // ГРОС цена (с ДДС включено) — всички цени в МЕРТ-М са retail
-          // gross. При invoice creation (по-горе в този файл):
-          //   totalGross = SUM(total_price)
-          //   totalNet   = totalGross / 1.2  (при include_vat=true)
-          //   totalVat   = totalGross - totalNet
-          // Mirror-ваме същия mapping за partial КИ, иначе бихме начислили
-          // ДДС двойно (gross прибавено + 20% още отгоре).
-          let sumGross = 0;
+          // GQF: order_items.unit_price е NET (без ДДС). При partial
+          // credit note: sumNet = sum(qty × unit_price), ДДС се добавя
+          // отгоре. Mirror на invoice creation logic.
+          let sumNetRaw = 0;
           for (const sel of selectedItems) {
-            sumGross += sel._partialQty * parseFloat(sel.unit_price);
+            sumNetRaw += sel._partialQty * parseFloat(sel.unit_price);
           }
-          sumGross = Math.round(sumGross * 100) / 100;
-          const vatMul = 1.2; // 20% БГ standard, mirror на invoice creation
-          const sumNet = includeVat ? sumGross / vatMul : sumGross;
-          const sumVat = includeVat ? sumGross - sumNet : 0;
-          totalNet = -Math.abs(Math.round(sumNet * 100) / 100);
+          sumNetRaw = Math.round(sumNetRaw * 100) / 100;
+          const sumVat = includeVat ? Math.round(sumNetRaw * 20) / 100 : 0;
+          const sumGross = sumNetRaw + sumVat;
+          totalNet = -Math.abs(sumNetRaw);
           totalVat = -Math.abs(Math.round(sumVat * 100) / 100);
-          totalGross = -Math.abs(sumGross);
+          totalGross = -Math.abs(Math.round(sumGross * 100) / 100);
         } else {
           // Full credit note — negate parent invoice totals (backward-compat)
           selectedItems = allOrderItems.map((it) => ({

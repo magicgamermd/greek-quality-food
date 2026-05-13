@@ -5255,9 +5255,13 @@ function CreateOrderModal({
     const line = Number(i.quantity) * Number(i.unit_price) * (1 - disc / 100);
     return Math.round(line * 100) / 100;
   };
-  const orderTotal = validItems
+  // GQF: unit_price е NET (без ДДС). orderTotal (sum of line totals) е
+  // NET база; ДДС се добавя ОТГОРЕ за gross total.
+  const orderNetTotal = validItems
     .filter((i) => i.line_status !== "awaiting")
     .reduce((sum, i) => sum + computeLineTotal(i), 0);
+  const orderVat = orderNetTotal * 0.2;
+  const orderTotal = orderNetTotal + orderVat;
   const awaitingTotal = validItems
     .filter((i) => i.line_status === "awaiting")
     .reduce((sum, i) => sum + computeLineTotal(i), 0);
@@ -6539,9 +6543,15 @@ function CreateOrderModal({
                       {validItems.length} артикул
                       {validItems.length !== 1 ? "а" : ""}
                     </span>
-                    <span className="text-lg font-bold">
-                      Общо: {formatCurrency(orderTotal)}
-                    </span>
+                    <div className="flex flex-col items-end text-right">
+                      <span className="text-xs text-gray-500">
+                        Сума: {formatCurrency(orderNetTotal)} · ДДС 20%:{" "}
+                        {formatCurrency(orderVat)}
+                      </span>
+                      <span className="text-lg font-bold">
+                        Общо с ДДС: {formatCurrency(orderTotal)}
+                      </span>
+                    </div>
                   </>
                 );
               })()}
