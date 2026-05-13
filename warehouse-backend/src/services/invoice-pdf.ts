@@ -939,8 +939,12 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         // до PDF-а.
         const effectiveGrossPrice =
           qty > 0 ? grossTotal / qty : toNum(item.unit_price);
-        const price = effectiveGrossPrice / vatDiv;
-        const total = grossTotal / vatDiv;
+        // GQF: храните се продават с retail (gross) цена — на фактурата
+        // показваме gross "Цена" и gross "Стойност". Данъчната основа +
+        // ДДС отделно се изчисляват във footer-а (Данъчна основа 20% +
+        // ДДС 20% + Сума за получаване).
+        const price = effectiveGrossPrice;
+        const total = grossTotal;
         const description = item.name_bg || item.name_en;
         const unit = mapUnit(item.unit);
         // Per-line discount колоната беше премахната — на печатния
