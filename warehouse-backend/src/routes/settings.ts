@@ -41,6 +41,11 @@ const updateSettingsSchema = z.object({
   // Backend Econt routes остават регистрирани (за интеграционни
   // тестове), но UI-ът не ги извиква.
   econt_enabled: z.boolean().optional(),
+  // Document toggles (мигр. 082): скриват съответните бутони + flows.
+  warranty_enabled: z.boolean().optional(),
+  acceptance_protocol_enabled: z.boolean().optional(),
+  replacement_enabled: z.boolean().optional(),
+  commercial_doc_enabled: z.boolean().optional(),
 });
 
 async function requireAuth(request: FastifyRequest) {
@@ -179,6 +184,10 @@ export default async function settingsRoutes(app: FastifyInstance) {
           ["show_bgn_on_invoice", body.show_bgn_on_invoice],
           ["zebra_printer_name", body.zebra_printer_name],
           ["econt_enabled", body.econt_enabled],
+          ["warranty_enabled", body.warranty_enabled],
+          ["acceptance_protocol_enabled", body.acceptance_protocol_enabled],
+          ["replacement_enabled", body.replacement_enabled],
+          ["commercial_doc_enabled", body.commercial_doc_enabled],
         ];
 
         for (const [field, value] of fields) {

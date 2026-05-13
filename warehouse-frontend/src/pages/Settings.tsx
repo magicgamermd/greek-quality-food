@@ -65,6 +65,11 @@ interface CompanySettings {
   // Master switch за Econt UI интеграцията (мигр. 081). При FALSE се
   // скрива Econt секцията навсякъде в UI-а.
   econt_enabled?: boolean;
+  // Document toggles (мигр. 082)
+  warranty_enabled?: boolean;
+  acceptance_protocol_enabled?: boolean;
+  replacement_enabled?: boolean;
+  commercial_doc_enabled?: boolean;
 }
 
 export function Settings() {
@@ -1257,6 +1262,75 @@ export function Settings() {
                       <span className="absolute left-[2px] top-[2px] bg-white w-5 h-5 rounded-full transition-transform peer-checked:translate-x-5 shadow"></span>
                     </span>
                   </label>
+                </div>
+              </div>
+
+              {/* Documents section — master switches за документни
+               * бутони в Orders drawer (мигр. 082). FALSE = скрий
+               * съответния UI елемент без да чупиш backend route-овете. */}
+              <div className="pt-4 mt-2 border-t">
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                  Документи и работни процеси
+                </h3>
+                <div className="space-y-3">
+                  {[
+                    {
+                      field: "commercial_doc_enabled" as const,
+                      title: "Търговски документ",
+                      desc: "Стокова разписка с партиди + срокове на годност + цени. Извежда се от Orders drawer-а.",
+                    },
+                    {
+                      field: "warranty_enabled" as const,
+                      title: "Гаранционна карта",
+                      desc: "Бутон 'Гаранция' в Orders drawer. За нетрайни хранителни стоки обикновено не се ползва.",
+                    },
+                    {
+                      field: "acceptance_protocol_enabled" as const,
+                      title: "Приемо-предавателен протокол",
+                      desc: "Бутон 'Приемо-предавателен' в Orders drawer + диалог за купувач.",
+                    },
+                    {
+                      field: "replacement_enabled" as const,
+                      title: "Замяна на продукти",
+                      desc: "Toggle 'Замяна' в нова поръчка + 'Замени' филтър pill в листа.",
+                    },
+                  ].map((opt) => (
+                    <div
+                      key={opt.field}
+                      className="rounded-lg border border-gray-200 p-3 flex items-start justify-between gap-4"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold">
+                            {opt.title}
+                          </span>
+                          {companyForm[opt.field] !== false ? (
+                            <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded">
+                              Активен
+                            </span>
+                          ) : (
+                            <span className="text-xs font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
+                              Скрит
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-xs text-gray-600">{opt.desc}</p>
+                      </div>
+                      <label className="inline-flex items-center cursor-pointer select-none shrink-0">
+                        <input
+                          type="checkbox"
+                          className="sr-only peer"
+                          checked={companyForm[opt.field] !== false}
+                          onChange={(e) =>
+                            handleCompanyFormChange(opt.field, e.target.checked)
+                          }
+                        />
+                        <span className="relative w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-violet-300 rounded-full peer-checked:bg-[#6c3dff] transition-colors">
+                          <span className="absolute left-[2px] top-[2px] bg-white w-5 h-5 rounded-full transition-transform peer-checked:translate-x-5 shadow"></span>
+                        </span>
+                      </label>
+                    </div>
+                  ))}
                 </div>
               </div>
 

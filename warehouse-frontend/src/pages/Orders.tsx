@@ -584,6 +584,9 @@ function OrderDetailModal({
   const canEditAfterFulfill = hasPermission(
     PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
   );
+  // GQF document toggles (мигр. 082)
+  const { warrantyEnabled, acceptanceProtocolEnabled, commercialDocEnabled } =
+    useAppSettings();
 
   // Fetch full order with items
   const {
@@ -2656,31 +2659,51 @@ function OrderDetailModal({
                   <FileText className="h-4 w-4" />
                   Оферта
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => handleDocDownload(detail.id, "warranty")}
-                  className="text-amber-700 border-amber-300 hover:bg-amber-50 ml-auto mr-2"
-                  title="Гаранционна карта (сериен номер = номер на поръчката)"
-                >
-                  <ShieldCheck className="h-4 w-4" />
-                  Гаранция
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    // Pre-fill from the loaded order detail; user can override
-                    // anything in the dialog before downloading.
-                    setProtocolBuyerRep(
-                      (detail as any)?.partner?.contact_person ?? "",
-                    );
-                    setProtocolDialogOpen(true);
-                  }}
-                  className="text-purple-700 border-purple-300 hover:bg-purple-50"
-                  title="Приемо-предавателен протокол"
-                >
-                  <FileSignature className="h-4 w-4" />
-                  Приемо-предавателен
-                </Button>
+                {/* GQF: документни бутони се скриват по Settings →
+                 *  Интеграции (мигр. 082). За хранителна индустрия
+                 *  гаранция и ППП обикновено не са нужни. */}
+                {commercialDocEnabled && (
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      handleDocDownload(detail.id, "commercial-doc")
+                    }
+                    className="text-emerald-700 border-emerald-400 hover:bg-emerald-50"
+                    title="Търговски документ (стокова разписка с партиди + срокове)"
+                  >
+                    <ClipboardList className="h-4 w-4" />
+                    Търговски документ
+                  </Button>
+                )}
+                {warrantyEnabled && (
+                  <Button
+                    variant="outline"
+                    onClick={() => handleDocDownload(detail.id, "warranty")}
+                    className="text-amber-700 border-amber-300 hover:bg-amber-50 ml-auto mr-2"
+                    title="Гаранционна карта (сериен номер = номер на поръчката)"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    Гаранция
+                  </Button>
+                )}
+                {acceptanceProtocolEnabled && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      // Pre-fill from the loaded order detail; user can override
+                      // anything in the dialog before downloading.
+                      setProtocolBuyerRep(
+                        (detail as any)?.partner?.contact_person ?? "",
+                      );
+                      setProtocolDialogOpen(true);
+                    }}
+                    className="text-purple-700 border-purple-300 hover:bg-purple-50"
+                    title="Приемо-предавателен протокол"
+                  >
+                    <FileSignature className="h-4 w-4" />
+                    Приемо-предавателен
+                  </Button>
+                )}
               </div>
             )}
           </DialogFooter>
@@ -4719,8 +4742,8 @@ function CreateOrderModal({
   // Master switch за Econt UI (settings.econt_enabled, мигр. 081).
   // EcontShippingPicker сам прави early-return при false, но и тук
   // го проверяваме за да не показваме празно място между бележки и
-  // total-а в new-order диалога.
-  const { econtEnabled } = useAppSettings();
+  // total-а в new-order диалога. replacementEnabled крие "Замяна" toggle.
+  const { econtEnabled, replacementEnabled } = useAppSettings();
 
   // GQF: партньорски обекти/магазини (Kaufland Бургас 7 / BGS-007 и пр.).
   // Зависят от избрания партньор — refetch при смяна на partner_id.
@@ -5591,7 +5614,7 @@ function CreateOrderModal({
                   </span>
                 )}
               </div>
-              {canCreateReplacement && (
+              {canCreateReplacement && replacementEnabled && (
                 <Button
                   type="button"
                   size="sm"
@@ -6820,8 +6843,8 @@ export function Orders() {
   const canSeeBelowCostFilter = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
   // Econt-зависим master switch — крие "Наложен платеж" филтъра и
   // "товарителница" search input-а, когато Еконт е изключен в
-  // Настройки (мигр. 081). COD-ът няма смисъл без куриер.
-  const { econtEnabled } = useAppSettings();
+  // Настройки (мигр. 081). replacementEnabled крие "Замени" филтър.
+  const { econtEnabled, replacementEnabled } = useAppSettings();
   const [statusFilter, setStatusFilter] = useState("");
   const [belowCostOnly, setBelowCostOnly] = useState(false);
   // Batch F1 filter pills — surface only orders containing the matching
@@ -7407,19 +7430,22 @@ export function Orders() {
             Наложен платеж
           </button>
         )}
-        {/* Замени filter — toggle "show only replacement orders" */}
-        <button
-          onClick={() => selectFilter("replacement")}
-          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-            filterReplacement === "only"
-              ? "bg-[#6c3dff] text-white"
-              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-          }`}
-          title="Покажи само замени"
-        >
-          <RefreshCcw className="h-3.5 w-3.5" />
-          Замени
-        </button>
+        {/* Замени filter — само ако функционалността е активна
+            (settings.replacement_enabled, мигр. 082). */}
+        {replacementEnabled && (
+          <button
+            onClick={() => selectFilter("replacement")}
+            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              filterReplacement === "only"
+                ? "bg-[#6c3dff] text-white"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+            title="Покажи само замени"
+          >
+            <RefreshCcw className="h-3.5 w-3.5" />
+            Замени
+          </button>
+        )}
       </div>
 
       {/* Date filter — same pattern as Приемане на стоки */}
