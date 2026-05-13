@@ -3329,16 +3329,21 @@ export default async function orderRoutes(app: FastifyInstance) {
     // detail view (so the cashier sees "this order also has an item on
     // hold for stock"), but every document the customer signs/receives
     // reflects only what's actually being handed over.
+    // GQF: батчите и сроковете на годност са върнати (мигр. 080).
+    // JOIN-ваме batches по oi.batch_id, за да покажем партида + срок
+    // в drawer-а и PDF документите. При невъведен batch_id (legacy
+    // редове) batch_number/expiry_date просто остават NULL.
     const { rows: items } = await db.query(
       `SELECT oi.*,
               oi.name_bg_snapshot AS name_bg,
               oi.name_en_snapshot AS name_en,
               oi.sku_snapshot     AS sku,
               pr.unit, pr.brand,
-              NULL::text AS batch_number,
-              NULL::date AS expiry_date
+              b.batch_number,
+              b.expiry_date
        FROM order_items oi
        LEFT JOIN products pr ON pr.id = oi.product_id
+       LEFT JOIN batches  b  ON b.id  = oi.batch_id
        WHERE oi.order_id = $1
          AND oi.line_status != 'awaiting'
        ORDER BY oi.id`,

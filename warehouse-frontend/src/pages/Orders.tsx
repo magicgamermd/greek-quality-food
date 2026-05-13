@@ -1764,6 +1764,12 @@ function OrderDetailModal({
                           🛡
                         </TableHead>
                         <TableHead>Продукт</TableHead>
+                        <TableHead className="w-28 whitespace-nowrap">
+                          Партида
+                        </TableHead>
+                        <TableHead className="w-28 whitespace-nowrap">
+                          Годност
+                        </TableHead>
                         <TableHead className="w-24 text-right whitespace-nowrap">
                           К-во
                         </TableHead>
@@ -1887,6 +1893,32 @@ function OrderDetailModal({
                                     )}
                                   </div>
                                 </div>
+                              </TableCell>
+                              {/* GQF: Партида (batch_number) + Срок на годност */}
+                              <TableCell className="text-sm">
+                                {(item as any).batch_number ? (
+                                  <span className="font-mono text-gray-700">
+                                    {(item as any).batch_number}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-gray-400">
+                                    —
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-sm">
+                                {(item as any).expiry_date ? (
+                                  <span className="text-gray-700">
+                                    {String((item as any).expiry_date).slice(
+                                      0,
+                                      10,
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-gray-400">
+                                    —
+                                  </span>
+                                )}
                               </TableCell>
                               <TableCell className="text-right text-sm">
                                 {item.quantity}
