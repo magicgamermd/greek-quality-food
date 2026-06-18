@@ -272,21 +272,28 @@ export default async function productRoutes(app: FastifyInstance) {
       // латиница, попадат на същите products.
       const HOMOGLYPHS_FROM = "АВЕКМНОРСТХаверстх";
       const HOMOGLYPHS_TO = "ABEKMHOPCTXaepctx";
-      where += ` AND (
-        normalize_search(p.name_bg) ILIKE '%' || normalize_search($${paramIdx}) || '%'
-        OR normalize_search(p.name_en) ILIKE '%' || normalize_search($${paramIdx}) || '%'
-        OR p.sku ILIKE $${paramIdx + 1}
-        OR translate(p.sku, $${paramIdx + 2}, $${paramIdx + 3})
-           ILIKE '%' || translate($${paramIdx}, $${paramIdx + 2}, $${paramIdx + 3}) || '%'
-        OR p.brand ILIKE $${paramIdx + 1}
-      )`;
-      params.push(
-        trimmedSearch,
-        `%${trimmedSearch}%`,
-        HOMOGLYPHS_FROM,
-        HOMOGLYPHS_TO,
-      );
-      paramIdx += 4;
+      // Word-split (token-AND): всяка дума от търсенето трябва да се намери
+      // (по name_bg / name_en / sku / homoglyph sku / brand), за да мач-ва
+      // напр. "маса работна 60" → име, в което думите НЕ са слети. Преди беше
+      // single-blob ILIKE → multi-word заявки се проваляха.
+      const searchWords = trimmedSearch.split(/\s+/).filter(Boolean);
+      const wordClauses: string[] = [];
+      for (const word of searchWords) {
+        const escaped = word.replace(/[%_\\]/g, "\\$&");
+        wordClauses.push(`(
+          normalize_search(p.name_bg) ILIKE '%' || normalize_search($${paramIdx}) || '%'
+          OR normalize_search(p.name_en) ILIKE '%' || normalize_search($${paramIdx}) || '%'
+          OR p.sku ILIKE $${paramIdx + 1}
+          OR translate(p.sku, $${paramIdx + 2}, $${paramIdx + 3})
+             ILIKE '%' || translate($${paramIdx}, $${paramIdx + 2}, $${paramIdx + 3}) || '%'
+          OR p.brand ILIKE $${paramIdx + 1}
+        )`);
+        params.push(word, `%${escaped}%`, HOMOGLYPHS_FROM, HOMOGLYPHS_TO);
+        paramIdx += 4;
+      }
+      if (wordClauses.length > 0) {
+        where += ` AND (${wordClauses.join(" AND ")})`;
+      }
     }
 
     if (supplier_group) {
