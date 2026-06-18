@@ -29,7 +29,8 @@ Spec: `docs/superpowers/specs/2026-06-18-gqf-sync-from-mertm-design.md`
 - ✅ Econt worker роля + опашка — commit `43acbcf`; `/orders/econt-queue` → 200; НЕТО регресия чиста (gross=net×1.2)
 - ✅ Проформа фактури — commit `aafabd2`; проформа за поръчка → net=1.82/vat=0.36/gross=2.18 (gross=net×1.2), отделна номерация, реалните фактури непокътнати
 - ✅ Runtime/identity брандинг (telegram-bot/mobile/ai-service/installer/start скрипт) — commit `9588f1e`
-- ⏳ Остават (по-нисък приоритет): invoice инструменти (размяна/ръчно №), OCR/PWA, frontend search; асистент+MCP; деплой
+- ✅ Multi-word (token-AND) търсене на продукти — верифицирано (обърнат ред „бадеми халва" → „Халва…с Бадеми")
+- ⏳ Остават (по-нисък приоритет): invoice админ инструменти (размяна/ръчно №), OCR/PWA, преименуване на macOS .app bundles; асистент+MCP; деплой
 
 **⚠️ Input от magic преди продукшън:**
 
