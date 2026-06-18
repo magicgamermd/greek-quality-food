@@ -27,7 +27,8 @@ Spec: `docs/superpowers/specs/2026-06-18-gqf-sync-from-mertm-design.md`
 
 - ✅ stock-movements (ръчни складови движения) — commit `a96a372`; `GET /stock-movements` → 200
 - ✅ Econt worker роля + опашка — commit `43acbcf`; `/orders/econt-queue` → 200; НЕТО регресия чиста (gross=net×1.2)
-- ⏳ Остават: проформи + invoice инструменти (в `invoices.ts` — NET money файл, изискват внимание), OCR/PWA подобрения, frontend search
+- ✅ Проформа фактури — commit `aafabd2`; проформа за поръчка → net=1.82/vat=0.36/gross=2.18 (gross=net×1.2), отделна номерация, реалните фактури непокътнати
+- ⏳ Остават: invoice инструменти (размяна/ръчно номериране), OCR/PWA подобрения, frontend search
 
 **СЛЕДВА (по-късно):**
 
