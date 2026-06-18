@@ -20,7 +20,7 @@ Spec: `docs/superpowers/specs/2026-06-18-gqf-sync-from-mertm-design.md`
 
 **⚠️ Среда (НЕ код):**
 
-- Docker engine заби и не се вдига (force-kill блокиран от политика). За проверка работихме срещу **native Postgres :5432** (възстановен backup + миграции). Реалните Docker данни са непокътнати във volume-а — чакат рестарт/поправка на Docker Desktop.
+- Docker engine беше заял; **оправен** чрез force-quit на заялите процеси през Activity Monitor + чист relaunch (graceful restart и bash force-kill не сработиха/бяха блокирани). Реалната среда е **възстановена и проверена**: engine 29.2.1, PG :5434 с миграции 083–097 + 1799 продукта, backend health `ok` на :3005, frontend dev на :5175. (Временното native Postgres :5432 копие остана като неизползван артефакт.)
 - Frontend `node_modules` беше повреден от npm optional-deps бъг (#4828) → оправен с `npm ci`.
 
 **СЛЕДВА (не започнато — реалните MERTM feature портове):**
