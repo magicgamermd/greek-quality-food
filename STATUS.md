@@ -28,7 +28,16 @@ Spec: `docs/superpowers/specs/2026-06-18-gqf-sync-from-mertm-design.md`
 - ✅ stock-movements (ръчни складови движения) — commit `a96a372`; `GET /stock-movements` → 200
 - ✅ Econt worker роля + опашка — commit `43acbcf`; `/orders/econt-queue` → 200; НЕТО регресия чиста (gross=net×1.2)
 - ✅ Проформа фактури — commit `aafabd2`; проформа за поръчка → net=1.82/vat=0.36/gross=2.18 (gross=net×1.2), отделна номерация, реалните фактури непокътнати
-- ⏳ Остават: invoice инструменти (размяна/ръчно номериране), OCR/PWA подобрения, frontend search
+- ✅ Runtime/identity брандинг (telegram-bot/mobile/ai-service/installer/start скрипт) — commit `9588f1e`
+- ⏳ Остават (по-нисък приоритет): invoice инструменти (размяна/ръчно №), OCR/PWA, frontend search; асистент+MCP; деплой
+
+**⚠️ Input от magic преди продукшън:**
+
+- **Реални GQF фирмени данни** (ЕИК/ДДС/адрес/тел) → `warehouse-backend/.env` (COMPANY\_\*) + settings таблица. Сега са PLACEHOLDER → бот/фактури излизат с фиктивен ЕИК `123456789`.
+- **telegram-bot KB**: `agent/TOOLS.md` още твърди „няма партиди/срокове на годност" — грешно за GQF (продава храни). Нужна е актуализация на знанието (домейн съдържание).
+- **API ключове** (ElevenLabs/OpenAI/Telegram token) за гласов асистент + telegram-agent/MCP.
+- **Деплой цел** (Docker/Railway) + реални secrets.
+- **macOS installer `.app` bundles** още се казват „MERT-M" (козметично; иска преименуване на бандълите).
 
 **СЛЕДВА (по-късно):**
 
