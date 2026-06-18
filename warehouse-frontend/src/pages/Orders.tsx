@@ -585,9 +585,13 @@ function OrderDetailModal({
   const canEditAfterFulfill = hasPermission(
     PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,
   );
-  // GQF document toggles (мигр. 082)
-  const { warrantyEnabled, acceptanceProtocolEnabled, commercialDocEnabled } =
-    useAppSettings();
+  // GQF document toggles (мигр. 082) + Econt master switch (мигр. 081)
+  const {
+    warrantyEnabled,
+    acceptanceProtocolEnabled,
+    commercialDocEnabled,
+    econtEnabled,
+  } = useAppSettings();
 
   // Fetch full order with items
   const {
@@ -2274,7 +2278,8 @@ function OrderDetailModal({
                   econt_requested → backend сетва/чисти econt_requested_at,
                   което добавя/маха поръчката от /econt опашката.
                   Active = кехлибарен badge с × за махане; inactive = dashed. */}
-              {detail.status !== "cancelled" &&
+              {econtEnabled &&
+                detail.status !== "cancelled" &&
                 (detail.econt_requested_at ? (
                   <button
                     type="button"

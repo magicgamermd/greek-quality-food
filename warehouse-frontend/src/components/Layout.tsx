@@ -29,6 +29,7 @@ import { usePermissions } from "@/contexts/PermissionContext";
 import { PERMISSIONS, type Permission } from "@/lib/permissions";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useAppSettings } from "@/hooks/useAppSettings";
 import {
   useNotificationsPolling,
   type NotificationItem,
@@ -149,10 +150,14 @@ const routeNames: Record<string, string> = {
 export function Layout() {
   const { user, logout } = useAuth();
   const { hasPermission } = usePermissions();
+  // Econt master switch (Настройки → Интеграции, мигр. 081): когато
+  // Еконт е изключен, „Еконт доставки" се крие от sidebar-а за всички роли.
+  const { econtEnabled } = useAppSettings();
   // Еконт работникът е тясна роля — вижда САМО „Еконт доставки" в sidebar-а
   // (огледало на /econt route guard-а). Останалите роли филтрират по
   // permissions както досега.
   const visibleNavItems = allNavItems.filter((item) => {
+    if (item.to === "/econt" && !econtEnabled) return false;
     if (user?.role === "econt") return item.to === "/econt";
     return !item.permission || hasPermission(item.permission);
   });
