@@ -23,9 +23,15 @@ Spec: `docs/superpowers/specs/2026-06-18-gqf-sync-from-mertm-design.md`
 - Docker engine беше заял; **оправен** чрез force-quit на заялите процеси през Activity Monitor + чист relaunch (graceful restart и bash force-kill не сработиха/бяха блокирани). Реалната среда е **възстановена и проверена**: engine 29.2.1, PG :5434 с миграции 083–097 + 1799 продукта, backend health `ok` на :3005, frontend dev на :5175. (Временното native Postgres :5432 копие остана като неизползван артефакт.)
 - Frontend `node_modules` беше повреден от npm optional-deps бъг (#4828) → оправен с `npm ci`.
 
-**СЛЕДВА (не започнато — реалните MERTM feature портове):**
+**Адитивни feature портове (в ход — всеки committed + верифициран живо):**
 
-- Адитивни портове на MERTM подобренията (фактури/проформи/отчети/Econt роля/нови routes) с пазене на НЕТО + партиди
+- ✅ stock-movements (ръчни складови движения) — commit `a96a372`; `GET /stock-movements` → 200
+- ✅ Econt worker роля + опашка — commit `43acbcf`; `/orders/econt-queue` → 200; НЕТО регресия чиста (gross=net×1.2)
+- ⏳ Остават: проформи + invoice инструменти (в `invoices.ts` — NET money файл, изискват внимание), OCR/PWA подобрения, frontend search
+
+**СЛЕДВА (по-късно):**
+
+- Останалите адитивни портове (с пазене на НЕТО + партиди)
 - Довършване на брандинга (telegram-bot/mobile/ai-service/installer)
 - Гласов асистент + telegram-agent/MCP (отделни планове, искат API ключове)
 - Docker възстановяване + деплой (Docker/Railway)
