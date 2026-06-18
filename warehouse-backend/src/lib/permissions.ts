@@ -44,7 +44,7 @@ export const PERMISSIONS = {
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
-export type UserRole = "admin" | "warehouse" | "accountant" | "sales";
+export type UserRole = "admin" | "warehouse" | "accountant" | "sales" | "econt";
 
 /**
  * Role default permissions. Admin is special: the helper short-circuits
@@ -90,6 +90,18 @@ export const ROLE_DEFAULTS: Record<UserRole, Permission[]> = {
     // INVENTORY_VIEW_PURCHASE_PRICE intentionally excluded
     PERMISSIONS.PARTNERS_MANAGE,
     PERMISSIONS.PRODUCTS_VIEW,
+    PERMISSIONS.PAYMENTS_MANAGE,
+  ],
+  // Econt работник — тясна роля като warehouse. Вижда само /econt
+  // страницата (sidebar филтър в Layout.tsx). Backend нужди:
+  //   - ORDERS_MANAGE → GET /orders/econt-queue (scoped) четене
+  //   - ECONT_MANAGE  → POST /econt/create-shipment, label-pdf
+  //   - PAYMENTS_MANAGE → маркиране "платено" за наложен платеж
+  // Изолацията е на frontend ниво + scoped endpoint (без цени), точно
+  // както warehouse. Няма INVOICES/PRODUCTS/REPORTS достъп.
+  econt: [
+    PERMISSIONS.ORDERS_MANAGE,
+    PERMISSIONS.ECONT_MANAGE,
     PERMISSIONS.PAYMENTS_MANAGE,
   ],
 };

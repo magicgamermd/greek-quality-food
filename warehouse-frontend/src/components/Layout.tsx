@@ -9,6 +9,7 @@ import {
   ShoppingCart,
   Users,
   Truck,
+  Send,
   FileText,
   CreditCard,
   BarChart3,
@@ -78,6 +79,12 @@ const allNavItems: Array<{
     permission: PERMISSIONS.ORDERS_MANAGE,
   },
   {
+    to: "/econt",
+    icon: Send,
+    label: "Еконт доставки",
+    permission: PERMISSIONS.ECONT_MANAGE,
+  },
+  {
     to: "/partners",
     icon: Users,
     label: "Партньори",
@@ -129,6 +136,7 @@ const routeNames: Record<string, string> = {
   "/stock-movements": "Завеждане / Изписване",
   "/orders": "Поръчки",
   "/warehouse": "Склад пакетиране",
+  "/econt": "Еконт доставки",
   "/partners": "Партньори",
   "/suppliers": "Доставчици",
   "/invoices": "Фактури",
@@ -141,9 +149,13 @@ const routeNames: Record<string, string> = {
 export function Layout() {
   const { user, logout } = useAuth();
   const { hasPermission } = usePermissions();
-  const visibleNavItems = allNavItems.filter(
-    (item) => !item.permission || hasPermission(item.permission),
-  );
+  // Еконт работникът е тясна роля — вижда САМО „Еконт доставки" в sidebar-а
+  // (огледало на /econt route guard-а). Останалите роли филтрират по
+  // permissions както досега.
+  const visibleNavItems = allNavItems.filter((item) => {
+    if (user?.role === "econt") return item.to === "/econt";
+    return !item.permission || hasPermission(item.permission);
+  });
   const navigate = useNavigate();
   const location = useLocation();
   const currentRouteName = routeNames[location.pathname] ?? routeNames["/"];

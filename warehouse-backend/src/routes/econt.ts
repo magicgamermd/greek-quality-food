@@ -831,6 +831,47 @@ export default async function econtRoutes(app: FastifyInstance) {
     },
   );
 
+  // PATCH /econt/product-weight — запазва тегло (kg) на продукт, за да се
+  // запомни за следващите товарителници. Когато Еконт работникът въведе
+  // теглото на продукт без заредено тегло, следващия път то се знае
+  // автоматично (SUM(quantity × weight_kg) в товарителницата). Достъп:
+  // econt / warehouse / admin. weight_kg НЕ е ценова информация.
+  app.patch(
+    "/product-weight",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authRes = await requireAuth(request, reply);
+      if (authRes) return authRes;
+      const role = (request.user as { role?: string } | undefined)?.role;
+      if (role !== "econt" && role !== "admin" && role !== "warehouse") {
+        return reply.code(403).send({ error: "Няма достъп за тази операция." });
+      }
+      const body = request.body as {
+        product_id?: unknown;
+        weight_kg?: unknown;
+      };
+      const productId = Number(body.product_id);
+      const weightKg = Number(body.weight_kg);
+      if (!Number.isInteger(productId) || productId <= 0) {
+        return reply.code(400).send({ error: "Невалиден product_id." });
+      }
+      if (!Number.isFinite(weightKg) || weightKg < 0 || weightKg > 100000) {
+        return reply.code(400).send({ error: "Невалидно тегло." });
+      }
+      const { rowCount } = await query(
+        "UPDATE products SET weight_kg = $1 WHERE id = $2",
+        [weightKg, productId],
+      );
+      if (!rowCount) {
+        return reply.code(404).send({ error: "Продуктът не е намерен." });
+      }
+      return reply.send({
+        ok: true,
+        product_id: productId,
+        weight_kg: weightKg,
+      });
+    },
+  );
+
   // GET /econt/label-pdf-download/:shipmentNumber — proxy PDF bytes
   app.get(
     "/label-pdf-download/:shipmentNumber",

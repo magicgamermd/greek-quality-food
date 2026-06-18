@@ -20,6 +20,7 @@ import { IncomingGoods } from "@/pages/IncomingGoods";
 import { StockMovements } from "@/pages/StockMovements";
 import { Orders } from "@/pages/Orders";
 import { WarehousePacking } from "@/pages/WarehousePacking";
+import { EcontQueue } from "@/pages/EcontQueue";
 import { Partners } from "@/pages/Partners";
 import { Suppliers } from "@/pages/Suppliers";
 import { Invoices } from "@/pages/Invoices";
@@ -96,6 +97,15 @@ function ProtectedRoute({
   return <>{children}</>;
 }
 
+// Index route element — the Econt worker role has no access to the Dashboard
+// (scoped role, sidebar shows only /econt), so send it straight to its queue.
+// All other roles keep the existing Dashboard landing.
+function HomeForRole() {
+  const { user } = useAuth();
+  if (user?.role === "econt") return <Navigate to="/econt" replace />;
+  return <Dashboard />;
+}
+
 function AppRoutes() {
   const { isAuthenticated, isOwnerMobileSession } = useAuth();
   return (
@@ -161,7 +171,7 @@ function AppRoutes() {
         path="/"
         element={
           <ProtectedRoute
-            allowedRoles={["admin", "warehouse", "accountant"]}
+            allowedRoles={["admin", "warehouse", "accountant", "econt"]}
             blockOwnerMobileSession
             redirectTo="/owner"
           >
@@ -169,7 +179,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Dashboard />} />
+        <Route index element={<HomeForRole />} />
         <Route
           path="products"
           element={
@@ -207,6 +217,14 @@ function AppRoutes() {
           element={
             <ProtectedRoute allowedRoles={["admin", "warehouse"]}>
               <WarehousePacking />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="econt"
+          element={
+            <ProtectedRoute allowedRoles={["admin", "econt"]}>
+              <EcontQueue />
             </ProtectedRoute>
           }
         />

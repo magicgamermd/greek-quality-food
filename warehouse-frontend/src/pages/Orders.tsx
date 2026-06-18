@@ -2180,6 +2180,66 @@ function OrderDetailModal({
                     </Button>
                   );
                 })()}
+              {/* Toggle "Заявка за Еконт доставка" — маркира СЪЩЕСТВУВАЩА
+                  поръчка за Еконт работника (огледало на чекбокса в новата
+                  поръчка). Винаги видим освен при анулирана; може да се
+                  отмаркира дори след товарителница. Праща реалния boolean
+                  econt_requested → backend сетва/чисти econt_requested_at,
+                  което добавя/маха поръчката от /econt опашката.
+                  Active = кехлибарен badge с × за махане; inactive = dashed. */}
+              {detail.status !== "cancelled" &&
+                (detail.econt_requested_at ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await api.put(
+                          `/orders/${detail.id}`,
+                          { econt_requested: false },
+                          {
+                            headers: { Authorization: `Bearer ${authToken}` },
+                          },
+                        );
+                        refetchDetail();
+                        qc.invalidateQueries({ queryKey: ["orders"] });
+                        qc.invalidateQueries({ queryKey: ["econt-queue"] });
+                        toast.success("Заявката за Еконт е премахната");
+                      } catch (err: any) {
+                        toast.error(err?.response?.data?.error || "Грешка");
+                      }
+                    }}
+                    title="Премахни заявката за Еконт доставка"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-md bg-amber-100 text-amber-700 hover:bg-amber-200 border border-amber-200 transition"
+                  >
+                    📦 Заявка за Еконт
+                    <XIcon className="h-3 w-3" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await api.put(
+                          `/orders/${detail.id}`,
+                          { econt_requested: true },
+                          {
+                            headers: { Authorization: `Bearer ${authToken}` },
+                          },
+                        );
+                        refetchDetail();
+                        qc.invalidateQueries({ queryKey: ["orders"] });
+                        qc.invalidateQueries({ queryKey: ["econt-queue"] });
+                        toast.success("Маркирана за Еконт доставка");
+                      } catch (err: any) {
+                        toast.error(err?.response?.data?.error || "Грешка");
+                      }
+                    }}
+                    title="Маркирай: поръчката отива при Еконт работника за товарителница"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-md text-gray-500 hover:bg-amber-50 hover:text-amber-700 border border-dashed border-gray-300 hover:border-amber-300 transition"
+                  >
+                    📦 Заявка за Еконт доставка
+                  </button>
+                ))}
               {(detail.status === "confirmed" ||
                 detail.status === "processing") && (
                 <Button
@@ -4764,6 +4824,7 @@ function CreateOrderModal({
     econt_cod_amount: 0,
     econt_payer: "sender" as "sender" | "receiver",
     econt_has_cod: false,
+    econt_requested: false,
     econt_shipment_description: "",
     econt_shipment_date: (() => {
       const t = new Date();
@@ -4979,6 +5040,7 @@ function CreateOrderModal({
         econt_cod_amount: 0,
         econt_payer: "sender",
         econt_has_cod: false,
+        econt_requested: false,
         econt_shipment_description: "",
         econt_shipment_date: (() => {
           const t = new Date();
@@ -5383,6 +5445,9 @@ function CreateOrderModal({
         econt_shipment_description:
           form.econt_shipment_description?.trim() || undefined,
         econt_shipment_date: form.econt_shipment_date || undefined,
+        // Флаг "за Еконт доставка" — касиерски чекбокс. true → поръчката
+        // влиза в опашката на Еконт работника (/econt) веднага при създаване.
+        econt_requested: form.econt_requested || undefined,
         items: validItems.map((i) => ({
           product_id: Number(i.product_id),
           quantity: Number(i.quantity),
@@ -6489,6 +6554,26 @@ function CreateOrderModal({
                     defaultOpen={false}
                     defaultCodAmount={orderTotal}
                   />
+                )}
+
+                {/* Заявка за Еконт доставка — касиерски чекбокс. При отметка
+                    поръчката влиза в опашката на Еконт работника (/econt)
+                    веднага при създаване (backend сетва econt_requested_at). */}
+                {econtEnabled && (
+                  <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={form.econt_requested}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          econt_requested: e.target.checked,
+                        }))
+                      }
+                      className="h-4 w-4 rounded border-gray-300"
+                    />
+                    📦 Заявка за Еконт доставка
+                  </label>
                 )}
               </>
             )}

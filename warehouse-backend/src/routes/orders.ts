@@ -142,6 +142,10 @@ const createOrderSchema = z.object({
   econt_payer: z.enum(["sender", "receiver"]).optional(),
   econt_shipment_description: z.string().trim().max(500).optional(),
   econt_shipment_date: z.string().trim().optional(),
+  // Флаг "за Еконт доставка" — касиерски чекбокс. true → econt_requested_at
+  // = NOW() (поръчката влиза в опашката на Еконт работника). Огледало на
+  // dispatched_to_warehouse_at, но toggled от булева стойност на формата.
+  econt_requested: z.boolean().optional(),
   items: z.array(orderItemSchema).min(1),
   // Admin-only override: explicit acknowledgement that one or more lines
   // are priced below products.purchase_price. Backend re-validates and
@@ -195,6 +199,10 @@ const updateOrderSchema = z.object({
   econt_payer: z.enum(["sender", "receiver"]).nullish(),
   econt_shipment_description: z.string().trim().max(500).nullish(),
   econt_shipment_date: z.string().trim().nullish(),
+  // Флаг "за Еконт доставка" — касиерски toggle. true → econt_requested_at
+  // = NOW() (влиза в опашката на Еконт работника), false → clear (пада от
+  // опашката). Огледало на dispatched_to_warehouse_at.
+  econt_requested: z.boolean().nullish(),
 
   items: z.array(orderItemSchema).min(1).optional(),
   allow_below_cost: z.boolean().optional().default(false),
@@ -844,6 +852,68 @@ export default async function orderRoutes(app: FastifyInstance) {
     };
   });
 
+  // GET /orders/econt-queue — scoped feed for the Econt worker role.
+  // Returns ONLY orders flagged econt_requested_at (non-cancelled), with a
+  // price-free projection: no order total/NET/VAT column is ever serialized
+  // to this role. The ONLY money value exposed is econt_cod_amount — the
+  // cashier-set наложен платеж (gross sum the courier collects). GQF съхранява
+  // total_amount като НЕТО, затова COD-ът НЕ се деривира от total_amount
+  // (за разлика от MERTM, който пази GROSS); ползваме изричната
+  // econt_cod_amount колона — същата семантика като списъка с поръчки
+  // (has_cod_shipment = econt_cod_amount > 0). Registered BEFORE /:id so the
+  // literal path wins over the param route.
+  app.get(
+    "/econt-queue",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      await requireAuth(request, reply);
+      const role = (request.user as { role?: string })?.role;
+      if (role !== "econt" && role !== "admin") {
+        return reply
+          .code(403)
+          .send({ error: "Достъп само за Еконт работник." });
+      }
+
+      const { rows } = await query(
+        `SELECT
+           o.id,
+           o.order_number,
+           p.name AS partner_name,
+           -- Единствената парична стойност, която Еконт работникът легитимно
+           -- вижда — сумата за събиране (наложен платеж), зададена изрично от
+           -- касиера. БЕЗ деривация от total_amount (НЕТО в GQF).
+           o.econt_cod_amount,
+           o.econt_shipment_number,
+           o.econt_tracking_url,
+           o.econt_pdf_url,
+           o.econt_requested_at,
+           o.created_at,
+           -- paid: дали наложеният платеж (COD метод) вече е събран. Огледало
+           -- на paid_cod_amount от списъка — случайни кеш/банкови предплащания
+           -- не вдигат флага сами.
+           (COALESCE((
+              SELECT SUM(pay.amount) FROM payments pay
+              WHERE (pay.order_id = o.id
+                     OR (o.invoice_id IS NOT NULL AND pay.invoice_id = o.invoice_id))
+                AND pay.payment_method = 'cod'
+            ), 0) > 0) AS paid,
+           COALESCE(
+             (SELECT json_agg(json_build_object('name', pr.name_bg, 'quantity', oi.quantity, 'product_id', pr.id, 'weight_kg', pr.weight_kg) ORDER BY oi.id)
+              FROM order_items oi
+              JOIN products pr ON pr.id = oi.product_id
+              WHERE oi.order_id = o.id),
+             '[]'::json
+           ) AS items
+         FROM orders o
+         LEFT JOIN partners p ON p.id = o.partner_id
+         WHERE o.econt_requested_at IS NOT NULL
+           AND o.status <> 'cancelled'
+         ORDER BY o.econt_requested_at DESC`,
+      );
+
+      return reply.send({ data: rows });
+    },
+  );
+
   // GET /orders/:id
   app.get("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
     await requireAuth(request, reply);
@@ -1264,13 +1334,13 @@ export default async function orderRoutes(app: FastifyInstance) {
            econt_weight, econt_shipping_cost, econt_payer,
            econt_shipment_description, econt_shipment_date,
            below_cost_approved_by, below_cost_approved_at, below_cost_details,
-           status, is_replacement, order_number
+           status, is_replacement, econt_requested_at, order_number
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22,
                  $23, $24, $25,
-                 $26, $27, nextval('order_number_seq'))
+                 $26, $27, $28, nextval('order_number_seq'))
          RETURNING *`,
             [
               body.partner_id,
@@ -1302,6 +1372,9 @@ export default async function orderRoutes(app: FastifyInstance) {
                 : null,
               mainStatus,
               body.is_replacement,
+              // Флаг "за Еконт доставка" — true → влиза в опашката на Еконт
+              // работника веднага при създаване; иначе NULL (извън опашката).
+              body.econt_requested ? new Date().toISOString() : null,
             ],
           );
 
@@ -1731,6 +1804,17 @@ export default async function orderRoutes(app: FastifyInstance) {
               params.push(body[field] ?? null);
             }
           }
+
+          // econt_requested: true → set NOW() (enters Econt worker queue),
+          // false → clear (drops from queue). Mirrors dispatched_to_warehouse_at.
+          if (
+            body.econt_requested !== undefined &&
+            body.econt_requested !== null
+          ) {
+            sets.push(`econt_requested_at = $${paramIdx++}`);
+            params.push(body.econt_requested ? new Date().toISOString() : null);
+          }
+
           params.push(id);
           const {
             rows: [updated],
