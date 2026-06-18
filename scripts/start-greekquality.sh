@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # ============================================================================
-# MERT-M dev — single-command boot
+# Greek Quality Food dev — single-command boot
 #
 # Starts the full local dev stack: Postgres + Redis Docker containers,
 # warehouse-backend (tsx watch), warehouse-frontend (vite), ai-service
 # (uvicorn). Idempotent — kills any stale processes from previous runs
 # before starting new ones.
 #
-# Usage:    ./scripts/start-mertm.sh           # start everything
-#           ./scripts/start-mertm.sh --status  # status only, no start
-#           ./scripts/start-mertm.sh --stop    # stop everything
+# Usage:    ./scripts/start-greekquality.sh           # start everything
+#           ./scripts/start-greekquality.sh --status  # status only, no start
+#           ./scripts/start-greekquality.sh --stop    # stop everything
 #
-# Logs go to /tmp/mertm-{backend,frontend,ai}.log
+# Logs go to /tmp/gqf-{backend,frontend,ai}.log
 # ============================================================================
 set -euo pipefail
 
@@ -40,19 +40,19 @@ probe_http() {
 }
 
 stop_dev_processes() {
-  info "Stopping any existing MERT-M dev processes..."
+  info "Stopping any existing Greek Quality Food dev processes..."
   # Case-insensitive (-i) защото path-овете на client-а са uppercase
-  # /Applications/MERT-M/..., а development checkout-а е lowercase
-  # /Users/magic/Projects/mert-m/... — без -i pkill пропускаше едната
+  # /Applications/Greek Quality Food/..., а development checkout-а е lowercase
+  # /Users/magic/Projects/greek-quality-food/... — без -i pkill пропускаше едната
   # вариант, оставяше stale tsx → EADDRINUSE crash при следващ старт.
-  pkill -if "mert.m/warehouse-backend.*tsx" 2>/dev/null || true
-  pkill -if "mert.m/warehouse-backend.*nodemon" 2>/dev/null || true
-  pkill -if "mert.m/warehouse-frontend.*vite" 2>/dev/null || true
-  pkill -if "mert.m/ai-service.*uvicorn" 2>/dev/null || true
+  pkill -if "greek.quality.food/warehouse-backend.*tsx" 2>/dev/null || true
+  pkill -if "greek.quality.food/warehouse-backend.*nodemon" 2>/dev/null || true
+  pkill -if "greek.quality.food/warehouse-frontend.*vite" 2>/dev/null || true
+  pkill -if "greek.quality.food/ai-service.*uvicorn" 2>/dev/null || true
   # Port-based kill като safety net — ако path-pattern-ите пропускат
   # някой процес заради exotic command-line, listening port-ът все
   # пак идентифицира runaway-а.
-  for port in 3004 5174 8000; do
+  for port in 3005 5175 8000; do
     if pid=$(lsof -tiTCP:$port -sTCP:LISTEN 2>/dev/null); then
       kill -9 "$pid" 2>/dev/null || true
     fi
@@ -61,13 +61,13 @@ stop_dev_processes() {
 }
 
 ensure_docker() {
-  info "Ensuring MERT-M Postgres + Redis Docker containers are running..."
+  info "Ensuring Greek Quality Food Postgres + Redis Docker containers are running..."
   if ! docker info >/dev/null 2>&1; then
     err "Docker daemon is not running. Start Docker Desktop and retry."
     exit 1
   fi
 
-  for c in mertm-postgres-1 mertm-redis-1; do
+  for c in greekquality-postgres-1 greekquality-redis-1; do
     state=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo "missing")
     case "$state" in
       running)  ok "$c (already running)" ;;
@@ -81,15 +81,15 @@ ensure_docker() {
 }
 
 start_backend() {
-  info "Starting warehouse-backend on :3004..."
+  info "Starting warehouse-backend on :3005..."
   cd "$ROOT/warehouse-backend"
-  nohup npm run dev > "$LOG_DIR/mertm-backend.log" 2>&1 &
+  nohup npm run dev > "$LOG_DIR/gqf-backend.log" 2>&1 &
 }
 
 start_frontend() {
-  info "Starting warehouse-frontend on :5174..."
+  info "Starting warehouse-frontend on :5175..."
   cd "$ROOT/warehouse-frontend"
-  nohup npm run dev > "$LOG_DIR/mertm-frontend.log" 2>&1 &
+  nohup npm run dev > "$LOG_DIR/gqf-frontend.log" 2>&1 &
 }
 
 start_ai() {
@@ -106,7 +106,7 @@ start_ai() {
   fi
   nohup bash -c 'set -a && source .env && set +a && \
     ./.venv311/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000' \
-    > "$LOG_DIR/mertm-ai.log" 2>&1 &
+    > "$LOG_DIR/gqf-ai.log" 2>&1 &
 }
 
 wait_for_health() {
@@ -114,8 +114,8 @@ wait_for_health() {
   local deadline=$(( $(date +%s) + 30 ))
   while (( $(date +%s) < deadline )); do
     local b f a
-    b=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://localhost:3004/health 2>/dev/null || echo 000)
-    f=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://localhost:5174 2>/dev/null || echo 000)
+    b=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://localhost:3005/health 2>/dev/null || echo 000)
+    f=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://localhost:5175 2>/dev/null || echo 000)
     a=$(curl -s -o /dev/null -w "%{http_code}" --max-time 1 http://localhost:8000/health 2>/dev/null || echo 000)
     if [[ "$b" == "200" && "$f" == "200" && "$a" == "200" ]]; then return 0; fi
     sleep 1
@@ -126,14 +126,14 @@ wait_for_health() {
 print_status() {
   echo ""
   echo "==============================================="
-  echo "  MERT-M dev stack"
+  echo "  Greek Quality Food dev stack"
   echo "==============================================="
-  probe_http "http://localhost:3004/health"  "backend  :3004"  || true
-  probe_http "http://localhost:5174"         "frontend :5174"  || true
+  probe_http "http://localhost:3005/health"  "backend  :3005"  || true
+  probe_http "http://localhost:5175"         "frontend :5175"  || true
   probe_http "http://localhost:8000/health"  "ai-svc   :8000"  || true
   echo ""
-  echo "Logs: $LOG_DIR/mertm-{backend,frontend,ai}.log"
-  echo "Frontend: http://localhost:5174"
+  echo "Logs: $LOG_DIR/gqf-{backend,frontend,ai}.log"
+  echo "Frontend: http://localhost:5175"
   echo "Admin login: see e2e-tests/.env.local (gitignored)"
 }
 
@@ -143,7 +143,7 @@ case "${1:-start}" in
     ;;
   --stop|stop)
     stop_dev_processes
-    ok "All MERT-M dev processes stopped (Docker containers left running)."
+    ok "All Greek Quality Food dev processes stopped (Docker containers left running)."
     ;;
   start|--start|"")
     stop_dev_processes
@@ -176,7 +176,7 @@ case "${1:-start}" in
     info "Daemon mode — blocking. Press Ctrl+C to stop."
     # Изчакваме backend tsx процеса. Когато умре, exec-ът завършва →
     # launchd го рестартира (със стопа отново на цикъла).
-    backend_pid=$(lsof -tiTCP:3004 -sTCP:LISTEN 2>/dev/null | head -1)
+    backend_pid=$(lsof -tiTCP:3005 -sTCP:LISTEN 2>/dev/null | head -1)
     if [[ -n "$backend_pid" ]]; then
       # Poll-ваме съществуването на процеса. Без -lt fork-бомба guard.
       while kill -0 "$backend_pid" 2>/dev/null; do sleep 5; done

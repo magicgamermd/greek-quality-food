@@ -19,11 +19,11 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     google_api_key: str = ""
 
-    # Redis / Celery — MERT-M Redis на :6380 (Greek Foods държи :6379)
-    redis_url: str = "redis://localhost:6380/0"
+    # Redis / Celery — Greek Quality Food Redis на :6381 (Greek Foods държи :6379, MERT-M :6380)
+    redis_url: str = "redis://localhost:6381/0"
 
-    # Warehouse backend (MERT-M на :3004 в dev; Greek Foods държи :3003)
-    warehouse_api_url: str = "http://localhost:3004"
+    # Warehouse backend (Greek Quality Food на :3005 в dev; Greek Foods държи :3003, MERT-M :3004)
+    warehouse_api_url: str = "http://localhost:3005"
 
     # IMAP
     imap_host: str = "imap.gmail.com"
@@ -49,8 +49,8 @@ class Settings(BaseSettings):
 
     # CORS origin for the warehouse backend (only allowed browser origin).
     # Set BACKEND_ORIGIN env to a comma-separated list for multiple origins.
-    # MERT-M backend на :3004 (Greek Foods държи :3003).
-    backend_origin: str = "http://localhost:3004"
+    # Greek Quality Food backend на :3005 (Greek Foods държи :3003, MERT-M :3004).
+    backend_origin: str = "http://localhost:3005"
 
     # App
     debug: bool = False

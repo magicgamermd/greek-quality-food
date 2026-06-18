@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
-# MERT-M Installer (macOS)
+# Greek Quality Food Installer (macOS)
 #
 # Run on a fresh Mac at the client site. Installs all
-# dependencies, clones the project to /Applications/MERT-M,
+# dependencies, clones the project to /Applications/Greek Quality Food,
 # generates secrets, seeds the database with the product
 # catalog + partner registry, and places the launcher .app
 # bundles on the Desktop.
@@ -13,11 +13,11 @@
 # ============================================================
 set -euo pipefail
 
-PROJECT_DIR="/Applications/MERT-M"
+PROJECT_DIR="/Applications/Greek Quality Food"
 INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="$HOME/mertm-data"
+DATA_DIR="$HOME/gqf-data"
 BACKUP_DIR="$DATA_DIR/backups"
-GIT_REPO="${MERTM_GIT_REPO:-}"
+GIT_REPO="${GQF_GIT_REPO:-}"
 
 # ANSI colours
 GREEN="\033[1;32m"; RED="\033[1;31m"; YELLOW="\033[1;33m"; BLUE="\033[1;34m"; RESET="\033[0m"
@@ -109,7 +109,7 @@ else
       sudo rsync -a --exclude='node_modules' --exclude='.venv*' --exclude='dist' --exclude='/tmp' "$PARENT/" "$PROJECT_DIR/"
       sudo chown -R "$(whoami)" "$PROJECT_DIR"
     else
-      err "Не може да намери проекта. Задай MERTM_GIT_REPO или стартирай install.sh от вътрешността на проекта."
+      err "Не може да намери проекта. Задай GQF_GIT_REPO или стартирай install.sh от вътрешността на проекта."
       exit 1
     fi
   fi
@@ -128,18 +128,18 @@ if [[ ! -f "$PROJECT_DIR/warehouse-backend/.env" ]]; then
 
   cat > "$PROJECT_DIR/warehouse-backend/.env" <<EOF
 NODE_ENV=production
-PORT=3004
+PORT=3005
 HOST=0.0.0.0
 
-# Database (Postgres in mertm-postgres-1 container, host port 5433)
-POSTGRES_USER=warehouse
+# Database (Postgres in greekquality-postgres-1 container, host port 5434)
+POSTGRES_USER=greekquality
 POSTGRES_PASSWORD=$PG_PW
-POSTGRES_DB=mertm_warehouse
-DATABASE_URL=postgres://warehouse:$PG_PW@localhost:5433/mertm_warehouse
+POSTGRES_DB=greekquality_warehouse
+DATABASE_URL=postgres://greekquality:$PG_PW@localhost:5434/greekquality_warehouse
 
-# Redis (mertm-redis-1, host port 6380)
+# Redis (greekquality-redis-1, host port 6381)
 REDIS_PASSWORD=$RD_PW
-REDIS_URL=redis://:$RD_PW@localhost:6380
+REDIS_URL=redis://:$RD_PW@localhost:6381
 
 # JWT + internal API key
 JWT_SECRET=$JWT
@@ -149,7 +149,7 @@ INTERNAL_API_KEY=$IAK
 AI_SERVICE_URL=http://localhost:8000
 
 # First-time admin (change after first login!)
-ADMIN_EMAIL=admin@mertm.bg
+ADMIN_EMAIL=admin@greek-quality-food.bg
 ADMIN_PASSWORD=$ADMIN_PW
 EOF
   chmod 600 "$PROJECT_DIR/warehouse-backend/.env"
@@ -177,7 +177,7 @@ step "9. Стартиране на Postgres + Redis (Docker)"
 ( cd "$PROJECT_DIR/warehouse-backend" && docker compose up -d postgres redis )
 info "Изчаквам Postgres..."
 for i in {1..30}; do
-  if docker exec mertm-postgres-1 pg_isready -U warehouse >/dev/null 2>&1; then
+  if docker exec greekquality-postgres-1 pg_isready -U greekquality >/dev/null 2>&1; then
     ok "Postgres е готов"
     break
   fi
@@ -193,17 +193,17 @@ ok "Migrations изпълнени"
 # Import product catalog if available
 if [[ -f "$PROJECT_DIR/data-imports/produkti-import.sql" ]]; then
   info "Импортвам каталога с продукти..."
-  docker cp "$PROJECT_DIR/data-imports/produkti-import.sql" mertm-postgres-1:/tmp/produkti.sql
-  docker exec mertm-postgres-1 psql -U warehouse -d mertm_warehouse -f /tmp/produkti.sql >/dev/null
-  docker exec mertm-postgres-1 rm -f /tmp/produkti.sql
+  docker cp "$PROJECT_DIR/data-imports/produkti-import.sql" greekquality-postgres-1:/tmp/produkti.sql
+  docker exec greekquality-postgres-1 psql -U greekquality -d greekquality_warehouse -f /tmp/produkti.sql >/dev/null
+  docker exec greekquality-postgres-1 rm -f /tmp/produkti.sql
   ok "Продукти импортнати"
 fi
 
 if [[ -f "$PROJECT_DIR/data-imports/partneri-import.sql" ]]; then
   info "Импортвам партньорите..."
-  docker cp "$PROJECT_DIR/data-imports/partneri-import.sql" mertm-postgres-1:/tmp/partneri.sql
-  docker exec mertm-postgres-1 psql -U warehouse -d mertm_warehouse -f /tmp/partneri.sql >/dev/null
-  docker exec mertm-postgres-1 rm -f /tmp/partneri.sql
+  docker cp "$PROJECT_DIR/data-imports/partneri-import.sql" greekquality-postgres-1:/tmp/partneri.sql
+  docker exec greekquality-postgres-1 psql -U greekquality -d greekquality_warehouse -f /tmp/partneri.sql >/dev/null
+  docker exec greekquality-postgres-1 rm -f /tmp/partneri.sql
   ok "Партньори импортнати"
 fi
 
@@ -211,26 +211,26 @@ fi
 step "11. Backup directory + LaunchAgent (daily pg_dump)"
 # ------------------------------------------------------------
 mkdir -p "$DATA_DIR" "$BACKUP_DIR"
-PLIST="$HOME/Library/LaunchAgents/bg.mertm.backup.plist"
+PLIST="$HOME/Library/LaunchAgents/bg.gqf.backup.plist"
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key>          <string>bg.mertm.backup</string>
+    <key>Label</key>          <string>bg.gqf.backup</string>
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
       <string>-c</string>
-      <string>docker exec mertm-postgres-1 pg_dump -U warehouse mertm_warehouse | gzip > "$BACKUP_DIR/mertm-\$(date +%Y%m%d-%H%M%S).sql.gz"; ls -t "$BACKUP_DIR"/*.sql.gz | tail -n +31 | xargs -r rm</string>
+      <string>docker exec greekquality-postgres-1 pg_dump -U greekquality greekquality_warehouse | gzip > "$BACKUP_DIR/gqf-\$(date +%Y%m%d-%H%M%S).sql.gz"; ls -t "$BACKUP_DIR"/*.sql.gz | tail -n +31 | xargs -r rm</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
       <key>Hour</key>   <integer>3</integer>
       <key>Minute</key> <integer>0</integer>
     </dict>
-    <key>StandardOutPath</key> <string>/tmp/mertm-backup.log</string>
-    <key>StandardErrorPath</key> <string>/tmp/mertm-backup.log</string>
+    <key>StandardOutPath</key> <string>/tmp/gqf-backup.log</string>
+    <key>StandardErrorPath</key> <string>/tmp/gqf-backup.log</string>
 </dict>
 </plist>
 EOF
@@ -258,12 +258,12 @@ echo ""
 echo "Следващи стъпки:"
 echo "  1. Двойно щракни 'Start MERT-M' на десктопа за да стартираш."
 echo "  2. Стартирай Tailscale.app и се логни (споделете акаунта с разработчика)."
-echo "  3. Първо влизане: admin@mertm.bg / (паролата е в .env)"
+echo "  3. Първо влизане: admin@greek-quality-food.bg / (паролата е в .env)"
 echo ""
 echo "Логове:"
-echo "  /tmp/mertm-backend.log"
-echo "  /tmp/mertm-frontend.log"
-echo "  /tmp/mertm-ai.log"
-echo "  /tmp/mertm-backup.log"
+echo "  /tmp/gqf-backend.log"
+echo "  /tmp/gqf-frontend.log"
+echo "  /tmp/gqf-ai.log"
+echo "  /tmp/gqf-backup.log"
 echo ""
 echo "Backup-и: $BACKUP_DIR"

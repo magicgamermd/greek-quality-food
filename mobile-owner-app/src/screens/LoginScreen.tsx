@@ -55,7 +55,7 @@ export function LoginScreen() {
               color={colors.primary}
             />
           </View>
-          <Text style={styles.title}>МЕРТ-М Owner</Text>
+          <Text style={styles.title}>Greek Quality Food Owner</Text>
           <Text style={styles.subtitle}>Отделно приложение за собственик</Text>
         </View>
 
@@ -64,7 +64,7 @@ export function LoginScreen() {
           <TextInput
             value={email}
             onChangeText={setEmail}
-            placeholder="owner@mertm.bg"
+            placeholder="owner@greek-quality-food.bg"
             placeholderTextColor={colors.textMuted}
             keyboardType="email-address"
             autoCapitalize="none"

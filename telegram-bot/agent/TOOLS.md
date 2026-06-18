@@ -26,8 +26,8 @@
 
 ## Sender (за Еконт — чете се от backend .env)
 
-- МЕРТ-М ЕООД, Пловдив, ул. Полет 80
-- Тел: 0885 165 719
+- Greek Quality Food EOOD, ul. Example 1, Sofia, Bulgaria
+- ЕИК: 123456789, ДДС №: BG123456789
 
 ## Важно
 

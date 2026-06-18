@@ -62,6 +62,17 @@ const TELEGRAM_NOTIFY_USER =
 const OPENROUTER_API_KEY =
   env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
 
+// Company identity (used when signing invoices / outgoing emails).
+// Defaults mirror warehouse-backend/.env COMPANY_* keys; override via env.
+const COMPANY_NAME =
+  env.COMPANY_NAME || process.env.COMPANY_NAME || "Greek Quality Food EOOD";
+const COMPANY_EIK = env.COMPANY_EIK || process.env.COMPANY_EIK || "123456789";
+const COMPANY_VAT = env.COMPANY_VAT || process.env.COMPANY_VAT || "BG123456789";
+const COMPANY_ADDRESS =
+  env.COMPANY_ADDRESS ||
+  process.env.COMPANY_ADDRESS ||
+  "ul. Example 1, Sofia, Bulgaria";
+
 if (!TELEGRAM_BOT_TOKEN) {
   console.error("TELEGRAM_BOT_TOKEN is required via .env or process.env");
   process.exit(1);
@@ -385,7 +396,7 @@ async function transcribeVoice(bot, fileId, retries = 2) {
       formData.append("language", "bg");
       formData.append(
         "prompt",
-        "фритюрник, месомелачка, конвектомат, съдомиялна, скара, вакуум машина, колбасорезачка, Еконт, поръчка, фактура, товарителница, ЕИК, булстат, наличност, склад, МЕРТ-М",
+        "фритюрник, месомелачка, конвектомат, съдомиялна, скара, вакуум машина, колбасорезачка, Еконт, поръчка, фактура, товарителница, ЕИК, булстат, наличност, склад, Greek Quality Food",
       );
 
       const whisperRes = await fetch(
@@ -448,9 +459,9 @@ function buildInvoiceEmailHtml(invoice) {
   </table>
   <hr style="border: none; border-top: 1px solid #ccc;">
   <p>С уважение,<br>
-  <strong>МЕРТ-М ЕООД</strong><br>
-  гр. Пловдив, ул. Полет 80<br>
-  Тел: 0885 165 719</p>
+  <strong>${COMPANY_NAME}</strong><br>
+  ${COMPANY_ADDRESS}<br>
+  ЕИК: ${COMPANY_EIK} | ДДС №: ${COMPANY_VAT}</p>
 </div>`;
 }
 
@@ -475,7 +486,7 @@ async function sendInvoiceEmail(toEmail, invoiceId) {
   const info = await smtpTransporter.sendMail({
     from: SMTP_FROM,
     to: toEmail,
-    subject: `Фактура ${invoiceNumber} от МЕРТ-М ЕООД`,
+    subject: `Фактура ${invoiceNumber} от ${COMPANY_NAME}`,
     html: buildInvoiceEmailHtml(invoice),
     attachments: [
       {
@@ -1299,9 +1310,7 @@ async function _processUserMessageInner(bot, chatId, userId, userName, text) {
   // When the user asks for invoice and/or Econt waybill in the SAME message
   // as a new order, instruct the AI to ONLY create the order, then run
   // invoice/waybill deterministically here. Avoids ~97s generic AI loop.
-  const wantsInvoiceAfterOrder = /\b(faktura|фактура|invoice)\b/i.test(
-    text,
-  );
+  const wantsInvoiceAfterOrder = /\b(faktura|фактура|invoice)\b/i.test(text);
   const wantsWaybillAfterOrder =
     /\b(tovaritelnica|tovaritelnitsa|товарителниц[аи]?|econt|еконт|shipment|waybill)\b/i.test(
       text,
@@ -1352,7 +1361,7 @@ async function _processUserMessageInner(bot, chatId, userId, userName, text) {
       );
       const subject = subjectMatch
         ? subjectMatch[1]
-        : "Съобщение от МЕРТ-М ЕООД";
+        : `Съобщение от ${COMPANY_NAME}`;
       // Extract body - everything after the confirmation line
       const bodyMatch = aiReply.match(
         /(?:текст|съобщение)[:\s]+(.+?)(?:\n|✅|$)/is,
@@ -1364,7 +1373,7 @@ async function _processUserMessageInner(bot, chatId, userId, userName, text) {
           from: process.env.SMTP_FROM,
           to: toEmail,
           subject: subject,
-          html: `<div style="font-family:Arial,sans-serif;"><p>${body.replace(/\n/g, "<br>")}</p><hr><p>С уважение,<br><strong>МЕРТ-М ЕООД</strong><br>гр. Пловдив, ул. Полет 80<br>Тел: 0885 165 719</p></div>`,
+          html: `<div style="font-family:Arial,sans-serif;"><p>${body.replace(/\n/g, "<br>")}</p><hr><p>С уважение,<br><strong>${COMPANY_NAME}</strong><br>${COMPANY_ADDRESS}<br>ЕИК: ${COMPANY_EIK} | ДДС №: ${COMPANY_VAT}</p></div>`,
         });
         console.log(`[Bot SMTP] Email sent to ${toEmail}`);
       } catch (err) {
@@ -1681,7 +1690,7 @@ async function main() {
     }
     bot.sendMessage(
       chatId,
-      `Здравейте! 👋 Аз съм AI асистентът на *МЕРТ-М* склад.\n\nКакво искате да направим?`,
+      `Здравейте! 👋 Аз съм AI асистентът на *Greek Quality Food* склад.\n\nКакво искате да направим?`,
       {
         parse_mode: "Markdown",
         reply_markup: {

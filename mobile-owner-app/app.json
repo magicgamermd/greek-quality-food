@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "МЕРТ-М Owner",
-    "slug": "mertm-owner",
+    "name": "Greek Quality Food Owner",
+    "slug": "gqf-owner",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.mertm.owner"
+      "bundleIdentifier": "com.greekqualityfood.owner"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +23,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.mertm.owner",
+      "package": "com.greekqualityfood.owner",
       "minSdkVersion": 28
     },
     "web": {

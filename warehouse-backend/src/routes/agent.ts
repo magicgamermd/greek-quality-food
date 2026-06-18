@@ -36,7 +36,7 @@ export default async function agentRoutes(app: FastifyInstance) {
 
     return reply.code(dbConnected ? 200 : 503).send({
       ok: dbConnected,
-      service: "mertm-agent-api",
+      service: "gqf-agent-api",
       database: dbConnected ? "connected" : "disconnected",
       actor: {
         id: request.user?.id ?? null,

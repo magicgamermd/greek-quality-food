@@ -1,5 +1,5 @@
 """
-MERT-M AI Microservice
+Greek Quality Food AI Microservice
 FastAPI application entry point.
 """
 import logging
@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 MERT-M AI Service starting up...")
+    logger.info("🚀 Greek Quality Food AI Service starting up...")
     yield
-    logger.info("🛑 MERT-M AI Service shutting down...")
+    logger.info("🛑 Greek Quality Food AI Service shutting down...")
 
 
 app = FastAPI(
-    title="MERT-M AI Service",
+    title="Greek Quality Food AI Service",
     description="AI microservice for invoice OCR, product matching, payment reconciliation and stock forecasting.",
     version="1.0.0",
     lifespan=lifespan,
@@ -37,7 +37,7 @@ app = FastAPI(
 # calls from the backend go server-to-server and don't care about CORS at all,
 # so in practice only browsers are affected; we keep this list tight to avoid
 # drive-by requests from other origins.
-_raw_origins = settings.backend_origin or "http://localhost:3004"
+_raw_origins = settings.backend_origin or "http://localhost:3005"
 _allowed_origins = [origin.strip() for origin in _raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
@@ -70,4 +70,4 @@ app.include_router(match.router, prefix="/ai", tags=["Product Matching"])
 @app.get("/health")
 async def health():
     """Unauthenticated liveness probe for Docker/Kubernetes healthchecks."""
-    return {"status": "ok", "service": "mertm-ai"}
+    return {"status": "ok", "service": "gqf-ai"}

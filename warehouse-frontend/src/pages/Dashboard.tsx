@@ -97,7 +97,7 @@ const currentMonthLocal = (): string =>
 // касеро споделя екран с клиент, потребителят често иска "Стойност на
 // склада" да остане скрита между навигации, иначе се връща обратно при
 // всеки таб switch.
-const STOCK_VALUE_HIDDEN_KEY = "mertm:dashboard:stock-value-hidden";
+const STOCK_VALUE_HIDDEN_KEY = "gqf:dashboard:stock-value-hidden";
 
 export function Dashboard() {
   const { user } = useAuth();

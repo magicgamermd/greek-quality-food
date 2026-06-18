@@ -65,7 +65,7 @@ if [[ "$RESTART" == "yes" ]]; then
     /usr/bin/pkill -9 -f "warehouse-backend.*node" 2>/dev/null || true
     sleep 3
     cd /Applications/MERT-M
-    /usr/bin/nohup /bin/bash scripts/start-mertm.sh > /tmp/mertm-launcher.log 2>&1 &
+    /usr/bin/nohup /bin/bash scripts/start-greekquality.sh > /tmp/gqf-launcher.log 2>&1 &
     sleep 10
     /usr/bin/curl -s -o /dev/null -w "backend health: %{http_code}\n" http://localhost:3004/health
   '

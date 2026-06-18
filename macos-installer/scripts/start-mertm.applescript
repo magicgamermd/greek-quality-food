@@ -21,7 +21,7 @@ on run
 	if not ready then
 		-- Try to start manually
 		try
-			do shell script "/bin/bash -lc 'cd /Applications/MERT-M && bash scripts/start-mertm.sh' > /tmp/mertm-launcher.log 2>&1 &"
+			do shell script "/bin/bash -lc 'cd /Applications/MERT-M && bash scripts/start-greekquality.sh' > /tmp/mertm-launcher.log 2>&1 &"
 			delay 8
 		end try
 	end if

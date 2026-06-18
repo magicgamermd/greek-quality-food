@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Greek Foods Analytics",
-    "slug": "greek-foods-analytics",
+    "name": "Greek Quality Food Analytics",
+    "slug": "greek-quality-food-analytics",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
