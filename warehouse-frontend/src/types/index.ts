@@ -197,6 +197,10 @@ export interface Order {
   invoice_status?: "active" | "cancelled" | null;
   credit_note_id?: number | null;
   credit_note_number?: string | null;
+  // Проформа фактура (не-фискална) — линкната през orders.proforma_invoice_id
+  // (миграция 088). invoice_id остава NULL докато проформата не се финализира.
+  proforma_invoice_id?: number | null;
+  proforma_invoice_number?: string | null;
   stock_dispatch_number?: string | null;
   commercial_document_number?: string | null;
   warranty_number?: string | null;

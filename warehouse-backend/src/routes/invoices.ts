@@ -7,6 +7,7 @@ import {
   PERMISSIONS,
 } from "../lib/permissions.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
+import { computeInvoiceTotalsFromNet } from "../lib/invoice-totals.js";
 import {
   restoreOrderItemsToInventory,
   restorePartialItemsToInventory,
@@ -177,6 +178,11 @@ const createInvoiceSchema = z.object({
     ])
     .optional(),
 });
+
+// Проформа фактура използва същия body shape като реалната фактура
+// (POST /invoices). Различава се само в маршрута, номерацията и в това,
+// че НЕ "запечатва" поръчката (orders.invoice_id остава NULL).
+const createProformaSchema = createInvoiceSchema;
 
 const regenerateInvoiceSchema = z.object({
   payment_method: invoicePaymentMethodSchema.optional(),
@@ -1268,6 +1274,80 @@ export default async function invoiceRoutes(app: FastifyInstance) {
 
       // Auto-regenerate if the file is missing (e.g. after container rebuild
       // wiped the uploads directory, or manual deletion).
+      //
+      // Проформа — отделен клон: линкът към поръчката е през
+      // orders.proforma_invoice_id (НЕ invoice_id), файлът е
+      // `proforma-{number}.pdf`, а заглавието е "Проформа Фактура".
+      if (!resolvedPdfPath && invoice.document_type === "proforma") {
+        try {
+          const {
+            rows: [order],
+          } = await query(
+            "SELECT * FROM orders WHERE proforma_invoice_id = $1",
+            [invoice.id],
+          );
+          if (!order) {
+            return reply
+              .status(404)
+              .send({ error: "PDF not yet generated (no linked order)" });
+          }
+          const { rows: items } = await query(
+            `SELECT oi.*,
+                    oi.name_bg_snapshot AS name_bg,
+                    oi.name_en_snapshot AS name_en,
+                    oi.sku_snapshot     AS sku,
+                    p.unit, p.brand
+             FROM order_items oi
+             LEFT JOIN products p ON p.id = oi.product_id
+             WHERE oi.order_id = $1
+               AND oi.line_status != 'awaiting'
+             ORDER BY oi.id`,
+            [order.id],
+          );
+          const {
+            rows: [partner],
+          } = await query("SELECT * FROM partners WHERE id = $1", [
+            order.partner_id,
+          ]);
+          if (!partner) {
+            return reply
+              .status(404)
+              .send({ error: "PDF not yet generated (partner missing)" });
+          }
+
+          const company = await getCompanySettings();
+          const invoicesDir = path.resolve("uploads", "invoices");
+          fs.mkdirSync(invoicesDir, { recursive: true });
+          const pdfPath = path.join(
+            invoicesDir,
+            `proforma-${invoice.invoice_number}.pdf`,
+          );
+          const includeVat = invoice.include_vat !== false;
+          await generateInvoicePdf({
+            invoice,
+            partner,
+            company,
+            items,
+            vatRate: includeVat ? 20 : 0,
+            includeVat,
+            documentType: "proforma",
+            sourceCurrency: (invoice as any).currency ?? null,
+            outputPath: pdfPath,
+            showBgn: company.show_bgn_on_invoice === true,
+          });
+          await query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
+            pdfPath,
+            id,
+          ]);
+          resolvedPdfPath = pdfPath;
+        } catch (err: any) {
+          request.log.error({ err }, "Failed to auto-regenerate proforma PDF");
+          return reply
+            .status(500)
+            .send({ error: "Неуспешно авто-регенериране на PDF." });
+        }
+      }
+
       if (!resolvedPdfPath) {
         try {
           const isCreditNote = invoice.document_type === "credit_note";
@@ -1733,6 +1813,358 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         ]);
 
         return { ...creditNote, pdf_path: pdfPath };
+      });
+
+      return reply.status(201).send(result);
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // POST /invoices/proforma — Издаване на проформа фактура
+  // ════════════════════════════════════════════════════════════════════
+  // Проформата е НЕ-фискален документ — клиентът се съгласява с цени и
+  // количества, плаща по нея, и след това издаваме РЕАЛНАТА фактура (с
+  // фискален пореден номер). Затова:
+  //   - Не променя orders.invoice_id (проформата не "запечатва" поръчката)
+  //   - Не изисква поръчката да е fulfilled/processing — може дори да е
+  //     pending или confirmed
+  //   - Има отделен 10-цифрен номер от generate_proforma_number() (counter
+  //     стартиращ от 200), за да не замърсява fiscal invoice sequence-а
+  //   - document_type='proforma' в invoices таблицата (полиморфен row)
+  //   - Финално фактура → POST /invoices/:proformaId/finalize създава
+  //     истинска фактура с invoice_number от fiscal sequence-а и я
+  //     свързва обратно с проформата (invoices.proforma_id)
+  //
+  // ⚠️ ТОТАЛИ — GQF НЕТО логика (същата като POST /invoices). order_items
+  // .total_price е НЕТО (без ДДС); ДДС се добавя ОТГОРЕ. НЕ ползваме
+  // GROSS-down логика (sumGross / 1.2). Reuse-ваме canonical хелпъра
+  // computeInvoiceTotalsFromNet, така проформата и реалната фактура за
+  // същата поръчка дават byte-for-byte еднакви total_net/total_vat/
+  // total_gross (gross = net × 1.2 при 20%).
+  app.post(
+    "/proforma",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = createProformaSchema.parse(request.body);
+
+      const result = await transaction(async (client) => {
+        const {
+          rows: [order],
+        } = await client.query("SELECT * FROM orders WHERE id = $1", [
+          body.order_id,
+        ]);
+
+        if (!order) {
+          throw Object.assign(new Error("Order not found"), {
+            statusCode: 404,
+          });
+        }
+        // Проформата може да се издаде на ВСЯКА не-cancelled поръчка,
+        // дори pending (касиерката потвърждава цени преди клиентът да
+        // плати). Блокираме само cancelled / quoted (оферта вече е
+        // similar non-fiscal предварителен документ).
+        if (order.status === "cancelled" || order.status === "quoted") {
+          throw Object.assign(
+            new Error(
+              "Не може да се издаде проформа за отказана или оферирана поръчка.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        // Skip awaiting lines (миграция 072) — placeholders за стока, която
+        // още не е пристигнала; не участват в документи.
+        const { rows: items } = await client.query(
+          `SELECT oi.*,
+                  oi.name_bg_snapshot AS name_bg,
+                  oi.name_en_snapshot AS name_en,
+                  oi.sku_snapshot     AS sku,
+                  p.unit, p.brand
+           FROM order_items oi
+           LEFT JOIN products p ON p.id = oi.product_id
+           WHERE oi.order_id = $1
+             AND oi.line_status != 'awaiting'
+           ORDER BY oi.id`,
+          [body.order_id],
+        );
+
+        if (items.length === 0) {
+          throw Object.assign(new Error("Поръчката няма редове."), {
+            statusCode: 400,
+          });
+        }
+
+        const {
+          rows: [partner],
+        } = await client.query("SELECT * FROM partners WHERE id = $1", [
+          order.partner_id,
+        ]);
+
+        // GQF НЕТО път (идентичен на POST /invoices): данъчна основа =
+        // Σ нето редове; ДДС = основа × 0.20; за получаване = основа + ДДС.
+        const totalNetLines = items.reduce(
+          (sum: number, i: any) => sum + parseFloat(i.total_price),
+          0,
+        );
+        const effectiveVatRate = body.include_vat ? body.vat_rate : 0;
+        const { totalNet, totalVat, totalGross } = computeInvoiceTotalsFromNet(
+          totalNetLines,
+          body.include_vat,
+        );
+
+        // Проформа номер — generate_proforma_number() advisory-locked,
+        // gap-free, отделна редица (начало 0000000200).
+        const {
+          rows: [{ generate_proforma_number: proformaNumber }],
+        } = await client.query("SELECT generate_proforma_number()");
+
+        const {
+          rows: [proforma],
+        } = await client.query(
+          `INSERT INTO invoices
+             (invoice_number, invoice_date, partner_id,
+              total_net, total_vat, total_gross, include_vat,
+              client_display_name, client_display_egn, client_display_address,
+              payment_method, vat_exemption_reason, invoice_note,
+              document_type)
+           VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7,
+                   $8, $9, $10, $11, $12, $13, 'proforma')
+           RETURNING *`,
+          [
+            proformaNumber,
+            body.invoice_date_override ?? null,
+            order.partner_id,
+            totalNet,
+            totalVat,
+            totalGross,
+            body.include_vat,
+            partner?.partner_type === "individual"
+              ? (body.client_display_name ?? null)
+              : null,
+            partner?.partner_type === "individual"
+              ? (body.client_display_egn ?? null)
+              : null,
+            partner?.partner_type === "individual"
+              ? (body.client_display_address ?? null)
+              : null,
+            body.payment_method,
+            body.vat_exemption_reason ?? null,
+            body.invoice_note ?? null,
+          ],
+        );
+
+        const company = await getCompanySettings();
+        const invoicesDir = path.resolve("uploads", "invoices");
+        fs.mkdirSync(invoicesDir, { recursive: true });
+        const pdfPath = path.join(
+          invoicesDir,
+          `proforma-${proformaNumber}.pdf`,
+        );
+
+        await generateInvoicePdf({
+          invoice: proforma,
+          partner,
+          company,
+          items,
+          vatRate: effectiveVatRate,
+          includeVat: body.include_vat,
+          documentType: "proforma",
+          sourceCurrency: (proforma as any).currency ?? null,
+          outputPath: pdfPath,
+          showBgn: company.show_bgn_on_invoice === true,
+        });
+
+        await client.query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
+          pdfPath,
+          proforma.id,
+        ]);
+
+        // Link order → proforma (отделно поле от invoice_id, защото
+        // проформата НЕ "запечатва" поръчката). Така /finalize намира
+        // правилната поръчка без heuristic. Презаписваме ако вече е
+        // имало проформа — последната печатна проформа печели; старата
+        // остава в БД като audit, но загубва линка.
+        await client.query(
+          "UPDATE orders SET proforma_invoice_id = $1, updated_at = NOW() WHERE id = $2",
+          [proforma.id, body.order_id],
+        );
+
+        return { ...proforma, pdf_path: pdfPath };
+      });
+
+      return reply.status(201).send(result);
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════
+  // POST /invoices/:id/finalize — Превръщане на проформа в реална фактура
+  // ════════════════════════════════════════════════════════════════════
+  // След като клиентът е платил по проформата, касиерката натиска
+  // "Финализирай" → създава се ИСТИНСКА фактура с fiscal номер от
+  // generate_invoice_number() (десетцифрен fiscal sequence). Новата
+  // фактура:
+  //   - получава нов pdf_path
+  //   - сочи към проформата чрез proforma_id (FK)
+  //   - links to orders.invoice_id (за разлика от проформата)
+  //
+  // Тоталите се КОПИРАТ от проформата (която вече ги е сметнала по GQF
+  // НЕТО пътя) — не ги преизчисляваме, така реалната фактура е огледало
+  // на одобрената проформа. Старата проформа остава в БД като audit.
+  app.post(
+    "/:id/finalize",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+
+      const result = await transaction(async (client) => {
+        const {
+          rows: [proforma],
+        } = await client.query(
+          "SELECT * FROM invoices WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+        if (!proforma) {
+          throw Object.assign(new Error("Proforma not found"), {
+            statusCode: 404,
+          });
+        }
+        if (proforma.document_type !== "proforma") {
+          throw Object.assign(new Error("Документът не е проформа фактура."), {
+            statusCode: 400,
+          });
+        }
+
+        // Намери поръчката, която има тази проформа като активна
+        // (orders.proforma_invoice_id зададено при POST /invoices/proforma).
+        // Надеждна еднозначна връзка — без partner+heuristic гадаене.
+        const {
+          rows: [target],
+        } = await client.query(
+          `SELECT id, invoice_id, status
+             FROM orders
+            WHERE proforma_invoice_id = $1 FOR UPDATE`,
+          [proforma.id],
+        );
+        if (!target) {
+          throw Object.assign(
+            new Error(
+              "Проформата не е свързана с поръчка (orders.proforma_invoice_id липсва).",
+            ),
+            { statusCode: 400 },
+          );
+        }
+        if (target.invoice_id) {
+          throw Object.assign(
+            new Error(
+              "Поръчката вече има реална фактура — финализирането е безсмислено.",
+            ),
+            { statusCode: 409 },
+          );
+        }
+
+        // Skip awaiting lines (миграция 072) — doc generation path.
+        const { rows: items } = await client.query(
+          `SELECT oi.*,
+                  oi.name_bg_snapshot AS name_bg,
+                  oi.name_en_snapshot AS name_en,
+                  oi.sku_snapshot     AS sku,
+                  p.unit, p.brand
+           FROM order_items oi
+           LEFT JOIN products p ON p.id = oi.product_id
+           WHERE oi.order_id = $1
+             AND oi.line_status != 'awaiting'
+           ORDER BY oi.id`,
+          [target.id],
+        );
+
+        const {
+          rows: [partner],
+        } = await client.query("SELECT * FROM partners WHERE id = $1", [
+          proforma.partner_id,
+        ]);
+
+        const {
+          rows: [{ generate_invoice_number: invoiceNumber }],
+        } = await client.query("SELECT generate_invoice_number()");
+
+        // Тоталите идват от проформата (вече сметнати по GQF НЕТО пътя).
+        const {
+          rows: [invoice],
+        } = await client.query(
+          `INSERT INTO invoices
+             (invoice_number, invoice_date, partner_id,
+              total_net, total_vat, total_gross, include_vat,
+              client_display_name, client_display_egn, client_display_address,
+              payment_method, vat_exemption_reason, invoice_note,
+              document_type, proforma_id)
+           VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'invoice', $13)
+           RETURNING *`,
+          [
+            invoiceNumber,
+            proforma.partner_id,
+            proforma.total_net,
+            proforma.total_vat,
+            proforma.total_gross,
+            proforma.include_vat,
+            proforma.client_display_name,
+            proforma.client_display_egn,
+            proforma.client_display_address,
+            proforma.payment_method,
+            proforma.vat_exemption_reason,
+            proforma.invoice_note,
+            proforma.id,
+          ],
+        );
+
+        await client.query(
+          "UPDATE orders SET invoice_id = $1, updated_at = NOW() WHERE id = $2",
+          [invoice.id, target.id],
+        );
+
+        // Премести плащания order_id→invoice_id (както при invoice-issue):
+        // ако поръчката е била частично платена като разписка преди фактурата.
+        const migrated = await client.query(
+          `UPDATE payments
+              SET invoice_id = $1,
+                  order_id = NULL
+            WHERE order_id = $2 AND invoice_id IS NULL
+          RETURNING id`,
+          [invoice.id, target.id],
+        );
+        if (migrated.rowCount && migrated.rowCount > 0) {
+          request.log.info(
+            {
+              invoice_id: invoice.id,
+              order_id: target.id,
+              migrated: migrated.rowCount,
+            },
+            "[proforma→invoice] migrated payments order_id→invoice_id",
+          );
+        }
+
+        const company = await getCompanySettings();
+        const invoicesDir = path.resolve("uploads", "invoices");
+        fs.mkdirSync(invoicesDir, { recursive: true });
+        const pdfPath = path.join(invoicesDir, `${invoiceNumber}.pdf`);
+
+        await generateInvoicePdf({
+          invoice,
+          partner,
+          company,
+          items,
+          vatRate: proforma.include_vat ? 20 : 0,
+          includeVat: proforma.include_vat,
+          sourceCurrency: (invoice as any).currency ?? null,
+          outputPath: pdfPath,
+          showBgn: company.show_bgn_on_invoice === true,
+        });
+
+        await client.query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
+          pdfPath,
+          invoice.id,
+        ]);
+
+        return { ...invoice, pdf_path: pdfPath, finalized_from: proforma.id };
       });
 
       return reply.status(201).send(result);

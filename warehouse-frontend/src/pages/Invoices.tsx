@@ -57,6 +57,7 @@ const paymentLabels: Record<string, string> = {
 const documentTypeLabels: Record<string, string> = {
   invoice: "Фактура",
   credit_note: "Кредитно известие",
+  proforma: "Проформа фактура",
 };
 
 export function Invoices() {

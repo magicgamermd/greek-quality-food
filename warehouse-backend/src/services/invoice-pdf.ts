@@ -105,7 +105,7 @@ interface InvoiceData {
   items: InvoiceItem[];
   vatRate: number;
   includeVat?: boolean;
-  documentType?: "invoice" | "credit_note";
+  documentType?: "invoice" | "credit_note" | "proforma";
   relatedInvoiceNumber?: string;
   sourceCurrency?: string | null;
   outputPath: string;
@@ -658,6 +658,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     const midX = L + pageW / 2;
 
     const isCreditNote = data.documentType === "credit_note";
+    const isProforma = data.documentType === "proforma";
     const showVat = data.includeVat !== false;
     const sourceCurrency = data.invoice.currency ?? data.sourceCurrency ?? null;
     const co = data.company;
@@ -745,7 +746,11 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       continuation = false,
     ): { tableStartY: number; rightColX: number; rValW: number } => {
       let y = 35;
-      const title = isCreditNote ? "Кредитно Известие" : "Фактура";
+      const title = isCreditNote
+        ? "Кредитно Известие"
+        : isProforma
+          ? "Проформа Фактура"
+          : "Фактура";
       const colW = pageW / 2 - 10;
       const leftColX = L;
       const rightColX = midX + 10;

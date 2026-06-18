@@ -933,6 +933,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               inv.status AS invoice_status,
               cn.id AS credit_note_id,
               cn.invoice_number AS credit_note_number,
+              prof.invoice_number AS proforma_invoice_number,
               ${STOCK_DISPATCH_NUMBER_SQL} AS stock_dispatch_number,
               ${COMMERCIAL_DOC_NUMBER_SQL} AS commercial_document_number,
               ${WARRANTY_NUMBER_SQL} AS warranty_number,
@@ -948,6 +949,7 @@ export default async function orderRoutes(app: FastifyInstance) {
        LEFT JOIN invoices inv ON inv.id = o.invoice_id
        LEFT JOIN invoices cn ON cn.related_invoice_id = inv.id
            AND cn.document_type = 'credit_note'
+       LEFT JOIN invoices prof ON prof.id = o.proforma_invoice_id
        LEFT JOIN partners ipo ON ipo.id = o.invoice_partner_id
                               AND ipo.id <> o.partner_id
        LEFT JOIN partner_order_objects po ON po.id = o.partner_object_id

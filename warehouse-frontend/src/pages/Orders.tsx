@@ -1177,6 +1177,79 @@ function OrderDetailModal({
     },
   });
 
+  // Проформа — не-фискален предшественик на реална фактура. Mirror-ва
+  // invoiceMutation payload-а, само endpoint-ът е /invoices/proforma.
+  // Backend издава 10-цифрен номер от отделна редица (начало 200) + PDF
+  // със заглавие "Проформа Фактура". Не променя orders.invoice_id
+  // (поръчката остава "без фактура"). По-късно "Финализирай" → реална
+  // фактура през POST /invoices/:proformaId/finalize.
+  const proformaMutation = useMutation({
+    mutationFn: (id: number) => {
+      const payload: Record<string, unknown> = {
+        order_id: id,
+        include_vat: includeVat,
+        payment_method: paymentMethod,
+        client_display_name: partnerOverride
+          ? undefined
+          : clientDisplayName.trim() || undefined,
+        client_display_egn: partnerOverride
+          ? undefined
+          : clientDisplayEgn.trim() || undefined,
+        client_display_address: partnerOverride
+          ? undefined
+          : clientDisplayAddress.trim() || undefined,
+        invoice_note: invoiceNote.trim() || undefined,
+        vat_exemption_reason: !includeVat
+          ? vatExemptionReason.trim() || undefined
+          : undefined,
+        invoice_date_override: invoiceDateOverride || undefined,
+      };
+      return api.post("/invoices/proforma", payload);
+    },
+    onSuccess: (res) => {
+      const proformaId = res.data?.id ?? null;
+      invalidateAllOrderRelated();
+      if (proformaId) {
+        setTimeout(() => void openInvoicePdf(proformaId), 300);
+      }
+      toast.success(
+        `Проформа фактура #${res.data?.invoice_number ?? "?"} е издадена`,
+      );
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при генериране на проформа",
+      );
+    },
+  });
+
+  // Финализира съществуваща проформа в реална фактура с фискален номер.
+  // Vика се след като клиентът е платил по проформата.
+  const finalizeProformaMutation = useMutation({
+    mutationFn: (proformaId: number) =>
+      api.post(`/invoices/${proformaId}/finalize`),
+    onSuccess: (res) => {
+      const invoiceId = res.data?.id ?? null;
+      setGeneratedInvoiceId(invoiceId);
+      invalidateAllOrderRelated();
+      if (invoiceId) {
+        setTimeout(() => void openInvoicePdf(invoiceId), 300);
+      }
+      toast.success(
+        `Реална фактура #${res.data?.invoice_number ?? "?"} е издадена от проформата`,
+      );
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.error ??
+          err?.response?.data?.message ??
+          "Грешка при финализиране на проформа",
+      );
+    },
+  });
+
   const sendInvoiceEmailMutation = useMutation({
     mutationFn: (invoiceId: number) =>
       api.post(`/invoices/${invoiceId}/send-email`, {}),
@@ -1667,6 +1740,20 @@ function OrderDetailModal({
                     <div className="text-xs text-gray-500 mb-1">Фактура</div>
                     <div className="text-sm">{invoiceLabel}</div>
                   </div>
+                  {/* Проформа № — показва се само ако има издадена проформа
+                      за поръчката (proforma_invoice_id set от
+                      POST /invoices/proforma). Backend джойнва номера в
+                      detail.proforma_invoice_number. */}
+                  {detail.proforma_invoice_id && (
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">
+                        Проформа №
+                      </div>
+                      <div className="text-sm">
+                        {detail.proforma_invoice_number || "—"}
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <div className="text-xs text-gray-500 mb-1">
                       Дата на фактура
@@ -2464,6 +2551,50 @@ function OrderDetailModal({
                         )}
                         Генерирай фактура {!includeVat && "(без ДДС)"}
                       </Button>
+                      {/* Проформа / Финализиране — 2-степенен flow:
+                          1. Натискаш "Проформа" → не-фискален документ
+                             с 10-цифрен номер от отделна редица (начало
+                             0000000200). Запазва orders.proforma_invoice_id.
+                          2. След като клиентът плати, натискаш
+                             "Финализирай" → реална фактура с фискален
+                             номер. Старата проформа остава в БД като
+                             reference (invoice.proforma_id linkва нагоре). */}
+                      {detail.proforma_invoice_id ? (
+                        <Button
+                          type="button"
+                          onClick={() =>
+                            finalizeProformaMutation.mutate(
+                              detail.proforma_invoice_id!,
+                            )
+                          }
+                          disabled={finalizeProformaMutation.isPending}
+                          className="bg-emerald-600 hover:bg-emerald-700"
+                          title="Превърни проформата в реална фактура с фискален номер"
+                        >
+                          {finalizeProformaMutation.isPending ? (
+                            <Spinner size="sm" />
+                          ) : (
+                            <FileText className="h-4 w-4" />
+                          )}
+                          Финализирай проформа
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => proformaMutation.mutate(detail.id)}
+                          disabled={proformaMutation.isPending}
+                          className="border-[#6c3dff] text-[#6c3dff] hover:bg-[#6c3dff]/10"
+                          title="Проформа фактура (не-фискална, отделна номерация)"
+                        >
+                          {proformaMutation.isPending ? (
+                            <Spinner size="sm" />
+                          ) : (
+                            <FileText className="h-4 w-4" />
+                          )}
+                          Проформа
+                        </Button>
+                      )}
                       {/* Compact „note" button — opens the extras dialog
                           (Забележка + Основание-без-ДДС). Filled-amber when
                           either field has a value. */}
