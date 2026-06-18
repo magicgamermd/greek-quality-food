@@ -12,6 +12,7 @@ import authRoutes from "./routes/auth.js";
 import productRoutes from "./routes/products.js";
 import inventoryRoutes from "./routes/inventory.js";
 import incomingRoutes from "./routes/incoming.js";
+import stockMovementsRoutes from "./routes/stock-movements.js";
 import orderRoutes from "./routes/orders.js";
 import purchaseOrderRoutes from "./routes/purchase-orders.js";
 import partnerRoutes from "./routes/partners.js";
@@ -247,6 +248,7 @@ export async function build() {
   await app.register(productRoutes, { prefix: "/products" });
   await app.register(inventoryRoutes, { prefix: "/inventory" });
   await app.register(incomingRoutes, { prefix: "/incoming" });
+  await app.register(stockMovementsRoutes, { prefix: "/stock-movements" });
   await app.register(orderRoutes, { prefix: "/orders" });
   await app.register(purchaseOrderRoutes, { prefix: "/purchase-orders" });
   await app.register(partnerRoutes, { prefix: "/partners" });

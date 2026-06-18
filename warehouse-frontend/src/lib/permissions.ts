@@ -8,6 +8,7 @@ export const PERMISSIONS = {
   INVENTORY_VIEW: "inventory.view",
   INVENTORY_VIEW_PURCHASE_PRICE: "inventory.view_purchase_price",
   INCOMING_MANAGE: "incoming.manage",
+  STOCK_MOVEMENTS_MANAGE: "stock_movements.manage",
   PARTNERS_MANAGE: "partners.manage",
   PRODUCTS_VIEW: "products.view",
   PRODUCTS_MANAGE: "products.manage",

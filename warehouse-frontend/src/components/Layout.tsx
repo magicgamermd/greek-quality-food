@@ -21,6 +21,7 @@ import {
   CheckCheck,
   Boxes,
   ClipboardList,
+  ArrowLeftRight,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePermissions } from "@/contexts/PermissionContext";
@@ -57,6 +58,12 @@ const allNavItems: Array<{
     icon: PackagePlus,
     label: "Приемане на стоки",
     permission: PERMISSIONS.INCOMING_MANAGE,
+  },
+  {
+    to: "/stock-movements",
+    icon: ArrowLeftRight,
+    label: "Завеждане / Изписване",
+    permission: PERMISSIONS.STOCK_MOVEMENTS_MANAGE,
   },
   {
     to: "/orders",
@@ -119,6 +126,7 @@ const routeNames: Record<string, string> = {
   "/products": "Продукти",
   "/inventory": "Склад",
   "/incoming": "Приемане",
+  "/stock-movements": "Завеждане / Изписване",
   "/orders": "Поръчки",
   "/warehouse": "Склад пакетиране",
   "/partners": "Партньори",

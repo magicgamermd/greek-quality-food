@@ -21,6 +21,9 @@ export const PERMISSIONS = {
   INVENTORY_VIEW: "inventory.view",
   INVENTORY_VIEW_PURCHASE_PRICE: "inventory.view_purchase_price",
   INCOMING_MANAGE: "incoming.manage",
+  // Ръчни stock движения — завеждане/изписване извън orders/incoming.
+  // Default: admin + accountant. Warehouse няма достъп (бизнес решение).
+  STOCK_MOVEMENTS_MANAGE: "stock_movements.manage",
   // Master data
   PARTNERS_MANAGE: "partners.manage",
   PRODUCTS_VIEW: "products.view",
@@ -58,6 +61,7 @@ export const ROLE_DEFAULTS: Record<UserRole, Permission[]> = {
     PERMISSIONS.INVENTORY_VIEW,
     PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
     PERMISSIONS.INCOMING_MANAGE,
+    PERMISSIONS.STOCK_MOVEMENTS_MANAGE,
     PERMISSIONS.PARTNERS_MANAGE,
     PERMISSIONS.PRODUCTS_VIEW,
     PERMISSIONS.PAYMENTS_MANAGE,
@@ -162,6 +166,13 @@ export const PERMISSION_REGISTRY: Array<{
     group: "Складова видимост",
     label: "Входяща стока",
     description: "Сканиране и потвърждение на входящи фактури",
+  },
+  {
+    permission: PERMISSIONS.STOCK_MOVEMENTS_MANAGE,
+    group: "Складова видимост",
+    label: "Завеждане и изписване",
+    description:
+      "Ръчни in/out движения на склада (брак, корекции, доставки без фактура и т.н.)",
   },
   // Master data
   {
