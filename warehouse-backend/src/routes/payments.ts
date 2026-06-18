@@ -331,10 +331,12 @@ export default async function paymentRoutes(app: FastifyInstance) {
           [body.order_id],
         );
         const alreadyPaidOrder = parseFloat(orderPaidTotal);
-        // Razpiska (no-invoice) payment cap is the order's stored
-        // total_amount as-is — there's no VAT line to collect for a
-        // shipment receipt, only the agreed price.
-        const orderTotal = parseFloat(order.total_amount);
+        // GQF: orders.total_amount е НЕТО (без ДДС). Razpiska плащането
+        // събира GROSS (нето × 1.2 = 20% ДДС отгоре) — точно както
+        // RecordPaymentModal изчислява сумата за касиера. Затова cap-ът
+        // е GROSS; иначе плащане с включено ДДС се отхвърля като
+        // "Payment exceeds order total" (бъгът от 2026-06-18).
+        const orderTotal = parseFloat(order.total_amount) * 1.2;
         if (alreadyPaidOrder + body.amount > orderTotal * 1.001) {
           return reply.status(400).send({
             error: "Payment exceeds order total",
