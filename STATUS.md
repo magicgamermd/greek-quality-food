@@ -1,6 +1,34 @@
 # Greek Quality Food — STATUS
 
-**Last updated:** 2026-05-12
+**Last updated:** 2026-06-18
+
+## Re-baseline sync from MERTM — 2026-06-18 (branch `feat/gqf-sync-from-mertm`)
+
+Цел: GQF = доказаният MERTM код + партиди + GQF брандинг/данни, **нето ДДС**.
+Spec: `docs/superpowers/specs/2026-06-18-gqf-sync-from-mertm-design.md`
+План: `docs/superpowers/plans/2026-06-18-gqf-core-rebaseline.md`
+
+**ЗАВЪРШЕНО и проверено:**
+
+- Backup на реалната GQF база → `~/gqf-backups/pre-rebaseline-20260618-111828.sql.gz` (1799 продукта / 430 партньора)
+- Златна проба за нето (gross = net × 1.2) → `docs/superpowers/golden/money-baseline.txt`
+- 15 MERTM пост-fork миграции реконсилирани (преномерирани **083–097**, без колизия с GQF 080–082) и приложени
+- NET money helper `src/lib/invoice-totals.ts` (`computeInvoiceTotalsFromNet`) + 4 unit теста (зелени)
+- Базов код здрав: backend `tsc --noEmit` ✓, frontend `vite build` ✓
+- Регресия: backend буутва на мигрираната схема; всички core API → 200 (auth/products/orders/batches/inventory/partners/suppliers/purchase-orders/analytics/settings); invoices с правилно НЕТО
+- Frontend dev буутва (:5175), GQF-брандиран login рендерира; proxy→backend→DB връзка работи
+
+**⚠️ Среда (НЕ код):**
+
+- Docker engine заби и не се вдига (force-kill блокиран от политика). За проверка работихме срещу **native Postgres :5432** (възстановен backup + миграции). Реалните Docker данни са непокътнати във volume-а — чакат рестарт/поправка на Docker Desktop.
+- Frontend `node_modules` беше повреден от npm optional-deps бъг (#4828) → оправен с `npm ci`.
+
+**СЛЕДВА (не започнато — реалните MERTM feature портове):**
+
+- Адитивни портове на MERTM подобренията (фактури/проформи/отчети/Econt роля/нови routes) с пазене на НЕТО + партиди
+- Довършване на брандинга (telegram-bot/mobile/ai-service/installer)
+- Гласов асистент + telegram-agent/MCP (отделни планове, искат API ключове)
+- Docker възстановяване + деплой (Docker/Railway)
 
 ## Origin
 
