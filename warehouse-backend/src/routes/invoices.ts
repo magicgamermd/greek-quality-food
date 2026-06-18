@@ -9,6 +9,11 @@ import {
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { computeInvoiceTotalsFromNet } from "../lib/invoice-totals.js";
 import {
+  swapInvoiceNumbers,
+  SwapInvoiceNumbersValidationError,
+  type SwapInvoiceNumbersError,
+} from "../services/invoice-number-swap.js";
+import {
   restoreOrderItemsToInventory,
   restorePartialItemsToInventory,
 } from "../utils/order-stock.js";
@@ -159,6 +164,17 @@ const createInvoiceSchema = z.object({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
+  // Optional override for invoice_number — backfill an OLD invoice from the
+  // previous program with its original number (so a credit note can later be
+  // issued against it correctly). Gated behind the same hidden "-=" chord as
+  // invoice_date_override. Digits only, padded to 10. Validated for
+  // uniqueness; a lower-than-MAX number does NOT advance the auto sequence
+  // (generate_invoice_number uses MAX+1).
+  invoice_number_override: z
+    .string()
+    .trim()
+    .regex(/^\d{1,10}$/, "Само цифри, до 10 знака")
+    .optional(),
   // Batch D — Issue invoice in the name of a different (company) partner when
   // the order's partner is an individual. Either pick an existing partner by
   // id, or supply full new-partner data — server upserts by EIK.
@@ -265,6 +281,30 @@ const invoiceCancelPreHandler = [
   jwtVerify,
   requirePermission(PERMISSIONS.INVOICES_CANCEL),
 ];
+
+const invoiceSwapNumbersPreHandler = [
+  jwtVerify,
+  requirePermission(PERMISSIONS.INVOICES_SWAP_NUMBERS),
+];
+
+function humanizeSwapError(detail: SwapInvoiceNumbersError): string {
+  switch (detail.kind) {
+    case "DUPLICATE_INPUT":
+      return `Един и същ номер не може да участва два пъти: ${detail.numbers.join(", ")}`;
+    case "MISSING_NUMBERS":
+      return `Не съществуват фактури с номера: ${detail.numbers.join(", ")}`;
+    case "PROFORMA":
+      return `Проформа фактури не подлежат на размяна: ${detail.numbers.join(", ")}`;
+    case "CANCELLED":
+      return `Анулирани фактури не подлежат на размяна: ${detail.numbers.join(", ")}`;
+    case "HAS_CREDIT_NOTE":
+      return `Има издадено кредитно известие срещу фактура(и): ${detail.numbers.join(", ")}. Първо оправи КИ, после размени.`;
+    default: {
+      const _exhaustive: never = detail;
+      return "Неочаквана грешка при размяна.";
+    }
+  }
+}
 
 async function getCompanySettings(): Promise<{
   company_name: string;
@@ -630,10 +670,32 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           : 0;
         const totalGross = totalNet + totalVat;
 
-        // Generate invoice number
-        const {
-          rows: [{ generate_invoice_number: invoiceNumber }],
-        } = await client.query("SELECT generate_invoice_number()");
+        // Invoice number: manual override (backfill an old-program invoice with
+        // its original number) OR the normal sequential generator. A manual
+        // number is digits-only padded to 10, must be UNIQUE, and a
+        // lower-than-MAX manual number does NOT advance the auto sequence
+        // (generate_invoice_number is MAX+1, so it ignores historical numbers).
+        let invoiceNumber: string;
+        if (body.invoice_number_override) {
+          invoiceNumber = body.invoice_number_override
+            .replace(/\D/g, "")
+            .padStart(10, "0");
+          const { rows: dup } = await client.query(
+            "SELECT 1 FROM invoices WHERE invoice_number = $1 LIMIT 1",
+            [invoiceNumber],
+          );
+          if (dup.length > 0) {
+            throw Object.assign(
+              new Error(`Фактура с номер ${invoiceNumber} вече съществува.`),
+              { statusCode: 400 },
+            );
+          }
+        } else {
+          const {
+            rows: [{ generate_invoice_number: generated }],
+          } = await client.query("SELECT generate_invoice_number()");
+          invoiceNumber = generated;
+        }
 
         // Create invoice record
         const {
@@ -2168,6 +2230,75 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       });
 
       return reply.status(201).send(result);
+    },
+  );
+
+  // POST /invoices/swap-numbers — atomically rotate invoice_number between
+  // 2-3 invoices (admin-only). Plain Fastify: body validated via .parse().
+  const swapNumbersBodySchema = z.object({
+    numbers: z
+      .array(z.string().regex(/^\d{10}$/, "Очаквам 10-цифрен номер на фактура"))
+      .min(2, "Минимум 2 номера за размяна")
+      .max(3, "Максимум 3 номера за размяна (cycle)"),
+  });
+
+  app.post(
+    "/swap-numbers",
+    { preHandler: invoiceSwapNumbersPreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { numbers } = swapNumbersBodySchema.parse(request.body);
+
+      try {
+        const result = await swapInvoiceNumbers(numbers);
+
+        // Delete the stale cached PDF files for every involved number. They
+        // were named by number and still hold the pre-swap content; together
+        // with pdf_path=NULL (cleared in the service) this forces the next
+        // print to regenerate the PDF with the correct swapped number.
+        // Without this the print would show the old number.
+        const invoicesDir = path.resolve("uploads", "invoices");
+        await Promise.all(
+          numbers.map((num) =>
+            fs.promises
+              .unlink(path.join(invoicesDir, `${num}.pdf`))
+              .catch(() => {}),
+          ),
+        );
+
+        request.log.info(
+          {
+            operation: "invoice_number_swap",
+            user_id: request.user.id,
+            user_email: request.user.email,
+            cycle_length: result.cycle_length,
+            swaps: result.swapped.map((s) => ({
+              id: s.id,
+              old: s.old_number,
+              new: s.new_number,
+            })),
+          },
+          "invoice numbers swapped",
+        );
+
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof SwapInvoiceNumbersValidationError) {
+          request.log.info(
+            {
+              operation: "invoice_number_swap_rejected",
+              user_id: request.user.id,
+              reason: err.detail.kind,
+              rejected_numbers: err.detail.numbers,
+            },
+            "invoice swap rejected",
+          );
+          return reply.code(422).send({
+            error: err.detail.kind,
+            detail: humanizeSwapError(err.detail),
+          });
+        }
+        throw err;
+      }
     },
   );
 }

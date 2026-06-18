@@ -41,6 +41,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useAuth } from "@/contexts/AuthContext";
+import { SwapInvoiceNumbersModal } from "@/components/invoices/SwapInvoiceNumbersModal";
 
 const paymentVariants: Record<string, "success" | "destructive" | "warning"> = {
   paid: "success",
@@ -62,6 +64,9 @@ const documentTypeLabels: Record<string, string> = {
 
 export function Invoices() {
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const [showSwapModal, setShowSwapModal] = useState(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFromUrl = searchParams.get("status") || "";
@@ -590,44 +595,57 @@ export function Invoices() {
         )}
       </div>
 
-      {/* Document type tabs (Фактури / Стокови разписки) */}
-      <div className="inline-flex rounded-lg border bg-gray-50 p-1">
-        <button
-          type="button"
-          onClick={() => {
-            setView("invoices");
-            const next = new URLSearchParams(searchParams);
-            next.delete("view");
-            setSearchParams(next, { replace: true });
-            setStatusFilter("");
-          }}
-          className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-md transition ${
-            view === "invoices"
-              ? "bg-white shadow text-gray-900"
-              : "text-gray-500 hover:text-gray-900"
-          }`}
-        >
-          <FileText className="h-4 w-4" />
-          Фактури
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setView("razpiska");
-            const next = new URLSearchParams(searchParams);
-            next.set("view", "razpiska");
-            setSearchParams(next, { replace: true });
-            setStatusFilter("");
-          }}
-          className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-md transition ${
-            view === "razpiska"
-              ? "bg-white shadow text-gray-900"
-              : "text-gray-500 hover:text-gray-900"
-          }`}
-        >
-          <Receipt className="h-4 w-4" />
-          Стокови разписки
-        </button>
+      {/* Document type tabs (Фактури / Стокови разписки) + admin swap button */}
+      <div className="flex items-center gap-2">
+        <div className="inline-flex rounded-lg border bg-gray-50 p-1">
+          <button
+            type="button"
+            onClick={() => {
+              setView("invoices");
+              const next = new URLSearchParams(searchParams);
+              next.delete("view");
+              setSearchParams(next, { replace: true });
+              setStatusFilter("");
+            }}
+            className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-md transition ${
+              view === "invoices"
+                ? "bg-white shadow text-gray-900"
+                : "text-gray-500 hover:text-gray-900"
+            }`}
+          >
+            <FileText className="h-4 w-4" />
+            Фактури
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setView("razpiska");
+              const next = new URLSearchParams(searchParams);
+              next.set("view", "razpiska");
+              setSearchParams(next, { replace: true });
+              setStatusFilter("");
+            }}
+            className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-md transition ${
+              view === "razpiska"
+                ? "bg-white shadow text-gray-900"
+                : "text-gray-500 hover:text-gray-900"
+            }`}
+          >
+            <Receipt className="h-4 w-4" />
+            Стокови разписки
+          </button>
+        </div>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => setShowSwapModal(true)}
+            title="Размяна на номера на фактури (admin)"
+            aria-label="Размяна на номера"
+            className="inline-flex items-center justify-center w-8 h-8 rounded border border-gray-200 text-gray-500 hover:text-gray-900 hover:border-gray-400 transition"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Status filter + search */}
@@ -1354,6 +1372,14 @@ export function Invoices() {
           </div>
         </div>
       )}
+
+      <SwapInvoiceNumbersModal
+        isOpen={showSwapModal}
+        onClose={() => setShowSwapModal(false)}
+        onSuccess={() => {
+          qc.invalidateQueries({ queryKey: ["invoices"] });
+        }}
+      />
     </div>
   );
 }

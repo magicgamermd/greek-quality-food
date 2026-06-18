@@ -14,6 +14,9 @@ export const PERMISSIONS = {
   ORDERS_MANAGE: "orders.manage",
   INVOICES_MANAGE: "invoices.manage",
   INVOICES_CANCEL: "invoices.cancel",
+  // Admin-only by default — no role grants this. Atomic rotation of
+  // invoice_number between 2-3 invoices (fix a numbering mistake).
+  INVOICES_SWAP_NUMBERS: "invoices.swap_numbers",
   RAZPISKA_MANAGE: "razpiska.manage",
   REPLACEMENT_CREATE: "replacement.create",
   ECONT_MANAGE: "econt.manage",
