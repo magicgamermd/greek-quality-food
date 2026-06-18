@@ -1,0 +1,31 @@
+time="2026-06-18T11:20:00+03:00" level=warning msg="/Users/magic/Projects/greek-quality-food/warehouse-backend/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+Pager usage is off.
+== counts ==
+      t      | c 
+-------------+---
+ invoices    | 2
+ orders      | 3
+ order_items | 3
+(3 rows)
+
+== invoice totals (last 15): net / vat / gross / net*1.2 ==
+ invoice_number | net  | vat  | gross | net_x12 
+----------------+------+------+-------+---------
+ 0000000003     | 1.52 | 0.30 |  1.82 |    1.82
+ 0000000002     | 4.50 | 0.90 |  5.40 |    5.40
+(2 rows)
+
+== sample order totals (orders.total_amount = NET for GQF) ==
+ id | order_number | net_total 
+----+--------------+-----------
+  3 |            3 |      1.82
+  2 |            2 |      1.82
+  1 |            1 |      4.50
+(3 rows)
+
+== admin users ==
+                  id                  |      email      | role  
+--------------------------------------+-----------------+-------
+ dfcf322f-a26b-4f52-806d-5708d308254f | admin@gqf.local | admin
+(1 row)
+
