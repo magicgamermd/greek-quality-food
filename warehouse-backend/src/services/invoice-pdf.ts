@@ -95,6 +95,7 @@ interface InvoiceData {
     city?: string;
     contact_person?: string;
     phone?: string;
+    email?: string;
     card_number?: string;
     bank_name?: string;
     bic?: string;
@@ -554,22 +555,18 @@ function buildInvoicePartyFields(
   const overrideEgn = (clientDisplayEgn ?? "").trim();
 
   const buyerFields: InvoicePartyField[] = [
-    { label: buyerLabel, value: buyerName, bold: true },
-    ...(!isIndividualBuyer && party.eik
-      ? [{ label: "ЕИК:", value: party.eik }]
-      : []),
+    { label: "", value: buyerName, bold: true },
+    // Получателят показва СЪЩИТЕ полета като доставчика — винаги, дори
+    // празни (по желание на magic): симетричен бланкет. "МП" етикетът
+    // на името е премахнат (само получер шрифт, както при доставчика).
+    { label: "ЕИК:", value: party.eik || "" },
     ...(isIndividualBuyer && overrideEgn.length > 0
       ? [{ label: "ЕГН:", value: overrideEgn }]
       : []),
-    ...(!isIndividualBuyer && party.vat_number
-      ? [{ label: "ДДС номер:", value: party.vat_number }]
-      : []),
-    ...(buyerAddressParts.length
-      ? [{ label: "Адрес:", value: buyerAddressParts.join("\n") }]
-      : []),
-    ...(!isIndividualBuyer && party.contact_person
-      ? [{ label: "МОЛ:", value: party.contact_person }]
-      : []),
+    { label: "ДДС номер:", value: party.vat_number || "" },
+    { label: "Адрес:", value: buyerAddressParts.join("\n") },
+    { label: "Email:", value: party.email || "" },
+    { label: "МОЛ:", value: party.contact_person || "" },
     ...(party.phone ? [{ label: "Тел:", value: party.phone }] : []),
     ...(!isIndividualBuyer && party.card_number
       ? [{ label: "Кл.номер:", value: party.card_number }]
@@ -1137,7 +1134,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       };
 
       if (showVat) {
-        drawTotalsRow(`Данъчна основа ${vatRateLabel}%:`, totalNet);
+        drawTotalsRow("Данъчна основа:", totalNet);
         drawTotalsRow(`ДДС ${vatRateLabel}%:`, totalVat);
       }
       drawTotalsRow("Сума за получаване:", totalGross, { bigger: true });

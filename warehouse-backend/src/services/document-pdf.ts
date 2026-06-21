@@ -1154,9 +1154,7 @@ function drawStockDispatchPartyBoxes(
   // on a Стокова разписка that doubles as a tax-relevant document.
   const rowsForPartner = (party: PartnerInfo) => [
     { label: "", value: party.name || "—", bold: true },
-    // ЕИК редът се показва само ако партньорът има ЕИК — клиент на дребно
-    // (физ. лице) без ЕИК → без празен ред (по-малко редове на разписката).
-    ...(party.eik ? [{ label: "ЕИК", value: party.eik }] : []),
+    { label: "ЕИК", value: party.eik || "" },
     ...(party.vat_number ? [{ label: "ДДС №", value: party.vat_number }] : []),
     { label: "Адрес", value: normalizeAddress(party.address || "") },
     ...(party.mol ? [{ label: "МОЛ", value: party.mol }] : []),
