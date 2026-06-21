@@ -7175,6 +7175,7 @@ export function Orders() {
   // Per-column text filters
   const [filters, setFilters] = useState({
     order_number: "",
+    request: "",
     partner: "",
     invoice: "",
     stock_dispatch: "",
@@ -7188,6 +7189,9 @@ export function Orders() {
   // Debounce so each keystroke does not hit the API.
   const debouncedArticle = useDebouncedValue(filters.article.trim(), 300);
   const debouncedShipment = useDebouncedValue(filters.shipment.trim(), 300);
+  // № заявка (request_number) — server-side, за да намира поръчка по
+  // заявка из цялата история, не само заредените редове.
+  const debouncedRequest = useDebouncedValue(filters.request.trim(), 300);
   // Date range filter — same pattern as Приемане на стоки
   const todayIso = new Date().toISOString().split("T")[0];
   const thirtyDaysAgoIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
@@ -7217,6 +7221,7 @@ export function Orders() {
       filterReplacement,
       debouncedArticle,
       debouncedShipment,
+      debouncedRequest,
     ],
     queryFn: () => {
       const parts: string[] = [];
@@ -7235,6 +7240,8 @@ export function Orders() {
         parts.push(`article=${encodeURIComponent(debouncedArticle)}`);
       if (debouncedShipment)
         parts.push(`shipment_number=${encodeURIComponent(debouncedShipment)}`);
+      if (debouncedRequest)
+        parts.push(`request_number=${encodeURIComponent(debouncedRequest)}`);
       const params = parts.length > 0 ? `?${parts.join("&")}` : "";
       return api.get(`/orders${params}`).then((r) => {
         const d = r.data;
@@ -7749,7 +7756,7 @@ export function Orders() {
       </div>
 
       {/* Per-column search filters — compact, fit on a single row at lg+ */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-1.5">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-1.5">
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
           <Input
@@ -7758,6 +7765,17 @@ export function Orders() {
               setFilters((f) => ({ ...f, order_number: e.target.value }))
             }
             placeholder="№ поръчка"
+            className="pl-7 h-8 text-xs"
+          />
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
+          <Input
+            value={filters.request}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, request: e.target.value }))
+            }
+            placeholder="№ заявка"
             className="pl-7 h-8 text-xs"
           />
         </div>
@@ -7848,6 +7866,7 @@ export function Orders() {
             onClick={() => {
               setFilters({
                 order_number: "",
+                request: "",
                 partner: "",
                 invoice: "",
                 stock_dispatch: "",
