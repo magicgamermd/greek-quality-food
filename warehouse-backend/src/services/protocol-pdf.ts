@@ -42,8 +42,24 @@ export interface ProtocolData {
   stockDispatchNumber?: string | null;
   date: string; // ISO yyyy-mm-dd
   place: string;
-  seller: { name: string; eik: string; rep: string };
-  buyer: { name: string; eik?: string | null; rep: string };
+  seller: {
+    name: string;
+    eik: string;
+    vat_number?: string | null;
+    address?: string | null;
+    email?: string | null;
+    mol?: string | null;
+    rep: string;
+  };
+  buyer: {
+    name: string;
+    eik?: string | null;
+    vat_number?: string | null;
+    address?: string | null;
+    email?: string | null;
+    mol?: string | null;
+    rep: string;
+  };
   items: ProtocolItem[];
   totalAmount: number;
   outputPath: string;
@@ -173,28 +189,73 @@ export async function generateProtocolPdf(data: ProtocolData): Promise<void> {
     });
     y += 36;
 
-    // Parties
+    // Parties — ПРЕДАЛ (доставчик) и ПРИЕЛ (получател) показват едни и
+    // същи основни редове, винаги (дори празни): ЕИК, ДДС, Адрес, Email,
+    // МОЛ. Симетричен бланкет, както при фактурата и стоковата разписка.
+    // "Представител" остава отделен ред (подписващото лице).
     doc.font("MainBold").fontSize(10);
     doc.text("ПРЕДАЛ:", L, y);
     doc.text("ПРИЕЛ:", L + pageW / 2, y);
     y += 14;
 
-    doc.font("Main").fontSize(9);
-    doc.text(`${data.seller.name}`, L, y, { width: pageW / 2 - 10 });
-    doc.text(`${data.buyer.name}`, L + pageW / 2, y, { width: pageW / 2 });
-    y += 12;
+    const colW = pageW / 2;
+    const labelW = 70;
+    // Draws one party's labelled rows starting at column origin `x`, on its
+    // own running cursor; returns the y after the last row so the two
+    // columns can be re-aligned to whichever is taller.
+    const drawPartyRows = (
+      x: number,
+      party: {
+        name: string;
+        eik?: string | null;
+        vat_number?: string | null;
+        address?: string | null;
+        email?: string | null;
+        mol?: string | null;
+        rep: string;
+      },
+    ): number => {
+      let py = y;
+      // Name — bold, no label.
+      doc.font("MainBold").fontSize(9);
+      doc.text(party.name || "", x, py, { width: colW - 10 });
+      py = doc.y + 2;
+      const rows: Array<[string, string]> = [
+        ["ЕИК:", party.eik || ""],
+        ["ДДС №:", party.vat_number || ""],
+        ["Адрес:", party.address || ""],
+        ["Email:", party.email || ""],
+        ["МОЛ:", party.mol || ""],
+        ["Представител:", party.rep || ""],
+      ];
+      for (const [label, value] of rows) {
+        doc.font("Main").fontSize(9);
+        doc.text(label, x, py, { width: labelW, lineBreak: false });
+        doc.text(value, x + labelW, py, { width: colW - labelW - 10 });
+        py = doc.y + 2;
+      }
+      return py;
+    };
 
-    doc.text(`ЕИК: ${data.seller.eik}`, L, y);
-    if (data.buyer.eik) doc.text(`ЕИК: ${data.buyer.eik}`, L + pageW / 2, y);
-    y += 12;
-
-    doc.text(`Представител: ${data.seller.rep}`, L, y, {
-      width: pageW / 2 - 10,
+    const sellerEnd = drawPartyRows(L, {
+      name: data.seller.name,
+      eik: data.seller.eik,
+      vat_number: data.seller.vat_number,
+      address: data.seller.address,
+      email: data.seller.email,
+      mol: data.seller.mol,
+      rep: data.seller.rep,
     });
-    doc.text(`Представител: ${data.buyer.rep}`, L + pageW / 2, y, {
-      width: pageW / 2,
+    const buyerEnd = drawPartyRows(L + pageW / 2, {
+      name: data.buyer.name,
+      eik: data.buyer.eik,
+      vat_number: data.buyer.vat_number,
+      address: data.buyer.address,
+      email: data.buyer.email,
+      mol: data.buyer.mol,
+      rep: data.buyer.rep,
     });
-    y += 50;
+    y = Math.max(sellerEnd, buyerEnd) + 38;
 
     // Signature lines
     doc.font("Main").fontSize(9);

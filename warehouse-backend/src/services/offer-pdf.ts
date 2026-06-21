@@ -44,6 +44,7 @@ export interface OfferPdfData {
     city?: string;
     contact_person?: string;
     phone?: string;
+    email?: string;
   };
   company: {
     name: string;
@@ -129,48 +130,63 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
 
     // ── Party headers ──────────────────────────────────────
     const partyTop = doc.y;
+    // A row tuple is [label, value, alwaysRender?]. When `alwaysRender` is
+    // true the row prints even with an empty value — this is what keeps the
+    // Получател block symmetric with Доставчик (the core ЕИК / ДДС / Адрес /
+    // Email / МОЛ rows always appear on both sides, matching invoice-pdf.ts).
     const drawParty = (
       x: number,
       title: string,
-      lines: Array<[string, string | undefined]>,
+      lines: Array<[string, string | undefined, boolean?]>,
     ) => {
       doc.font("MainBold").fontSize(8).fillColor("#64748b");
       doc.text(title, x, partyTop, { width: colW });
       let y = doc.y + 2;
-      for (const [label, value] of lines) {
-        if (!value) continue;
+      for (const [label, value, alwaysRender] of lines) {
+        if (!value && !alwaysRender) continue;
+        // Name row (no label) prints in bold without a label column so it
+        // reads as the party heading, same as the supplier side.
+        if (!label) {
+          doc.font("MainBold").fontSize(9).fillColor("#0f172a");
+          doc.text(value || "", x, y, { width: colW });
+          y = doc.y + 1;
+          continue;
+        }
         doc.font("Main").fontSize(8.5).fillColor("#334155");
         doc.text(label, x, y, { width: 70, continued: false });
         doc.font("MainBold").fillColor("#0f172a");
-        doc.text(value, x + 70, y, { width: colW - 70 });
+        doc.text(value || "", x + 70, y, { width: colW - 70 });
         y = doc.y + 1;
       }
       return y;
     };
 
+    const supplierAddr = [data.company.address, data.company.city]
+      .filter(Boolean)
+      .join(", ");
     const senderEnd = drawParty(L, "ИЗПРАЩАЧ (Доставчик)", [
-      ["Фирма:", data.company.name],
-      ["ЕИК:", data.company.eik],
-      ["ДДС №:", data.company.vat_number],
-      [
-        "Адрес:",
-        [data.company.address, data.company.city].filter(Boolean).join(", "),
-      ],
+      ["", data.company.name],
+      ["ЕИК:", data.company.eik, true],
+      ["ДДС №:", data.company.vat_number, true],
+      ["Адрес:", supplierAddr, true],
       ["Телефон:", data.company.phone],
-      ["E-mail:", data.company.email],
-      ["МОЛ:", data.company.mol],
+      ["E-mail:", data.company.email, true],
+      ["МОЛ:", data.company.mol, true],
     ]);
 
+    // Получателят показва СЪЩИТЕ основни редове като доставчика — винаги,
+    // дори празни (симетричен бланкет): ЕИК, ДДС, Адрес, Email, МОЛ.
+    const receiverAddr = [data.partner.address, data.partner.city]
+      .filter(Boolean)
+      .join(", ");
     const receiverEnd = drawParty(L + colW + 16, "ПОЛУЧАТЕЛ (Клиент)", [
-      ["Фирма/Име:", data.partner.name],
-      ["ЕИК:", data.partner.eik],
-      ["ДДС №:", data.partner.vat_number],
-      [
-        "Адрес:",
-        [data.partner.address, data.partner.city].filter(Boolean).join(", "),
-      ],
+      ["", data.partner.name],
+      ["ЕИК:", data.partner.eik, true],
+      ["ДДС №:", data.partner.vat_number, true],
+      ["Адрес:", receiverAddr, true],
       ["Телефон:", data.partner.phone],
-      ["Лице за контакт:", data.partner.contact_person],
+      ["E-mail:", data.partner.email, true],
+      ["МОЛ:", data.partner.contact_person, true],
     ]);
 
     doc.y = Math.max(senderEnd, receiverEnd) + 12;

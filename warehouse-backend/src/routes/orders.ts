@@ -3999,7 +3999,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       const {
         rows: [partner],
       } = await query(
-        "SELECT name, eik, contact_person FROM partners WHERE id = $1",
+        "SELECT name, eik, vat_number, address, city, email, contact_person FROM partners WHERE id = $1",
         [order.partner_id],
       );
 
@@ -4033,11 +4033,19 @@ export default async function orderRoutes(app: FastifyInstance) {
         seller: {
           name: company.company_name,
           eik: company.eik,
+          vat_number: company.vat_number,
+          address: [company.city, company.address].filter(Boolean).join(", "),
+          email: company.email,
+          mol: company.mol,
           rep: request.query.seller_rep || company.mol || "",
         },
         buyer: {
           name: partner?.name || "",
           eik: partner?.eik ?? null,
+          vat_number: partner?.vat_number ?? null,
+          address: [partner?.city, partner?.address].filter(Boolean).join(", "),
+          email: partner?.email ?? null,
+          mol: partner?.contact_person ?? null,
           rep: request.query.buyer_rep || partner?.contact_person || "",
         },
         items: items.map((it: any) => ({
