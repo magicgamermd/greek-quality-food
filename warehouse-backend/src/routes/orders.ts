@@ -3295,6 +3295,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         address: order.partner_address,
         city: order.partner_city,
         phone: order.partner_phone,
+        email: order.partner_email,
         mol: order.partner_mol,
       },
       warehouse_name: "Склад Овча Купел",
@@ -3327,6 +3328,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         address: order.partner_address,
         city: order.partner_city,
         phone: order.partner_phone,
+        email: order.partner_email,
         mol: order.partner_mol,
       },
       items: items.map((i: any) => ({
@@ -3389,6 +3391,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               p.name AS partner_name, p.eik AS partner_eik,
               p.vat_number AS partner_vat, p.address AS partner_address,
               p.city AS partner_city, p.phone AS partner_phone,
+              p.email AS partner_email,
               p.contact_person AS partner_mol,
               p.contact_person AS partner_contact_person,
               ip.id   AS invoice_partner_id,
@@ -3398,6 +3401,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               ip.address    AS invoice_partner_address,
               ip.city       AS invoice_partner_city,
               ip.phone      AS invoice_partner_phone,
+              ip.email      AS invoice_partner_email,
               ip.contact_person AS invoice_partner_mol
        FROM orders o
        JOIN partners p ON p.id = o.partner_id
@@ -3454,6 +3458,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         address: order.invoice_partner_address,
         city: order.invoice_partner_city,
         phone: order.invoice_partner_phone,
+        email: order.invoice_partner_email,
         mol: order.invoice_partner_mol,
         contact_person: order.invoice_partner_mol,
       };
@@ -3465,6 +3470,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       address: order.partner_address,
       city: order.partner_city,
       phone: order.partner_phone,
+      email: order.partner_email,
       mol: order.partner_mol,
       contact_person: order.partner_contact_person ?? order.partner_mol,
     };

@@ -2356,6 +2356,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
                 s.address AS supplier_address,
                 s.city AS supplier_city,
                 s.phone AS supplier_phone,
+                s.email AS supplier_email,
                 s.contact_person AS supplier_contact
        FROM incoming_goods ig
        LEFT JOIN suppliers s ON s.id = ig.supplier_id
@@ -2418,6 +2419,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
           address: settings.address || undefined,
           city: settings.city || undefined,
           phone: settings.phone || undefined,
+          email: settings.email || undefined,
           mol: settings.mol || undefined,
         },
         supplier: {
@@ -2427,6 +2429,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
           address: incoming.supplier_address || undefined,
           city: incoming.supplier_city || undefined,
           phone: incoming.supplier_phone || undefined,
+          email: incoming.supplier_email || undefined,
           mol: incoming.supplier_contact || undefined,
         },
         warehouse_name: warehouseName,

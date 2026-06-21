@@ -219,6 +219,7 @@ interface CompanyInfo {
   eik: string;
   vat_number?: string;
   phone?: string;
+  email?: string;
   mol?: string;
   vet_reg_number?: string; // Ветеринарен регистрационен №
 }
@@ -230,6 +231,7 @@ interface PartnerInfo {
   address?: string;
   city?: string;
   phone?: string;
+  email?: string;
   mol?: string;
 }
 
@@ -319,31 +321,29 @@ function drawPartyHeaders(
 
   type Field = { label: string; value: string; bold?: boolean };
 
+  // Получателят (partner) показва СЪЩИТЕ основни полета като доставчика
+  // (company) — винаги, дори празни (по желание на magic): симетричен
+  // бланкет. ЕИК / ДДС / Адрес / Email / МОЛ се рендерират безусловно от
+  // двете страни; "Град" и "Тел" остават условни, както бяха.
   const partnerFields: Field[] = [
     { label: "", value: partner.name || "—", bold: true },
-    ...(partner.eik ? [{ label: "ЕИК:", value: partner.eik }] : []),
-    ...(partner.vat_number
-      ? [{ label: "ДДС:", value: partner.vat_number }]
-      : []),
+    { label: "ЕИК:", value: partner.eik || "" },
+    { label: "ДДС:", value: partner.vat_number || "" },
     ...(partner.city ? [{ label: "Град:", value: partner.city }] : []),
-    ...(partner.address
-      ? [{ label: "Адрес:", value: normalizeAddress(partner.address) }]
-      : []),
+    { label: "Адрес:", value: normalizeAddress(partner.address || "") },
     ...(partner.phone ? [{ label: "Тел:", value: partner.phone }] : []),
-    ...(partner.mol ? [{ label: "МОЛ:", value: partner.mol }] : []),
+    { label: "Email:", value: partner.email || "" },
+    { label: "МОЛ:", value: partner.mol || "" },
   ];
   const companyFields: Field[] = [
     { label: "", value: company.company_name || "—", bold: true },
-    { label: "ЕИК:", value: company.eik },
-    ...(company.vat_number
-      ? [{ label: "ДДС:", value: company.vat_number }]
-      : []),
+    { label: "ЕИК:", value: company.eik || "" },
+    { label: "ДДС:", value: company.vat_number || "" },
     ...(company.city ? [{ label: "Град:", value: company.city }] : []),
-    ...(company.address
-      ? [{ label: "Адрес:", value: normalizeAddress(company.address) }]
-      : []),
+    { label: "Адрес:", value: normalizeAddress(company.address || "") },
     ...(company.phone ? [{ label: "Тел:", value: company.phone }] : []),
-    ...(company.mol ? [{ label: "МОЛ:", value: company.mol }] : []),
+    { label: "Email:", value: company.email || "" },
+    { label: "МОЛ:", value: company.mol || "" },
   ];
 
   const measureBox = (title: string, fields: Field[]): number => {
@@ -785,13 +785,18 @@ function drawSignatures(
 }
 
 function formatPartyLines(party: PartnerInfo): string[] {
+  // Симетричен бланкет: и получателят, и доставчикът показват едни и същи
+  // основни полета — винаги, дори празни (по желание на magic). ЕИК / ИН по
+  // ДДС / Адрес / Email / МОЛ се изписват безусловно; "Град" и "Телефон"
+  // остават условни, както бяха.
   const lines: string[] = [];
-  if (party.eik) lines.push(`ЕИК: ${party.eik}`);
-  if (party.vat_number) lines.push(`ИН по ДДС: ${party.vat_number}`);
+  lines.push(`ЕИК: ${party.eik || ""}`);
+  lines.push(`ИН по ДДС: ${party.vat_number || ""}`);
   if (party.city) lines.push(`Град: ${party.city}`);
-  if (party.address) lines.push(`Адрес: ${normalizeAddress(party.address)}`);
+  lines.push(`Адрес: ${normalizeAddress(party.address || "")}`);
   if (party.phone) lines.push(`Телефон: ${party.phone}`);
-  if (party.mol) lines.push(`МОЛ: ${party.mol}`);
+  lines.push(`Email: ${party.email || ""}`);
+  lines.push(`МОЛ: ${party.mol || ""}`);
   return lines;
 }
 
@@ -1145,26 +1150,27 @@ function drawStockDispatchPartyBoxes(
   const valueWidth = textWidth - labelWidth;
   const rowGap = 2;
 
-  // Phone line intentionally dropped from both party blocks per МЕРТ-М
-  // preference. МОЛ is rendered ONLY when populated (no empty "МОЛ" label
-  // when the company / partner doesn't have one).
-  // "Град" was dropped per cashier feedback — the city is already part of
-  // the address line and the redundant row was eating vertical space.
-  // Replaced by "ДДС №" so the recipient block carries the VAT id needed
-  // on a Стокова разписка that doubles as a tax-relevant document.
+  // Phone line intentionally dropped from both party blocks per cashier
+  // preference. "Град" was dropped too — the city is already part of the
+  // address line and the redundant row was eating vertical space.
+  // Получателят показва СЪЩИТЕ основни полета като доставчика — винаги, дори
+  // празни (по желание на magic): симетричен бланкет. ЕИК / ДДС № / Адрес /
+  // Email / МОЛ се рендерират безусловно от двете страни.
   const rowsForPartner = (party: PartnerInfo) => [
     { label: "", value: party.name || "—", bold: true },
     { label: "ЕИК", value: party.eik || "" },
-    ...(party.vat_number ? [{ label: "ДДС №", value: party.vat_number }] : []),
+    { label: "ДДС №", value: party.vat_number || "" },
     { label: "Адрес", value: normalizeAddress(party.address || "") },
-    ...(party.mol ? [{ label: "МОЛ", value: party.mol }] : []),
+    { label: "Email", value: party.email || "" },
+    { label: "МОЛ", value: party.mol || "" },
   ];
   const rowsForCompany = (party: CompanyInfo) => [
     { label: "", value: party.company_name || "—", bold: true },
     { label: "ЕИК", value: party.eik || "" },
-    ...(party.vat_number ? [{ label: "ДДС №", value: party.vat_number }] : []),
+    { label: "ДДС №", value: party.vat_number || "" },
     { label: "Адрес", value: normalizeAddress(party.address || "") },
-    ...(party.mol ? [{ label: "МОЛ", value: party.mol }] : []),
+    { label: "Email", value: party.email || "" },
+    { label: "МОЛ", value: party.mol || "" },
   ];
 
   const measureBoxHeight = (
