@@ -4,6 +4,7 @@ import path from "node:path";
 import { query } from "../db.js";
 import {
   generateWriteoffProtocolPdf,
+  generateWriteoffMultiProtocolPdf,
   loadWriteoffPdfData,
 } from "../services/writeoff-pdf.js";
 
@@ -116,6 +117,49 @@ export async function registerWriteoffPdfRoute(app: FastifyInstance) {
       )
       .send(buffer);
   });
+
+  // GET /protocol/:protocolNumber/pdf — multi-line НАП брак protocol that
+  // groups every stock_writeoffs row sharing the given protocol_number into a
+  // single printed act with a table of items. Rendered fresh on each request
+  // (no on-disk cache — the protocol is identified by number, not row id).
+  app.get(
+    "/protocol/:protocolNumber/pdf",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      await requireAuth(request, reply);
+
+      const role = request.user?.role;
+      if (!["admin", "accountant", "warehouse"].includes(role as string)) {
+        return reply.status(403).send({ error: "Нямате достъп до документа" });
+      }
+
+      const { protocolNumber } = request.params as { protocolNumber: string };
+      const decoded = decodeURIComponent(protocolNumber || "").trim();
+      if (!decoded) {
+        return reply.status(400).send({ error: "Невалиден номер на протокол" });
+      }
+
+      try {
+        const buffer = await generateWriteoffMultiProtocolPdf(decoded);
+        return reply
+          .header("Content-Type", "application/pdf")
+          .header(
+            "Content-Disposition",
+            buildProtocolContentDisposition(decoded),
+          )
+          .send(buffer);
+      } catch (err: any) {
+        if (err?.statusCode === 404) {
+          return reply
+            .status(404)
+            .send({ error: "Протоколът за брак не е намерен" });
+        }
+        request.log.error(err);
+        return reply
+          .status(500)
+          .send({ error: "Грешка при генериране на протокола" });
+      }
+    },
+  );
 }
 
 /**
@@ -150,6 +194,29 @@ function buildContentDisposition(documentNumber: string): string {
   return (
     `inline; filename="${asciiFallback}.pdf"; ` +
     `filename*=UTF-8''${utf8Encoded}.pdf`
+  );
+}
+
+/**
+ * Content-Disposition for the multi-line protocol PDF. Same RFC 6266 dual
+ * filename trick as buildContentDisposition (Cyrillic in HTTP headers throws),
+ * but the visible filename is `Протокол_брак_<num>.pdf`.
+ */
+function buildProtocolContentDisposition(protocolNumber: string): string {
+  const asciiFallback = protocolNumber
+    .replace(/Б/g, "B")
+    .replace(/Р/g, "R")
+    .replace(/А/g, "A")
+    .replace(/К/g, "K")
+    .replace(/б/g, "b")
+    .replace(/р/g, "r")
+    .replace(/а/g, "a")
+    .replace(/к/g, "k")
+    .replace(/[^\x20-\x7E]/g, "_");
+  const utf8Name = encodeURIComponent(`Протокол_брак_${protocolNumber}.pdf`);
+  return (
+    `inline; filename="Protokol_brak_${asciiFallback}.pdf"; ` +
+    `filename*=UTF-8''${utf8Name}`
   );
 }
 
