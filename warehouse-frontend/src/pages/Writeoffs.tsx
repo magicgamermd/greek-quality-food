@@ -675,7 +675,7 @@ function WriteoffForm({
               {lines.map((line, index) => (
                 <div
                   key={index}
-                  className={`grid grid-cols-1 md:grid-cols-[2fr_1.6fr_0.8fr_1.2fr_2.5rem] gap-3 items-end rounded-lg border p-3 ${
+                  className={`grid grid-cols-1 md:grid-cols-[2fr_1.6fr_0.8fr_1.2fr_2.5rem] gap-3 items-start rounded-lg border p-3 ${
                     errorRow === index
                       ? "border-red-400 bg-red-50/40"
                       : "border-gray-200"
@@ -847,17 +847,20 @@ function WriteoffForm({
                   </div>
 
                   {/* Изтрий ред */}
-                  <div className="flex items-end justify-end">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Изтрий ред"
-                      title="Изтрий ред"
-                      onClick={() => removeLine(index)}
-                    >
-                      <Trash2 className="h-4 w-4 text-red-500" />
-                    </Button>
+                  <div className="space-y-1.5">
+                    <Label className="invisible select-none">.</Label>
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Изтрий ред"
+                        title="Изтрий ред"
+                        onClick={() => removeLine(index)}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}
