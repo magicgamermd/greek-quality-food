@@ -2214,9 +2214,9 @@ export function IncomingGoods() {
                 {manualItems.map((item, index) => (
                   <div
                     key={index}
-                    className="grid grid-cols-12 gap-3 items-end border rounded-lg p-3"
+                    className="grid grid-cols-1 md:grid-cols-[7.5rem_9rem_minmax(0,1fr)_7rem_6.5rem_6.5rem_2.5rem] gap-2 items-end border rounded-lg p-2"
                   >
-                    <div className="col-span-12 md:col-span-3 space-y-1.5">
+                    <div className="space-y-1.5 min-w-0 md:order-3">
                       <Label>Артикул</Label>
                       <div className="space-y-2">
                         <div className="relative">
@@ -2249,7 +2249,7 @@ export function IncomingGoods() {
                               handleRowFieldEnter(e, index, "product")
                             }
                             placeholder="Търси продукт по име или SKU..."
-                            className="h-12 text-base pr-10"
+                            className="h-9 text-sm pr-9"
                           />
                           {getManualSearchLoading(index) ? (
                             <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -2328,7 +2328,7 @@ export function IncomingGoods() {
                         ) : null}
                       </div>
                     </div>
-                    <div className="col-span-4 md:col-span-1 space-y-1.5">
+                    <div className="space-y-1.5 md:order-4">
                       <Label>Кол-во</Label>
                       <Input
                         ref={(el) => {
@@ -2353,12 +2353,9 @@ export function IncomingGoods() {
                         placeholder="0"
                       />
                     </div>
-                    <div className="col-span-4 md:col-span-1 space-y-1.5">
+                    <div className="space-y-1.5 md:order-5">
                       <Label>Мярка</Label>
-                      <Input
-                        ref={(el) => {
-                          rowInputRefs.current[`${index}:unit`] = el;
-                        }}
+                      <select
                         value={item.unit}
                         onChange={(e) =>
                           setManualItems((current) =>
@@ -2369,11 +2366,32 @@ export function IncomingGoods() {
                             ),
                           )
                         }
-                        onKeyDown={(e) => handleRowFieldEnter(e, index, "unit")}
-                        placeholder="бр"
-                      />
+                        className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
+                      >
+                        {item.unit &&
+                        ![
+                          "бр",
+                          "кг",
+                          "г",
+                          "л",
+                          "мл",
+                          "оп.",
+                          "каш.",
+                          "пал.",
+                        ].includes(item.unit) ? (
+                          <option value={item.unit}>{item.unit}</option>
+                        ) : null}
+                        <option value="бр">бр</option>
+                        <option value="кг">кг</option>
+                        <option value="г">г</option>
+                        <option value="л">л</option>
+                        <option value="мл">мл</option>
+                        <option value="оп.">оп.</option>
+                        <option value="каш.">каш.</option>
+                        <option value="пал.">пал.</option>
+                      </select>
                     </div>
-                    <div className="col-span-4 md:col-span-2 space-y-1.5">
+                    <div className="space-y-1.5 md:order-6">
                       <Label>Ед. цена</Label>
                       <Input
                         ref={(el) => {
@@ -2398,7 +2416,7 @@ export function IncomingGoods() {
                         placeholder="0.00"
                       />
                     </div>
-                    <div className="col-span-6 md:col-span-2 space-y-1.5">
+                    <div className="space-y-1.5 md:order-1">
                       <Label>Партида</Label>
                       <Input
                         value={item.batch_number}
@@ -2414,7 +2432,7 @@ export function IncomingGoods() {
                         placeholder="напр. L2024-15"
                       />
                     </div>
-                    <div className="col-span-4 md:col-span-2 space-y-1.5">
+                    <div className="space-y-1.5 md:order-2">
                       <Label>Срок на годност</Label>
                       <Input
                         type="date"
@@ -2430,7 +2448,7 @@ export function IncomingGoods() {
                         }
                       />
                     </div>
-                    <div className="col-span-12 md:col-span-1 flex justify-end items-end">
+                    <div className="flex justify-end items-end md:order-7">
                       <Button
                         type="button"
                         variant="ghost"
