@@ -116,6 +116,11 @@ interface InvoiceData {
    */
   copies?: 1 | 2;
   /**
+   * Print variant. original=1 page „Оригинал"; copy=1 page no caption;
+   * both=page1 „Оригинал"+page2 no caption. Takes precedence over `copies`.
+   */
+  variant?: "original" | "copy" | "both";
+  /**
    * Settings → Документи toggle. When true, the totals block prints the
    * BGN equivalent in parentheses next to the EUR figure (fixed BNB
    * rate of 1 EUR = 1.95583 BGN). The default `false` keeps EUR-only
@@ -1214,12 +1219,10 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
           width: innerW - 44,
           lineBreak: false,
         });
-      doc
-        .font("Main")
-        .text("ЕГН/Л.К.:", sb1 + pad, ty + 12, {
-          width: innerW,
-          lineBreak: false,
-        });
+      doc.font("Main").text("ЕГН/Л.К.:", sb1 + pad, ty + 12, {
+        width: innerW,
+        lineBreak: false,
+      });
       doc
         .fontSize(6.2)
         .fillColor("#666")
@@ -1255,12 +1258,10 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         width: innerW - 48,
         lineBreak: false,
       });
-      doc
-        .font("Main")
-        .text("Шифър:", sb3 + pad, ty + 12, {
-          width: innerW,
-          lineBreak: false,
-        });
+      doc.font("Main").text("Шифър:", sb3 + pad, ty + 12, {
+        width: innerW,
+        lineBreak: false,
+      });
       doc
         .fontSize(6.2)
         .fillColor("#666")
@@ -1277,10 +1278,15 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       drawFooter();
     };
 
-    renderCopy("Оригинал");
-    if (copies === 2) {
-      doc.addPage({ size: "A4", margins: pageMargins });
+    const variant = data.variant ?? (copies === 2 ? "both" : "original");
+    if (variant === "copy") {
+      renderCopy(null);
+    } else {
       renderCopy("Оригинал");
+      if (variant === "both") {
+        doc.addPage({ size: "A4", margins: pageMargins });
+        renderCopy(null);
+      }
     }
 
     doc.end();

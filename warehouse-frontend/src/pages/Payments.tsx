@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Plus, Search, Printer } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Plus, Search, Printer, Pencil, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Payment, Invoice } from "@/types";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
@@ -19,7 +19,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { LoadingOverlay, ErrorMessage } from "@/components/ui/spinner";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { RecordPaymentModal } from "@/components/RecordPaymentModal";
+import { usePermissions } from "@/contexts/PermissionContext";
+import { PERMISSIONS } from "@/lib/permissions";
+import { toast } from "@/lib/toast";
 import "./Payments.print.css";
 
 /** Return today's date in ISO 8601 format (YYYY-MM-DD) in Europe/Sofia timezone. */
@@ -98,7 +108,7 @@ function exportCsv(payments: Payment[], tab: "invoice" | "razpiska") {
     )
     .join("\n");
 
-  const blob = new Blob(["\ufeff" + csv], {
+  const blob = new Blob(["﻿" + csv], {
     type: "text/csv;charset=utf-8",
   });
   const url = URL.createObjectURL(blob);
@@ -109,7 +119,18 @@ function exportCsv(payments: Payment[], tab: "invoice" | "razpiska") {
   URL.revokeObjectURL(url);
 }
 
+interface EditPaymentState {
+  id: number;
+  amount: string;
+  payment_method: string;
+  bank_reference: string;
+}
+
 export function Payments() {
+  const queryClient = useQueryClient();
+  const { hasPermission } = usePermissions();
+  const canManagePayments = hasPermission(PERMISSIONS.PAYMENTS_MANAGE);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"invoice" | "razpiska">("invoice");
   const [razpiskaUnlocked, setRazpiskaUnlocked] = useState<boolean>(
@@ -118,9 +139,13 @@ export function Payments() {
   const [filters, setFilters] = useState({
     search: "",
     payment_method: "all",
+    status: "all",
     date_from: "",
     date_to: "",
   });
+
+  // Edit dialog state — null when closed
+  const [editing, setEditing] = useState<EditPaymentState | null>(null);
 
   useEffect(() => {
     let lastMinusAt = 0;
@@ -205,6 +230,30 @@ export function Payments() {
     return 0;
   };
 
+  // Derive payment status using the same logic as exportCsv
+  const getPaymentStatus = (
+    p: Payment,
+    tab: "invoice" | "razpiska",
+  ): "paid" | "partial" => {
+    const total = safeAmount(
+      tab === "razpiska"
+        ? p.order_total
+        : (p.invoice_total_gross ?? p.invoice?.total_gross),
+    );
+    const paid = safeAmount(
+      tab === "razpiska" ? p.order_paid_total : p.invoice_paid_total,
+    );
+    return total > 0 && paid + 0.01 >= total ? "paid" : "partial";
+  };
+
+  // Client-side status filter — operates on the full payments array
+  const visiblePayments = useMemo(() => {
+    if (filters.status === "all") return payments;
+    return payments.filter(
+      (p) => getPaymentStatus(p, activeTab) === filters.status,
+    );
+  }, [payments, filters.status, activeTab]);
+
   const totalReceived = payments.reduce((s, p) => s + safeAmount(p.amount), 0);
 
   const isSingleDay =
@@ -221,6 +270,88 @@ export function Payments() {
   const posTotal = payments
     .filter((p) => p.payment_method === "pos")
     .reduce((s, p) => s + safeAmount(p.amount), 0);
+
+  // Delete mutation
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) =>
+      api.delete(`/payments/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      toast.success("Плащането е изтрито");
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["unpaid-invoices"] });
+    },
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data
+          ?.error ?? "Грешка при изтриване";
+      toast.error(msg);
+    },
+  });
+
+  // Edit/update mutation
+  const editMutation = useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: number;
+      body: {
+        amount: number;
+        payment_method: string;
+        bank_reference: string | null;
+      };
+    }) => api.put(`/payments/${id}`, body).then((r) => r.data),
+    onSuccess: () => {
+      toast.success("Плащането е обновено");
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["unpaid-invoices"] });
+      setEditing(null);
+    },
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data
+          ?.error ?? "Грешка при редакция";
+      toast.error(msg);
+    },
+  });
+
+  function handleDeleteClick(p: Payment) {
+    if (
+      !window.confirm(
+        "Сигурни ли сте, че искате да изтриете това плащане? Действието е необратимо.",
+      )
+    )
+      return;
+    deleteMutation.mutate(p.id);
+  }
+
+  function handleEditClick(p: Payment) {
+    setEditing({
+      id: p.id,
+      amount: String(Number(p.amount).toFixed(2)),
+      payment_method: p.payment_method,
+      bank_reference: p.bank_reference ?? "",
+    });
+  }
+
+  function handleEditSave() {
+    if (!editing) return;
+    const amount = parseFloat(editing.amount);
+    if (!amount || amount <= 0) {
+      toast.error("Невалидна сума");
+      return;
+    }
+    editMutation.mutate({
+      id: editing.id,
+      body: {
+        amount,
+        payment_method: editing.payment_method,
+        bank_reference: editing.bank_reference.trim() || null,
+      },
+    });
+  }
 
   return (
     <div className="payments-page p-6 space-y-6">
@@ -341,7 +472,7 @@ export function Payments() {
 
       <Card className="filters-card">
         <CardContent className="p-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <div className="space-y-1 md:col-span-2">
               <Label className="text-xs">Търсене</Label>
               <div className="relative">
@@ -372,6 +503,19 @@ export function Payments() {
                 <option value="cash">В брой</option>
                 <option value="pos">ПОС</option>
                 <option value="cod">Наложен платеж</option>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Статус</Label>
+              <Select
+                value={filters.status}
+                onChange={(e) =>
+                  setFilters((prev) => ({ ...prev, status: e.target.value }))
+                }
+              >
+                <option value="all">Всички</option>
+                <option value="paid">Платени</option>
+                <option value="partial">Частични</option>
               </Select>
             </div>
             <div className="space-y-1">
@@ -441,6 +585,7 @@ export function Payments() {
                 setFilters({
                   search: "",
                   payment_method: "all",
+                  status: "all",
                   date_from: "",
                   date_to: "",
                 })
@@ -481,20 +626,21 @@ export function Payments() {
                   <TableHead>Сума</TableHead>
                   <TableHead>Статус</TableHead>
                   <TableHead>Агент</TableHead>
+                  {canManagePayments && <TableHead>Действия</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {payments.length === 0 ? (
+                {visiblePayments.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={8}
+                      colSpan={canManagePayments ? 9 : 8}
                       className="text-center text-gray-400 py-8"
                     >
                       Няма плащания
                     </TableCell>
                   </TableRow>
                 ) : (
-                  payments.map((p) => (
+                  visiblePayments.map((p) => (
                     <TableRow key={p.id}>
                       <TableCell className="font-mono text-[#6c3dff]">
                         {(() => {
@@ -576,6 +722,29 @@ export function Payments() {
                           <Badge variant="info">AI агент</Badge>
                         )}
                       </TableCell>
+                      {canManagePayments && (
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              aria-label="Редактирай плащане"
+                              onClick={() => handleEditClick(p)}
+                              className="p-1.5 rounded text-gray-500 hover:text-[#6c3dff] hover:bg-violet-50 transition-colors"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label="Изтрий плащане"
+                              onClick={() => handleDeleteClick(p)}
+                              disabled={deleteMutation.isPending}
+                              className="p-1.5 rounded text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))
                 )}
@@ -590,6 +759,86 @@ export function Payments() {
         onClose={() => setModalOpen(false)}
         context={{ kind: "invoice-select", invoices: unpaidInvoices }}
       />
+
+      {/* Edit payment dialog */}
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Редактирай плащане</DialogTitle>
+          </DialogHeader>
+          {editing && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-amount">Сума (лв.)</Label>
+                <Input
+                  id="edit-amount"
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={editing.amount}
+                  onChange={(e) =>
+                    setEditing((prev) =>
+                      prev ? { ...prev, amount: e.target.value } : prev,
+                    )
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-method">Начин на плащане</Label>
+                <Select
+                  id="edit-method"
+                  value={editing.payment_method}
+                  onChange={(e) =>
+                    setEditing((prev) =>
+                      prev ? { ...prev, payment_method: e.target.value } : prev,
+                    )
+                  }
+                >
+                  <option value="cash">{methodLabels.cash}</option>
+                  <option value="bank">{methodLabels.bank}</option>
+                  <option value="cod">{methodLabels.cod}</option>
+                  <option value="pos">{methodLabels.pos}</option>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-ref">Референция (незадължително)</Label>
+                <Input
+                  id="edit-ref"
+                  type="text"
+                  placeholder="Банкова референция или друг номер"
+                  value={editing.bank_reference}
+                  onChange={(e) =>
+                    setEditing((prev) =>
+                      prev ? { ...prev, bank_reference: e.target.value } : prev,
+                    )
+                  }
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEditing(null)}
+              disabled={editMutation.isPending}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={handleEditSave}
+              disabled={editMutation.isPending}
+              className="bg-[#6c3dff] hover:bg-[#5a2fe0] text-white"
+            >
+              {editMutation.isPending ? "Записва..." : "Запази"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="print-only print-footer">
         Отпечатано на {formatDateBg(todayIso())}{" "}

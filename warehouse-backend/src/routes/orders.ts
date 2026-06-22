@@ -513,6 +513,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       // Accepts the strings "true"/"false" since query strings are
       // strings; anything else is ignored.
       is_replacement,
+      payment_status,
     } = request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -617,6 +618,15 @@ export default async function orderRoutes(app: FastifyInstance) {
     } else if (is_replacement === "false") {
       where += ` AND o.is_replacement = $${paramIdx++}`;
       params.push(false);
+    }
+
+    // Partial-payment filter: orders where some payment has been recorded
+    // but the total is not yet fully covered. No user-supplied values so
+    // no params are appended — the condition is entirely structural.
+    if (payment_status === "partial") {
+      where += ` AND o.status <> 'cancelled'
+        AND COALESCE((SELECT SUM(p2.amount) FROM payments p2 WHERE p2.order_id = o.id), 0) > 0
+        AND COALESCE((SELECT SUM(p2.amount) FROM payments p2 WHERE p2.order_id = o.id), 0) < o.total_amount`;
     }
 
     const fromDate = normalizeOptionalText(date_from);

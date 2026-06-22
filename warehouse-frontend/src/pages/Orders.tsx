@@ -29,6 +29,7 @@ import {
   RefreshCcw,
   RotateCcw,
   Coins,
+  Wallet,
   Hourglass,
   ClipboardList,
   ScrollText,
@@ -305,12 +306,17 @@ function assertNoExpiredBatches(rows: OrderItemRow[]) {
   }
 }
 
-async function openInvoicePdf(invoiceId: number, copies: 1 | 2 = 1) {
+async function openInvoicePdf(
+  invoiceId: number,
+  variant: "original" | "copy" | "both" = "original",
+) {
   try {
     // Append a timestamp so the browser never serves a stale cached
     // PDF after "Регенерирай" rewrites the file on disk.
+    // variant: original = 1 стр. „Оригинал"; copy = 1 стр. без надпис
+    // (само махнат „Оригинал"); both = стр.1 „Оригинал" + стр.2 без надпис.
     const res = await api.get(
-      `/invoices/${invoiceId}/pdf?copies=${copies}&t=${Date.now()}`,
+      `/invoices/${invoiceId}/pdf?variant=${variant}&t=${Date.now()}`,
       {
         responseType: "blob",
       },
@@ -2681,10 +2687,10 @@ function OrderDetailModal({
                       <Button
                         variant="outline"
                         onClick={() =>
-                          void openInvoicePdf(effectiveInvoiceId!, 1)
+                          void openInvoicePdf(effectiveInvoiceId!, "original")
                         }
                         className="border-[#6c3dff]/40 text-[#6c3dff] hover:bg-[#6c3dff]/5 rounded-r-none border-r-0"
-                        title="Принтирай 1 копие (Оригинал)"
+                        title="Принтирай оригинал"
                       >
                         <FileText className="h-4 w-4" />
                         Отвори
@@ -2703,17 +2709,27 @@ function OrderDetailModal({
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem
                             onClick={() =>
-                              void openInvoicePdf(effectiveInvoiceId!, 1)
+                              void openInvoicePdf(
+                                effectiveInvoiceId!,
+                                "original",
+                              )
                             }
                           >
-                            📄 1 копие (Оригинал)
+                            📄 1 оригинал
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() =>
-                              void openInvoicePdf(effectiveInvoiceId!, 2)
+                              void openInvoicePdf(effectiveInvoiceId!, "copy")
                             }
                           >
-                            📄📄 2 копия (и двете Оригинал)
+                            📄 1 копие
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() =>
+                              void openInvoicePdf(effectiveInvoiceId!, "both")
+                            }
+                          >
+                            📄📄 2 копия (оригинал + копие)
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -7163,6 +7179,9 @@ export function Orders() {
   // open line state. Backend uses EXISTS on order_items.line_status.
   const [hasPaidNotTaken, setHasPaidNotTaken] = useState(false);
   const [hasAwaiting, setHasAwaiting] = useState(false);
+  // Частично платени — поръчки с 0 < платено < общо (и не cancelled).
+  // Server-side филтър (payment_status=partial), за да хваща и историята.
+  const [hasPartialPaid, setHasPartialPaid] = useState(false);
   // Econt filter pill — orders with a courier shipment + COD attached
   // (i.e. the cashier still owes the till money once Econt collects).
   const [hasCod, setHasCod] = useState(false);
@@ -7191,16 +7210,22 @@ export function Orders() {
           ? "cod"
           : filterReplacement === "only"
             ? "replacement"
-            : statusFilter;
+            : hasPartialPaid
+              ? "partial_paid"
+              : statusFilter;
   const selectFilter = (next: string) => {
     setStatusFilter("");
     setBelowCostOnly(false);
     setHasPaidNotTaken(false);
     setHasAwaiting(false);
     setHasCod(false);
+    setHasPartialPaid(false);
     setFilterReplacement("all");
     if (next === activeFilter) return; // toggle off
     switch (next) {
+      case "partial_paid":
+        setHasPartialPaid(true);
+        break;
       case "below_cost":
         setBelowCostOnly(true);
         break;
@@ -7266,6 +7291,7 @@ export function Orders() {
       hasPaidNotTaken,
       hasAwaiting,
       hasCod,
+      hasPartialPaid,
       filterReplacement,
       debouncedArticle,
       debouncedShipment,
@@ -7281,6 +7307,8 @@ export function Orders() {
       // they're hidden from the main list and surface only via this filter.
       if (hasAwaiting) parts.push("awaiting_only=true");
       if (hasCod) parts.push("has_cod=true");
+      // Частично платени поръчки (0 < платено < общо, не cancelled) — server-side.
+      if (hasPartialPaid) parts.push("payment_status=partial");
       if (filterReplacement === "only") parts.push("is_replacement=true");
       else if (filterReplacement === "exclude")
         parts.push("is_replacement=false");
@@ -7685,6 +7713,7 @@ export function Orders() {
               !hasPaidNotTaken &&
               !hasAwaiting &&
               !hasCod &&
+              !hasPartialPaid &&
               filterReplacement !== "only"
                 ? "bg-[#6c3dff] text-white"
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
@@ -7719,6 +7748,18 @@ export function Orders() {
         >
           <Coins className="h-3.5 w-3.5" />
           Платени невзети
+        </button>
+        <button
+          onClick={() => selectFilter("partial_paid")}
+          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            hasPartialPaid
+              ? "bg-[#6c3dff] text-white"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          }`}
+          title="Покажи само частично платени поръчки (платено, но не напълно)"
+        >
+          <Wallet className="h-3.5 w-3.5" />
+          Частично платени
         </button>
         <button
           onClick={() => selectFilter("awaiting")}

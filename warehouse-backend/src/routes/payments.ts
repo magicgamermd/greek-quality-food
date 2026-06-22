@@ -3,6 +3,15 @@ import { z } from "zod";
 import { query } from "../db.js";
 import { requirePermission, PERMISSIONS } from "../lib/permissions.js";
 
+// Fields that may be corrected on an existing payment.
+// paid_at is intentionally excluded — NAP cash-book requires the original
+// timestamp recorded by the cashier; silently ignore it if sent.
+const updatePaymentSchema = z.object({
+  amount: z.number().positive().optional(),
+  payment_method: z.string().min(1).optional(),
+  bank_reference: z.string().nullable().optional(),
+});
+
 const createPaymentSchema = z
   .object({
     invoice_id: z.number().int().optional(),
@@ -452,6 +461,192 @@ export default async function paymentRoutes(app: FastifyInstance) {
         total_paid: newTotal,
         remaining: invoiceTotal - newTotal,
       });
+    },
+  );
+
+  // PUT /payments/:id — correct a misrecorded payment (amount / method / reference).
+  // Re-validates that the new running total does not exceed the parent
+  // order or invoice total (excluding the row being edited, refund-aware).
+  // Cannot edit paid_at — NAP cash-book requirement; field is silently ignored.
+  app.put(
+    "/:id",
+    { preHandler: paymentsManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const paymentId = Number(id);
+      if (!Number.isInteger(paymentId) || paymentId <= 0) {
+        return reply.status(400).send({ error: "Invalid payment id" });
+      }
+
+      const body = updatePaymentSchema.parse(request.body);
+      if (Object.keys(body).length === 0) {
+        return reply.status(400).send({ error: "No fields to update" });
+      }
+
+      const {
+        rows: [existing],
+      } = await query("SELECT * FROM payments WHERE id = $1", [paymentId]);
+      if (!existing) {
+        return reply.status(404).send({ error: "Payment not found" });
+      }
+
+      // Overpay re-validation: sum of all OTHER payments on the same
+      // order/invoice plus the new amount must not exceed the total.
+      // Refund rows are counted as negative (signed SUM).
+      const newAmount = body.amount ?? Number(existing.amount);
+
+      if (existing.order_id) {
+        const {
+          rows: [order],
+        } = await query("SELECT * FROM orders WHERE id = $1", [
+          existing.order_id,
+        ]);
+        if (!order) {
+          return reply.status(404).send({ error: "Order not found" });
+        }
+        if (order.status === "cancelled") {
+          return reply
+            .status(400)
+            .send({ error: "Cannot edit payment on cancelled order" });
+        }
+        const {
+          rows: [{ total: paidExcluding }],
+        } = await query(
+          // Signed SUM excluding the row being edited so refund rows are
+          // correctly accounted for before the overpayment check.
+          "SELECT COALESCE(SUM(CASE WHEN is_refund THEN -amount ELSE amount END), 0)::numeric AS total FROM payments WHERE order_id = $1 AND id <> $2",
+          [existing.order_id, paymentId],
+        );
+        // GQF orders store total_amount as NET; razpiska payments cover GROSS
+        // (нето × 1.2 = 20% ДДС отгоре) — must match the POST cap, else a
+        // normally fully-paid (GROSS) order can't have its payment edited.
+        // Math.abs guards refund-originated negative replacement-order totals.
+        const orderTotal = Math.abs(Number(order.total_amount)) * 1.2;
+        if (Number(paidExcluding) + newAmount > orderTotal * 1.001) {
+          return reply.status(400).send({
+            error: "Updated amount exceeds order total",
+            order_total: orderTotal,
+            already_paid_excluding_this: Number(paidExcluding),
+            attempted: newAmount,
+          });
+        }
+      } else if (existing.invoice_id) {
+        const {
+          rows: [invoice],
+        } = await query("SELECT * FROM invoices WHERE id = $1", [
+          existing.invoice_id,
+        ]);
+        if (!invoice) {
+          return reply.status(404).send({ error: "Invoice not found" });
+        }
+        if (invoice.status === "cancelled") {
+          return reply
+            .status(400)
+            .send({ error: "Cannot edit payment on cancelled invoice" });
+        }
+        const {
+          rows: [{ total: paidExcluding }],
+        } = await query(
+          "SELECT COALESCE(SUM(CASE WHEN is_refund THEN -amount ELSE amount END), 0)::numeric AS total FROM payments WHERE invoice_id = $1 AND id <> $2",
+          [existing.invoice_id, paymentId],
+        );
+        const invoiceTotal = Number(invoice.total_gross);
+        if (Number(paidExcluding) + newAmount > invoiceTotal * 1.001) {
+          return reply.status(400).send({
+            error: "Updated amount exceeds invoice total",
+            invoice_total: invoiceTotal,
+            already_paid_excluding_this: Number(paidExcluding),
+            attempted: newAmount,
+          });
+        }
+      }
+
+      // Build a dynamic UPDATE that only touches the provided fields.
+      const sets: string[] = [];
+      const params: any[] = [];
+      let p = 1;
+      if (body.amount !== undefined) {
+        sets.push(`amount = $${p++}`);
+        params.push(body.amount);
+      }
+      if (body.payment_method !== undefined) {
+        sets.push(`payment_method = $${p++}`);
+        params.push(body.payment_method);
+      }
+      if (body.bank_reference !== undefined) {
+        sets.push(`bank_reference = $${p++}`);
+        params.push(body.bank_reference);
+      }
+      params.push(paymentId);
+
+      const {
+        rows: [updated],
+      } = await query(
+        `UPDATE payments SET ${sets.join(", ")} WHERE id = $${p} RETURNING *`,
+        params,
+      );
+
+      return reply.send(updated);
+    },
+  );
+
+  // DELETE /payments/:id — hard-delete an incorrectly recorded payment.
+  // paid_amount on orders/invoices is computed at read-time via SUM(payments),
+  // so there is no cached value to invalidate.
+  // Also removes "twin" order-linked rows created by the 2026-05-26 double-
+  // payment bug when the deleted payment belonged to an invoice.
+  app.delete(
+    "/:id",
+    { preHandler: paymentsManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const paymentId = Number(id);
+      if (!Number.isInteger(paymentId) || paymentId <= 0) {
+        return reply.status(400).send({ error: "Invalid payment id" });
+      }
+
+      const {
+        rows: [existing],
+      } = await query("SELECT * FROM payments WHERE id = $1", [paymentId]);
+      if (!existing) {
+        return reply.status(404).send({ error: "Payment not found" });
+      }
+
+      await query("DELETE FROM payments WHERE id = $1", [paymentId]);
+
+      // Defense-in-depth against the 2026-05-26 double-payment bug: if the
+      // deleted payment was on an invoice, also delete order-linked twin rows
+      // that share the same amount / method / is_refund flag and whose order
+      // has the same invoice_id. Without this, the cashier deletes the invoice
+      // payment but the twin order row keeps the order showing as "paid".
+      if (existing.invoice_id) {
+        const { rowCount: twinCount, rows: twins } = await query(
+          `DELETE FROM payments
+            WHERE invoice_id IS NULL
+              AND is_refund = $4
+              AND payment_method = $1
+              AND amount = $2
+              AND order_id IN (SELECT id FROM orders WHERE invoice_id = $3)
+            RETURNING id`,
+          [
+            existing.payment_method,
+            existing.amount,
+            existing.invoice_id,
+            existing.is_refund,
+          ],
+        );
+        if (twinCount && twinCount > 0) {
+          request.log.info(
+            {
+              deleted_payment: paymentId,
+              twin_ids: twins.map((t: any) => t.id),
+            },
+            "[payment-delete] also removed twin order_id-linked payments",
+          );
+        }
+      }
+
+      return reply.send({ deleted: true, id: paymentId });
     },
   );
 }

@@ -255,11 +255,13 @@ const cancelInvoiceSchema = z.object({
 // Query schema for GET /invoices/:id/pdf
 // copies=1 (or absent) → serve cached on-disk PDF
 // copies=2            → generate to a temp file, stream, do not cache
+// variant             → takes precedence over copies when present
 const pdfQuerySchema = z.object({
   copies: z
     .union([z.literal("1"), z.literal("2")])
     .optional()
     .transform((v) => (v ? (Number(v) as 1 | 2) : 1)),
+  variant: z.enum(["original", "copy", "both"]).optional(),
   // Cache-busting param used by the frontend (ignored for caching purposes)
   t: z.string().optional(),
 });
@@ -1213,9 +1215,11 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         });
       }
       const copies = parsedQuery.data.copies; // 1 | 2
+      const variant: "original" | "copy" | "both" =
+        parsedQuery.data.variant ?? (copies === 2 ? "both" : "original");
 
-      // ── copies=2 path: generate to temp file, stream buffer, keep cache ──
-      if (copies === 2) {
+      // ── non-original path: generate to temp file, stream buffer, keep cache ──
+      if (variant !== "original") {
         try {
           const isCreditNote = invoice.document_type === "credit_note";
           const orderLookupInvoiceId = isCreditNote
@@ -1290,7 +1294,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           // on-disk invoice cache so the 1-page version stays intact.
           const tmpPath = path.join(
             os.tmpdir(),
-            `gqf-invoice-${invoice.id}-2copies-${randomUUID()}.pdf`,
+            `gqf-invoice-${invoice.id}-${variant}-${randomUUID()}.pdf`,
           );
           try {
             await generateInvoicePdf({
@@ -1304,7 +1308,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
               sourceCurrency: (invoice as any).currency ?? null,
               outputPath: tmpPath,
-              copies: 2,
+              variant,
               showBgn: company.show_bgn_on_invoice === true,
             });
             const buf = await fs.promises.readFile(tmpPath);

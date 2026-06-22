@@ -62,6 +62,7 @@ function getTestData(overrides: Record<string, any> = {}) {
     relatedInvoiceNumber: overrides.relatedInvoiceNumber,
     outputPath: overrides.outputPath ?? path.join(TEST_OUTPUT_DIR, "test.pdf"),
     copies: overrides.copies, // pass-through; undefined if absent
+    variant: overrides.variant, // pass-through; undefined if absent
   };
 }
 
@@ -186,7 +187,47 @@ describe("generateInvoicePdf", () => {
     expect(renderedStrings).toContain("Оригинал");
   });
 
-  it('renders two "Оригинал" pages when copies=2', async () => {
+  it('variant="copy" renders a single page WITHOUT the "Оригинал" caption', async () => {
+    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+    const outputPath = path.join(TEST_OUTPUT_DIR, "copy.pdf");
+    const textSpy = vi.spyOn(PDFDocument.prototype, "text");
+    let renderedStrings: string[] = [];
+
+    try {
+      await generateInvoicePdf(getTestData({ outputPath, variant: "copy" }));
+      renderedStrings = textSpy.mock.calls
+        .map(([text]) => (typeof text === "string" ? text : String(text ?? "")))
+        .filter(Boolean);
+    } finally {
+      textSpy.mockRestore();
+    }
+
+    expect(getPdfPageCount(outputPath)).toBe(1);
+    // The only change vs the original is the removed "Оригинал" caption.
+    expect(renderedStrings.filter((s) => s === "Оригинал").length).toBe(0);
+  });
+
+  it('variant="both" renders 2 pages: page 1 "Оригинал", page 2 no caption', async () => {
+    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+    const outputPath = path.join(TEST_OUTPUT_DIR, "both.pdf");
+    const textSpy = vi.spyOn(PDFDocument.prototype, "text");
+    let renderedStrings: string[] = [];
+
+    try {
+      await generateInvoicePdf(getTestData({ outputPath, variant: "both" }));
+      renderedStrings = textSpy.mock.calls
+        .map(([text]) => (typeof text === "string" ? text : String(text ?? "")))
+        .filter(Boolean);
+    } finally {
+      textSpy.mockRestore();
+    }
+
+    // Exactly one "Оригинал" (page 1); the копие (page 2) carries no caption.
+    expect(renderedStrings.filter((s) => s === "Оригинал").length).toBe(1);
+    expect(getPdfPageCount(outputPath)).toBe(2);
+  });
+
+  it('legacy copies=2 maps to variant="both" (2 pages, one "Оригинал")', async () => {
     fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
     const outputPath = path.join(TEST_OUTPUT_DIR, "two-copies.pdf");
     const textSpy = vi.spyOn(PDFDocument.prototype, "text");
@@ -201,8 +242,7 @@ describe("generateInvoicePdf", () => {
       textSpy.mockRestore();
     }
 
-    const originalLabels = renderedStrings.filter((s) => s === "Оригинал");
-    expect(originalLabels.length).toBe(2);
+    expect(renderedStrings.filter((s) => s === "Оригинал").length).toBe(1);
     expect(getPdfPageCount(outputPath)).toBe(2);
   });
 
