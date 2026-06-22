@@ -2214,7 +2214,7 @@ export function IncomingGoods() {
                 {manualItems.map((item, index) => (
                   <div
                     key={index}
-                    className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_7.5rem_9rem_7rem_6.5rem_6.5rem_2.5rem] gap-2 items-end border rounded-lg p-2"
+                    className="grid grid-cols-1 md:grid-cols-[1.8fr_1fr_1fr_0.8fr_0.9fr_0.9fr_2.5rem] gap-3 items-end border rounded-lg p-3"
                   >
                     <div className="space-y-1.5 min-w-0 md:order-1">
                       <Label>Артикул</Label>
