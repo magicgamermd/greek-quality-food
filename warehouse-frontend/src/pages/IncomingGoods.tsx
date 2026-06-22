@@ -281,11 +281,15 @@ export function IncomingGoods() {
   const manualScrollRef = useRef<HTMLDivElement>(null);
   const invoiceNumberRef = useRef<HTMLInputElement>(null);
   const invoiceDateRef = useRef<HTMLInputElement>(null);
-  const rowInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const rowInputRefs = useRef<
+    Record<string, HTMLInputElement | HTMLSelectElement | null>
+  >({});
   const pendingFocusRef = useRef<string | null>(null);
 
   const ROW_FIELD_ORDER = [
     "product",
+    "batch_number",
+    "expiry_date",
     "quantity",
     "unit",
     "unit_price",
@@ -297,7 +301,7 @@ export function IncomingGoods() {
     const el = rowInputRefs.current[key];
     if (el) {
       el.focus();
-      el.select?.();
+      if (el instanceof HTMLInputElement) el.select();
       // Scroll the modal so the active field is visible.
       // For the product search field we center more aggressively to leave
       // room for the dropdown below it.
@@ -334,7 +338,7 @@ export function IncomingGoods() {
     const el = rowInputRefs.current[key];
     if (el) {
       el.focus();
-      el.select?.();
+      if (el instanceof HTMLInputElement) el.select();
       // Scroll the modal's container so the new row is visible
       if (manualScrollRef.current) {
         manualScrollRef.current.scrollTo({
@@ -1262,7 +1266,7 @@ export function IncomingGoods() {
     );
     setManualSearchDismissed((current) => ({ ...current, [rowIndex]: true }));
     // Focus the quantity field after picking a product
-    setTimeout(() => focusRowField(rowIndex, "quantity"), 0);
+    setTimeout(() => focusRowField(rowIndex, "batch_number"), 0);
   };
 
   const addManualRow = (focusIndex?: number) => {
@@ -1286,7 +1290,7 @@ export function IncomingGoods() {
   };
 
   const handleRowFieldEnter = (
-    e: React.KeyboardEvent<HTMLInputElement>,
+    e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>,
     index: number,
     field: RowField,
   ) => {
@@ -1325,7 +1329,7 @@ export function IncomingGoods() {
         }
         if (manualItems[index]?.product_id) {
           e.preventDefault();
-          focusRowField(index, "quantity");
+          focusRowField(index, "batch_number");
         }
       }
       return;
@@ -2356,6 +2360,9 @@ export function IncomingGoods() {
                     <div className="space-y-1.5 md:order-5">
                       <Label>Мярка</Label>
                       <select
+                        ref={(el) => {
+                          rowInputRefs.current[`${index}:unit`] = el;
+                        }}
                         value={item.unit}
                         onChange={(e) =>
                           setManualItems((current) =>
@@ -2366,6 +2373,7 @@ export function IncomingGoods() {
                             ),
                           )
                         }
+                        onKeyDown={(e) => handleRowFieldEnter(e, index, "unit")}
                         className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
                       >
                         {item.unit &&
@@ -2419,6 +2427,9 @@ export function IncomingGoods() {
                     <div className="space-y-1.5 md:order-2">
                       <Label>Партида</Label>
                       <Input
+                        ref={(el) => {
+                          rowInputRefs.current[`${index}:batch_number`] = el;
+                        }}
                         value={item.batch_number}
                         onChange={(e) =>
                           setManualItems((current) =>
@@ -2429,6 +2440,9 @@ export function IncomingGoods() {
                             ),
                           )
                         }
+                        onKeyDown={(e) =>
+                          handleRowFieldEnter(e, index, "batch_number")
+                        }
                         placeholder="напр. L2024-15"
                       />
                     </div>
@@ -2436,6 +2450,9 @@ export function IncomingGoods() {
                       <Label>Срок на годност</Label>
                       <Input
                         type="date"
+                        ref={(el) => {
+                          rowInputRefs.current[`${index}:expiry_date`] = el;
+                        }}
                         value={item.expiry_date}
                         onChange={(e) =>
                           setManualItems((current) =>
@@ -2445,6 +2462,9 @@ export function IncomingGoods() {
                                 : entry,
                             ),
                           )
+                        }
+                        onKeyDown={(e) =>
+                          handleRowFieldEnter(e, index, "expiry_date")
                         }
                       />
                     </div>
