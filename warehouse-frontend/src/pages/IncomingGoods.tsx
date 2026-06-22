@@ -165,6 +165,10 @@ function normalizeScannedInvoice(raw: any): ScannedInvoice {
       unit: li.unit ?? "бр",
       price: unitPrice,
       unit_price: unitPrice,
+      batch_number: li.batch_number ?? li.batch_number_raw ?? null,
+      batch_number_raw: li.batch_number_raw ?? null,
+      expiry_date: li.expiry_date ?? li.expiry_date_raw ?? null,
+      expiry_date_raw: li.expiry_date_raw ?? null,
       total: toOptionalNumber(li.total_price ?? li.total),
       brand: li.brand ?? null,
       category_hint: li.category_hint ?? null,
@@ -247,6 +251,8 @@ export function IncomingGoods() {
       quantity: string;
       unit_price: string;
       unit: string;
+      batch_number: string;
+      expiry_date: string;
       original_purchase_price: number | null;
     }[]
   >([
@@ -256,6 +262,8 @@ export function IncomingGoods() {
       quantity: "",
       unit_price: "",
       unit: "бр",
+      batch_number: "",
+      expiry_date: "",
       original_purchase_price: null,
     },
   ]);
@@ -443,6 +451,8 @@ export function IncomingGoods() {
         quantity: "",
         unit_price: "",
         unit: "бр",
+        batch_number: "",
+        expiry_date: "",
         original_purchase_price: null,
       },
     ]);
@@ -514,6 +524,34 @@ export function IncomingGoods() {
                 ...item,
                 selling_price: value === "" ? null : toOptionalNumber(value),
               }
+            : item,
+        ),
+      };
+    });
+  };
+
+  const updateRowBatchNumber = (rowIndex: number, value: string) => {
+    setScanned((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item, index) =>
+          index === rowIndex
+            ? { ...item, batch_number: value === "" ? null : value }
+            : item,
+        ),
+      };
+    });
+  };
+
+  const updateRowExpiryDate = (rowIndex: number, value: string) => {
+    setScanned((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item, index) =>
+          index === rowIndex
+            ? { ...item, expiry_date: value === "" ? null : value }
             : item,
         ),
       };
@@ -1093,6 +1131,8 @@ export function IncomingGoods() {
             unit: item.unit ?? undefined,
             quantity: item.quantity,
             unit_price: itemPrices[i] ?? item.unit_price ?? item.price ?? 0,
+            batch_number: item.batch_number || null,
+            expiry_date: item.expiry_date || null,
             selling_price:
               item.selling_price != null ? item.selling_price : undefined,
           };
@@ -1235,6 +1275,8 @@ export function IncomingGoods() {
           quantity: "",
           unit_price: "",
           unit: "бр",
+          batch_number: "",
+          expiry_date: "",
           original_purchase_price: null,
         },
       ];
@@ -1324,6 +1366,8 @@ export function IncomingGoods() {
           quantity: Number(item.quantity),
           unit_price: Number(item.unit_price || 0),
           unit: item.unit.trim() || "бр",
+          batch_number: item.batch_number.trim() || null,
+          expiry_date: item.expiry_date || null,
         }))
         .filter((item) => item.product_name);
 
@@ -2354,6 +2398,38 @@ export function IncomingGoods() {
                         placeholder="0.00"
                       />
                     </div>
+                    <div className="col-span-6 md:col-span-3 space-y-1.5">
+                      <Label>Партида</Label>
+                      <Input
+                        value={item.batch_number}
+                        onChange={(e) =>
+                          setManualItems((current) =>
+                            current.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, batch_number: e.target.value }
+                                : entry,
+                            ),
+                          )
+                        }
+                        placeholder="напр. L2024-15"
+                      />
+                    </div>
+                    <div className="col-span-6 md:col-span-3 space-y-1.5">
+                      <Label>Срок на годност</Label>
+                      <Input
+                        type="date"
+                        value={item.expiry_date}
+                        onChange={(e) =>
+                          setManualItems((current) =>
+                            current.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, expiry_date: e.target.value }
+                                : entry,
+                            ),
+                          )
+                        }
+                      />
+                    </div>
                     <div className="col-span-12 md:col-span-1 flex justify-end items-end">
                       <Button
                         type="button"
@@ -2370,6 +2446,8 @@ export function IncomingGoods() {
                                     quantity: "",
                                     unit_price: "",
                                     unit: "бр",
+                                    batch_number: "",
+                                    expiry_date: "",
                                     original_purchase_price: null,
                                   },
                                 ]
@@ -2729,6 +2807,54 @@ export function IncomingGoods() {
                                     </p>
                                   )}
                               </div>
+                            </div>
+                          </div>
+
+                          {/* Batch number + expiry date (lot tracking) */}
+                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                Партида
+                              </Label>
+                              <Input
+                                value={item.batch_number ?? ""}
+                                onChange={(e) =>
+                                  updateRowBatchNumber(index, e.target.value)
+                                }
+                                placeholder="напр. L2024-15"
+                                className={
+                                  !item.batch_number
+                                    ? "border-amber-400 focus-visible:ring-amber-400"
+                                    : undefined
+                                }
+                              />
+                              {!item.batch_number && (
+                                <p className="text-[11px] text-amber-600">
+                                  Липсва партида
+                                </p>
+                              )}
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                Срок на годност
+                              </Label>
+                              <Input
+                                type="date"
+                                value={item.expiry_date ?? ""}
+                                onChange={(e) =>
+                                  updateRowExpiryDate(index, e.target.value)
+                                }
+                                className={
+                                  !item.expiry_date
+                                    ? "border-amber-400 focus-visible:ring-amber-400"
+                                    : undefined
+                                }
+                              />
+                              {!item.expiry_date && (
+                                <p className="text-[11px] text-amber-600">
+                                  Липсва срок на годност
+                                </p>
+                              )}
                             </div>
                           </div>
 

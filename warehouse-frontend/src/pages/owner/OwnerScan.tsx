@@ -25,6 +25,8 @@ type ScannedItem = {
   quantity: number;
   unit_price: number;
   total_price?: number;
+  batch_number?: string;
+  expiry_date?: string;
   // Match fields (filled from /incoming/match-preview)
   matched_product_id?: number | null;
   matched_product_name?: string | null;
@@ -155,6 +157,8 @@ export function OwnerScan() {
         quantity: parseFloat(li.quantity ?? 1),
         unit_price: parseFloat(li.unit_price ?? li.price ?? 0),
         total_price: parseFloat(li.total_price ?? 0),
+        batch_number: li.batch_number ?? li.batch_number_raw ?? "",
+        expiry_date: li.expiry_date ?? li.expiry_date_raw ?? "",
       }));
 
       if (matched.length > 0) {
@@ -297,6 +301,8 @@ export function OwnerScan() {
           product_code: i.product_code ?? undefined,
           quantity: toNum(i.quantity) ?? 0,
           unit_price: toNum(i.unit_price) ?? 0,
+          batch_number: i.batch_number?.trim() || undefined,
+          expiry_date: i.expiry_date || undefined,
           selling_price: toNum(i.selling_price),
         }),
       );
@@ -1047,6 +1053,49 @@ function ItemRow({
               }
               className="w-full px-3 py-2 rounded-lg bg-[#12162a] border border-[#243055] text-sm text-[#f3f6ff] focus:border-[#4f7cff] outline-none"
             />
+          </div>
+
+          {/* Партида + срок на годност (lot tracking) */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-[#9aa8d6] mb-1 block">
+                Партида
+              </label>
+              <input
+                type="text"
+                value={item.batch_number ?? ""}
+                onChange={(e) => onChange({ batch_number: e.target.value })}
+                placeholder="напр. L2024-15"
+                className={cn(
+                  "w-full px-3 py-2 rounded-lg bg-[#12162a] border text-sm text-[#f3f6ff] focus:border-[#4f7cff] outline-none",
+                  !item.batch_number ? "border-[#ffb454]" : "border-[#243055]",
+                )}
+              />
+              {!item.batch_number ? (
+                <p className="text-[10px] text-[#ffb454] mt-1">
+                  Липсва партида
+                </p>
+              ) : null}
+            </div>
+            <div>
+              <label className="text-xs text-[#9aa8d6] mb-1 block">
+                Срок на годност
+              </label>
+              <input
+                type="date"
+                value={item.expiry_date ?? ""}
+                onChange={(e) => onChange({ expiry_date: e.target.value })}
+                className={cn(
+                  "w-full px-3 py-2 rounded-lg bg-[#12162a] border text-sm text-[#f3f6ff] focus:border-[#4f7cff] outline-none",
+                  !item.expiry_date ? "border-[#ffb454]" : "border-[#243055]",
+                )}
+              />
+              {!item.expiry_date ? (
+                <p className="text-[10px] text-[#ffb454] mt-1">
+                  Липсва срок на годност
+                </p>
+              ) : null}
+            </div>
           </div>
 
           {/* Fuzzy suggestions for unmatched items */}
