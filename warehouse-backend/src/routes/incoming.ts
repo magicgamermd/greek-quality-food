@@ -61,10 +61,12 @@ const createIncomingSchema = z.object({
       brand: z.string().nullish(), // null when brand not on invoice
       category_hint: z.string().nullish(), // beverages|pasta|olive_oil|sweets|meat|spices|legumes|coffee|wine|cheese|dairy
       unit: z.string().nullish(),
-      // MERT-M sells durable goods (commercial kitchen equipment) — no
-      // batch / expiry / production date tracking. Incoming payloads that
-      // still carry these keys (legacy OCR output, old frontends) are
-      // silently ignored by omitting them from the schema.
+      // Greek Quality Food продава хранителни стоки — партида + срок на
+      // годност се проследяват. Заснемаме ги на входящия ред; confirm
+      // стъпката създава реалната наличност по партида.
+      batch_number: z.string().trim().max(100).optional().nullable(),
+      expiry_date: z.string().trim().optional().nullable(), // ISO YYYY-MM-DD
+      production_date: z.string().trim().optional().nullable(),
       notes_raw: z.string().nullish(),
       quantity: z.number().positive(),
       unit_price: z.number().min(0).default(0),
@@ -1463,11 +1465,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
               productId = newProduct.id;
             }
 
-            // MERT-M: no batch/expiry tracking — durable goods.
-            // `batch_id` stays NULL on the incoming line; the confirm step
-            // does a direct inventory upsert keyed on (product_id,
-            // warehouse_id) via the partial unique index
-            // `inventory_product_warehouse_nobatch_uidx` (migration 045).
+            // Партида/срок се заснемат на входящия ред (batch_id остава
+            // NULL до confirm — тогава се резолюира/създава реалната
+            // партида и наличност по партида).
 
             const stagedSellingPrice =
               item.selling_price != null && item.selling_price > 0
@@ -1483,9 +1483,11 @@ export default async function incomingRoutes(app: FastifyInstance) {
              quantity,
              unit_price,
              total_price,
-             selling_price
+             selling_price,
+             batch_number,
+             expiry_date
            )
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
               [
                 incoming.id,
                 productId,
@@ -1493,6 +1495,8 @@ export default async function incomingRoutes(app: FastifyInstance) {
                 item.unit_price,
                 totalPrice,
                 stagedSellingPrice,
+                item.batch_number ?? null,
+                item.expiry_date ?? null,
               ],
             );
 
@@ -2091,17 +2095,65 @@ export default async function incomingRoutes(app: FastifyInstance) {
         // Add each item to inventory
         const defaultWarehouseId = 1; // Default warehouse
         for (const item of items) {
-          // MERT-M: batch-free upsert. The partial unique index
-          // `inventory_product_warehouse_nobatch_uidx` (migration 045) —
-          // UNIQUE (product_id, warehouse_id) WHERE batch_id IS NULL —
-          // gives us an ON CONFLICT target without needing batch_id in
-          // the row. Keeps the column nullable for migration compat.
+          const productId = item.product_id;
+          const qty = item.quantity;
+          const unitPrice = item.unit_price ?? 0;
+          const warehouseId = defaultWarehouseId;
+
+          // Резолюция/създаване на партида за реда (по продукт + номер).
+          const bNum = (item.batch_number ?? "").trim() || null;
+          const exp = (item.expiry_date ?? "").trim() || null;
+          let batchId: number;
+          const foundBatch = bNum
+            ? await client.query(
+                `SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2 LIMIT 1`,
+                [productId, bNum],
+              )
+            : { rows: [] as Array<{ id: number }> };
+          if (foundBatch.rows.length) {
+            batchId = foundBatch.rows[0].id;
+            await client.query(
+              `UPDATE batches
+                  SET expiry_date = COALESCE($2, expiry_date),
+                      purchase_price = $3,
+                      delivery_id = $4,
+                      quantity = quantity + $5,
+                      updated_at = NOW()
+                WHERE id = $1`,
+              [batchId, exp, unitPrice, id, qty],
+            );
+          } else {
+            const insBatch = await client.query(
+              `INSERT INTO batches
+                 (product_id, batch_number, expiry_date, quantity, purchase_price, delivery_id, received_date)
+               VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE)
+               RETURNING id`,
+              [
+                productId,
+                bNum ?? `АВТО-${id}-${productId}`,
+                exp,
+                qty,
+                unitPrice,
+                id,
+              ],
+            );
+            batchId = insBatch.rows[0].id;
+          }
+
+          // Наличност по партида (заменя счупения NULL-batch ON CONFLICT;
+          // старият partial index беше премахнат в миграция 080).
           await client.query(
-            `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id, updated_at)
-           VALUES ($1, $2, $3, NULL, NOW())
-           ON CONFLICT (product_id, warehouse_id) WHERE batch_id IS NULL
-           DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity, updated_at = NOW()`,
-            [item.product_id, defaultWarehouseId, item.quantity],
+            `INSERT INTO inventory (product_id, warehouse_id, batch_id, quantity, updated_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (product_id, batch_id, warehouse_id)
+             DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity, updated_at = NOW()`,
+            [productId, warehouseId, batchId, qty],
+          );
+
+          // Връзваме входящия ред към създадената/намерена партида.
+          await client.query(
+            `UPDATE incoming_items SET batch_id = $1 WHERE id = $2`,
+            [batchId, item.id],
           );
 
           // Update product's purchase_price to the latest unit_price
@@ -2252,15 +2304,16 @@ export default async function incomingRoutes(app: FastifyInstance) {
     { preHandler: incomingManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string };
-      // MERT-M: batch_number / expiry_date intentionally omitted — no
-      // batch tracking. Legacy clients that still send them will have
-      // the extra keys stripped by Zod.
+      // Партида/срок се редактират на входящия ред (огледало на create
+      // пътя). Реалната наличност по партида се създава при confirm.
       const schema = z.object({
         items: z.array(
           z.object({
             id: z.number().int(),
             quantity: z.number().positive().optional(),
             unit_price: z.number().min(0).optional(),
+            batch_number: z.string().trim().max(100).optional().nullable(),
+            expiry_date: z.string().trim().optional().nullable(),
           }),
         ),
       });
@@ -2292,6 +2345,14 @@ export default async function incomingRoutes(app: FastifyInstance) {
             updates.push(`unit_price = $${idx++}`);
             vals.push(item.unit_price);
           }
+          if (item.batch_number !== undefined) {
+            updates.push(`batch_number = $${idx++}`);
+            vals.push(item.batch_number);
+          }
+          if (item.expiry_date !== undefined) {
+            updates.push(`expiry_date = $${idx++}`);
+            vals.push(item.expiry_date);
+          }
           if (updates.length > 0) {
             vals.push(id, item.id);
             await client.query(
@@ -2299,7 +2360,6 @@ export default async function incomingRoutes(app: FastifyInstance) {
               vals,
             );
           }
-          // MERT-M: no batch/expiry side-effects here any more.
         }
 
         return { ok: true };

@@ -260,13 +260,15 @@ describe("incoming alias-learning second pass regression", () => {
       const secondIncomingItemInsert = [...txClient.queries]
         .reverse()
         .find(({ sql }) => sql.includes("INSERT INTO incoming_items"));
-      // MERT-M: no batch_id column on the insert any more.
+      // GQF: batch_number + expiry_date trail the insert params (null here).
       expect(secondIncomingItemInsert?.params).toEqual([
         602,
         321,
         3,
         4.5,
         13.5,
+        null,
+        null,
         null,
       ]);
 

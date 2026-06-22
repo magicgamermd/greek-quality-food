@@ -38,12 +38,11 @@ describe("incoming confirm inventory propagation", () => {
     mockTransaction.mockReset();
   });
 
-  it("propagates confirmed incoming quantities into inventory (batch-free)", async () => {
-    // MERT-M: no batch logic. Inventory upsert uses the partial unique
-    // index `inventory_product_warehouse_nobatch_uidx` keyed on
-    // (product_id, warehouse_id) WHERE batch_id IS NULL. No
-    // `UPDATE batches` step any more, and incoming_items.batch_id is
-    // always NULL.
+  it("propagates confirmed incoming quantities into per-batch inventory", async () => {
+    // GQF: партидно проследяване. За всеки ред без подаден batch_number
+    // confirm създава нова партида (INSERT batches), upsert-ва наличност
+    // по (product_id, batch_id, warehouse_id) и връзва входящия ред към
+    // партидата (UPDATE incoming_items SET batch_id).
     const clientQuery = vi
       .fn()
       // 0: atomic UPDATE incoming_goods SET status='confirmed' RETURNING *
@@ -57,6 +56,8 @@ describe("incoming confirm inventory propagation", () => {
             id: 1,
             product_id: 501,
             batch_id: null,
+            batch_number: null,
+            expiry_date: null,
             quantity: 5,
             unit_price: 8.5,
             selling_price: 11.4,
@@ -65,21 +66,26 @@ describe("incoming confirm inventory propagation", () => {
             id: 2,
             product_id: 902,
             batch_id: null,
+            batch_number: null,
+            expiry_date: null,
             quantity: 2,
             unit_price: 12.2,
           },
         ]),
       )
-      // Per-item: INSERT inventory + UPDATE products purchase_price +
-      // SELECT pendingLines (Batch F1 — no matching open lines here).
-      // After both items: final INSERT notifications (stock_in summary).
-      .mockResolvedValueOnce(resultRows([])) // 2: INSERT inventory item 1
-      .mockResolvedValueOnce(resultRows([])) // 3: UPDATE purchase_price item 1
-      .mockResolvedValueOnce(resultRows([])) // 4: SELECT pendingLines item 1
-      .mockResolvedValueOnce(resultRows([])) // 5: INSERT inventory item 2
-      .mockResolvedValueOnce(resultRows([])) // 6: UPDATE purchase_price item 2
-      .mockResolvedValueOnce(resultRows([])) // 7: SELECT pendingLines item 2
-      .mockResolvedValueOnce(resultRows([])); // 8: INSERT notifications stock_in
+      // Item 1 (no batch_number → INSERT batches branch):
+      .mockResolvedValueOnce(resultRows([{ id: 7001 }])) // 2: INSERT batches → id
+      .mockResolvedValueOnce(resultRows([])) // 3: INSERT inventory (per batch)
+      .mockResolvedValueOnce(resultRows([])) // 4: UPDATE incoming_items SET batch_id
+      .mockResolvedValueOnce(resultRows([])) // 5: UPDATE purchase_price item 1
+      .mockResolvedValueOnce(resultRows([])) // 6: SELECT pendingLines item 1
+      // Item 2:
+      .mockResolvedValueOnce(resultRows([{ id: 7002 }])) // 7: INSERT batches → id
+      .mockResolvedValueOnce(resultRows([])) // 8: INSERT inventory (per batch)
+      .mockResolvedValueOnce(resultRows([])) // 9: UPDATE incoming_items SET batch_id
+      .mockResolvedValueOnce(resultRows([])) // 10: UPDATE purchase_price item 2
+      .mockResolvedValueOnce(resultRows([])) // 11: SELECT pendingLines item 2
+      .mockResolvedValueOnce(resultRows([])); // 12: INSERT notifications stock_in
 
     mockTransaction.mockImplementation(async (callback: any) =>
       callback({ query: clientQuery }),
@@ -98,17 +104,6 @@ describe("incoming confirm inventory propagation", () => {
         items_count: 2,
       });
 
-      //   0: UPDATE incoming_goods SET status='confirmed' ... RETURNING *
-      //   1: SELECT * FROM incoming_items WHERE incoming_goods_id = $1
-      //   2: INSERT INTO inventory (product 501, qty 5) — partial-index upsert
-      //   3: UPDATE products SET purchase_price = 8.5 WHERE id = 501
-      //   4: SELECT pendingLines for product 501 (Batch F1) — empty here
-      //   5: INSERT INTO inventory (product 902, qty 2)
-      //   6: UPDATE products SET purchase_price = 12.2 WHERE id = 902
-      //   7: SELECT pendingLines for product 902 (Batch F1) — empty here
-      //   8: INSERT INTO notifications (stock_in summary)
-      expect(clientQuery).toHaveBeenCalledTimes(9);
-
       expect(String(clientQuery.mock.calls[0][0])).toContain(
         "UPDATE incoming_goods",
       );
@@ -121,60 +116,153 @@ describe("incoming confirm inventory propagation", () => {
         "FROM incoming_items",
       );
 
-      // Item 1 → product 501, partial-index conflict target
-      const invSql1 = String(clientQuery.mock.calls[2][0]);
-      expect(invSql1).toContain("INSERT INTO inventory");
-      expect(invSql1).toContain("ON CONFLICT (product_id, warehouse_id)");
-      expect(invSql1).toContain("WHERE batch_id IS NULL");
-      // Args: [product_id, warehouse_id=1, quantity] — no batch_id param.
-      expect(clientQuery.mock.calls[2][1]).toEqual([501, 1, 5]);
+      // Item 1 → no batch_number, so a new batch is created (АВТО-…).
+      const batchSql1 = String(clientQuery.mock.calls[2][0]);
+      expect(batchSql1).toContain("INSERT INTO batches");
+      expect(clientQuery.mock.calls[2][1]).toEqual([
+        501,
+        "АВТО-88-501",
+        null,
+        5,
+        8.5,
+        "88",
+      ]);
 
-      // No UPDATE batches between inventory and products — the next call
-      // is the product-price update.
-      expect(String(clientQuery.mock.calls[3][0])).toContain(
+      // Inventory upsert keyed on (product_id, batch_id, warehouse_id).
+      const invSql1 = String(clientQuery.mock.calls[3][0]);
+      expect(invSql1).toContain("INSERT INTO inventory");
+      expect(invSql1).toContain(
+        "ON CONFLICT (product_id, batch_id, warehouse_id)",
+      );
+      expect(clientQuery.mock.calls[3][1]).toEqual([501, 1, 7001, 5]);
+
+      // Incoming line gets linked to the resolved batch.
+      expect(String(clientQuery.mock.calls[4][0])).toContain(
+        "UPDATE incoming_items SET batch_id = $1",
+      );
+      expect(clientQuery.mock.calls[4][1]).toEqual([7001, 1]);
+
+      expect(String(clientQuery.mock.calls[5][0])).toContain(
         "UPDATE products SET purchase_price = $1",
       );
-      expect(clientQuery.mock.calls[3][1]).toEqual([8.5, 501]);
+      expect(clientQuery.mock.calls[5][1]).toEqual([8.5, 501]);
 
-      // Batch F1 — pendingLines lookup for product 501 (no matching open
-      // order lines, so no notification is emitted).
-      expect(String(clientQuery.mock.calls[4][0])).toContain(
+      // Batch F1 — pendingLines lookup for product 501.
+      expect(String(clientQuery.mock.calls[6][0])).toContain(
         "FROM order_items oi",
       );
-      expect(String(clientQuery.mock.calls[4][0])).toContain(
+      expect(String(clientQuery.mock.calls[6][0])).toContain(
         "line_status IN ('paid_not_taken', 'awaiting')",
       );
-      expect(clientQuery.mock.calls[4][1]).toEqual([501]);
+      expect(clientQuery.mock.calls[6][1]).toEqual([501]);
 
-      // Item 2 → product 902 — same pattern, no batch step.
-      expect(String(clientQuery.mock.calls[5][0])).toContain(
+      // Item 2 → product 902, same per-batch pattern.
+      expect(String(clientQuery.mock.calls[7][0])).toContain(
+        "INSERT INTO batches",
+      );
+      expect(clientQuery.mock.calls[7][1]).toEqual([
+        902,
+        "АВТО-88-902",
+        null,
+        2,
+        12.2,
+        "88",
+      ]);
+      expect(String(clientQuery.mock.calls[8][0])).toContain(
         "INSERT INTO inventory",
       );
-      expect(clientQuery.mock.calls[5][1]).toEqual([902, 1, 2]);
-
-      expect(String(clientQuery.mock.calls[6][0])).toContain(
+      expect(clientQuery.mock.calls[8][1]).toEqual([902, 1, 7002, 2]);
+      expect(clientQuery.mock.calls[9][1]).toEqual([7002, 2]);
+      expect(String(clientQuery.mock.calls[10][0])).toContain(
         "UPDATE products SET purchase_price = $1",
       );
-      expect(clientQuery.mock.calls[6][1]).toEqual([12.2, 902]);
+      expect(clientQuery.mock.calls[10][1]).toEqual([12.2, 902]);
+      expect(clientQuery.mock.calls[11][1]).toEqual([902]);
 
-      // Batch F1 — pendingLines lookup for product 902.
-      expect(String(clientQuery.mock.calls[7][0])).toContain(
-        "FROM order_items oi",
-      );
-      expect(clientQuery.mock.calls[7][1]).toEqual([902]);
-
-      expect(String(clientQuery.mock.calls[8][0])).toContain(
+      expect(String(clientQuery.mock.calls[12][0])).toContain(
         "INSERT INTO notifications",
       );
-      expect(clientQuery.mock.calls[8][1]).toEqual([
+      expect(clientQuery.mock.calls[12][1]).toEqual([
         "Incoming goods #88 confirmed. 2 items added to stock.",
       ]);
 
-      // Also guard: no UPDATE batches anywhere in the confirm flow.
-      const batchUpdates = clientQuery.mock.calls.filter((call: any[]) =>
-        String(call[0]).includes("UPDATE batches"),
+      // No NULL-batch inventory upsert any more.
+      const nullBatchUpserts = clientQuery.mock.calls.filter((call: any[]) =>
+        String(call[0]).includes("WHERE batch_id IS NULL"),
       );
-      expect(batchUpdates).toHaveLength(0);
+      expect(nullBatchUpserts).toHaveLength(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reuses an existing batch when batch_number matches", async () => {
+    // Подаден batch_number, който вече съществува за продукта → namira go
+    // (SELECT batches), UPDATE-ва партидата (без нов INSERT) и пак upsert-ва
+    // наличност по партида.
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        resultRows([{ id: 88, status: "pending", invoice_number: "INV-88" }]),
+      )
+      .mockResolvedValueOnce(
+        resultRows([
+          {
+            id: 1,
+            product_id: 501,
+            batch_id: null,
+            batch_number: "L-2026-01",
+            expiry_date: "2026-12-31",
+            quantity: 5,
+            unit_price: 8.5,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(resultRows([{ id: 4242 }])) // SELECT batches → found
+      .mockResolvedValueOnce(resultRows([])) // UPDATE batches
+      .mockResolvedValueOnce(resultRows([])) // INSERT inventory (per batch)
+      .mockResolvedValueOnce(resultRows([])) // UPDATE incoming_items SET batch_id
+      .mockResolvedValueOnce(resultRows([])) // UPDATE purchase_price
+      .mockResolvedValueOnce(resultRows([])) // SELECT pendingLines
+      .mockResolvedValueOnce(resultRows([])); // INSERT notifications
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildAppWithRole("admin");
+    try {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/incoming/88/confirm",
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      // Find-by-number, not create.
+      expect(String(clientQuery.mock.calls[2][0])).toContain(
+        "SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2",
+      );
+      expect(clientQuery.mock.calls[2][1]).toEqual([501, "L-2026-01"]);
+
+      const updBatchSql = String(clientQuery.mock.calls[3][0]);
+      expect(updBatchSql).toContain("UPDATE batches");
+      expect(updBatchSql).toContain("quantity = quantity + $5");
+      expect(clientQuery.mock.calls[3][1]).toEqual([
+        4242,
+        "2026-12-31",
+        8.5,
+        "88",
+        5,
+      ]);
+
+      // No INSERT INTO batches when one is reused.
+      const batchInserts = clientQuery.mock.calls.filter((call: any[]) =>
+        String(call[0]).includes("INSERT INTO batches"),
+      );
+      expect(batchInserts).toHaveLength(0);
+
+      expect(clientQuery.mock.calls[4][1]).toEqual([501, 1, 4242, 5]);
     } finally {
       await app.close();
     }

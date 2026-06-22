@@ -339,9 +339,15 @@ describe("orders route — back-order / negative inventory", () => {
           },
         ]),
       )
+      // INSERT INTO batches (no batch_number on the line → auto batch)
+      .mockResolvedValueOnce(rows([{ id: 7001 }]))
       // INSERT INTO inventory ... ON CONFLICT DO UPDATE
       .mockResolvedValueOnce(rows([]))
+      // UPDATE incoming_items SET batch_id
+      .mockResolvedValueOnce(rows([]))
       // UPDATE products SET purchase_price
+      .mockResolvedValueOnce(rows([]))
+      // SELECT order_items pendingLines
       .mockResolvedValueOnce(rows([]))
       // INSERT INTO notifications
       .mockResolvedValueOnce(rows([]));

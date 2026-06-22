@@ -64,11 +64,15 @@ describe("Batch F1 — incoming confirm pending_order_ready notifications", () =
           },
         ]),
       )
-      // 2. INSERT inventory (UPSERT)
+      // 2. INSERT batches (no batch_number on the line → auto batch)
+      .mockResolvedValueOnce(rows([{ id: 7001 }]))
+      // 3. INSERT inventory (per-batch UPSERT)
       .mockResolvedValueOnce(rows([]))
-      // 3. UPDATE products SET purchase_price (unit_price > 0)
+      // 4. UPDATE incoming_items SET batch_id
       .mockResolvedValueOnce(rows([]))
-      // 4. SELECT order_items pendingLines — 2 matching rows
+      // 5. UPDATE products SET purchase_price (unit_price > 0)
+      .mockResolvedValueOnce(rows([]))
+      // 6. SELECT order_items pendingLines — 2 matching rows
       .mockResolvedValueOnce(
         rows([
           {
@@ -91,11 +95,11 @@ describe("Batch F1 — incoming confirm pending_order_ready notifications", () =
           },
         ]),
       )
-      // 5. INSERT notifications (pending_order_ready) — line 1
+      // 7. INSERT notifications (pending_order_ready) — line 1
       .mockResolvedValueOnce(rows([]))
-      // 6. INSERT notifications (pending_order_ready) — line 2
+      // 8. INSERT notifications (pending_order_ready) — line 2
       .mockResolvedValueOnce(rows([]))
-      // 7. INSERT notifications (stock_in summary)
+      // 9. INSERT notifications (stock_in summary)
       .mockResolvedValueOnce(rows([]));
 
     mockTransaction.mockImplementation(async (cb: any) =>
@@ -150,7 +154,9 @@ describe("Batch F1 — incoming confirm pending_order_ready notifications", () =
       .mockResolvedValueOnce(
         rows([{ id: 1, product_id: 999, quantity: 3, unit_price: 5 }]),
       )
-      .mockResolvedValueOnce(rows([])) // INSERT inventory
+      .mockResolvedValueOnce(rows([{ id: 7001 }])) // INSERT batches
+      .mockResolvedValueOnce(rows([])) // INSERT inventory (per batch)
+      .mockResolvedValueOnce(rows([])) // UPDATE incoming_items SET batch_id
       .mockResolvedValueOnce(rows([])) // UPDATE products purchase_price
       .mockResolvedValueOnce(rows([])) // SELECT pendingLines → empty
       .mockResolvedValueOnce(rows([])); // INSERT notifications stock_in
@@ -186,7 +192,9 @@ describe("Batch F1 — incoming confirm pending_order_ready notifications", () =
       .mockResolvedValueOnce(
         rows([{ id: 1, product_id: 7, quantity: 1, unit_price: 5 }]),
       )
-      .mockResolvedValueOnce(rows([])) // INSERT inventory
+      .mockResolvedValueOnce(rows([{ id: 7001 }])) // INSERT batches
+      .mockResolvedValueOnce(rows([])) // INSERT inventory (per batch)
+      .mockResolvedValueOnce(rows([])) // UPDATE incoming_items SET batch_id
       .mockResolvedValueOnce(rows([])) // UPDATE products purchase_price
       .mockResolvedValueOnce(rows([])) // SELECT pendingLines
       .mockResolvedValueOnce(rows([])); // INSERT notifications stock_in
