@@ -24,7 +24,9 @@ const registerSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(6),
-  role: z.enum(["admin", "warehouse", "accountant"]).default("accountant"),
+  role: z
+    .enum(["admin", "warehouse", "accountant", "owner_mobile"])
+    .default("accountant"),
 });
 
 export default async function authRoutes(app: FastifyInstance) {
