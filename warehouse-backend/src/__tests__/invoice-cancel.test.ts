@@ -54,7 +54,14 @@ describe("invoice cancel endpoint", () => {
     const clientQuery = vi
       .fn()
       .mockResolvedValueOnce(
-        resultRows([{ id: 13, document_type: "invoice", status: "issued", invoice_number: "INV-13" }]),
+        resultRows([
+          {
+            id: 13,
+            document_type: "invoice",
+            status: "issued",
+            invoice_number: "INV-13",
+          },
+        ]),
       )
       .mockResolvedValueOnce(resultRows([{ total: "0" }]))
       .mockResolvedValueOnce(resultRows([]))
@@ -65,14 +72,27 @@ describe("invoice cancel endpoint", () => {
         resultRows([{ id: 12, order_number: "12", status: "invoiced" }]),
       )
       .mockResolvedValueOnce(
-        resultRows([{ id: 501, order_id: 12, product_id: 101, quantity: "3", batch_id: 701 }]),
+        resultRows([
+          {
+            id: 501,
+            order_id: 12,
+            product_id: 101,
+            quantity: "3",
+            batch_id: 701,
+          },
+        ]),
       )
+      // GQF: SELECT order_item_batches за реда → празно (legacy ред без
+      // allocations) → fallback към batch_id пътя.
+      .mockResolvedValueOnce(resultRows([]))
       .mockResolvedValueOnce(result(1))
       .mockResolvedValueOnce(result(1))
       .mockResolvedValueOnce(result(1))
       .mockResolvedValueOnce(result(1));
 
-    mockTransaction.mockImplementation(async (callback: any) => callback({ query: clientQuery }));
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
 
     const app = await buildApp();
     try {
@@ -89,19 +109,27 @@ describe("invoice cancel endpoint", () => {
       });
 
       expect(mockTransaction).toHaveBeenCalledTimes(1);
-      expect(clientQuery).toHaveBeenCalledTimes(10);
+      expect(clientQuery).toHaveBeenCalledTimes(11);
 
-      expect(String(clientQuery.mock.calls[5][0])).toContain("SELECT * FROM order_items");
+      expect(String(clientQuery.mock.calls[5][0])).toContain(
+        "SELECT * FROM order_items",
+      );
+      // call 6 = SELECT order_item_batches (empty → fallback)
       expect(String(clientQuery.mock.calls[6][0])).toContain(
+        "FROM order_item_batches",
+      );
+      expect(String(clientQuery.mock.calls[7][0])).toContain(
         "UPDATE inventory SET quantity = quantity + $1",
       );
-      expect(clientQuery.mock.calls[6][1]).toEqual([3, 101, 701]);
-      expect(String(clientQuery.mock.calls[7][0])).toContain(
+      expect(clientQuery.mock.calls[7][1]).toEqual([3, 101, 701]);
+      expect(String(clientQuery.mock.calls[8][0])).toContain(
         "UPDATE batches SET quantity = quantity + $1",
       );
-      expect(clientQuery.mock.calls[7][1]).toEqual([3, 701]);
-      expect(String(clientQuery.mock.calls[8][0])).toContain("status = 'cancelled'");
-      expect(clientQuery.mock.calls[8][1]).toEqual([
+      expect(clientQuery.mock.calls[8][1]).toEqual([3, 701]);
+      expect(String(clientQuery.mock.calls[9][0])).toContain(
+        "status = 'cancelled'",
+      );
+      expect(clientQuery.mock.calls[9][1]).toEqual([
         12,
         13,
         "INV-13",
@@ -116,7 +144,14 @@ describe("invoice cancel endpoint", () => {
     const clientQuery = vi
       .fn()
       .mockResolvedValueOnce(
-        resultRows([{ id: 21, document_type: "invoice", status: "issued", invoice_number: "INV-21" }]),
+        resultRows([
+          {
+            id: 21,
+            document_type: "invoice",
+            status: "issued",
+            invoice_number: "INV-21",
+          },
+        ]),
       )
       .mockResolvedValueOnce(resultRows([{ total: "0" }]))
       .mockResolvedValueOnce(resultRows([]))
@@ -127,14 +162,26 @@ describe("invoice cancel endpoint", () => {
         resultRows([{ id: 44, order_number: "44", status: "fulfilled" }]),
       )
       .mockResolvedValueOnce(
-        resultRows([{ id: 900, order_id: 44, product_id: 202, quantity: "2", batch_id: null }]),
+        resultRows([
+          {
+            id: 900,
+            order_id: 44,
+            product_id: 202,
+            quantity: "2",
+            batch_id: null,
+          },
+        ]),
       )
+      // GQF: SELECT order_item_batches → празно (legacy ред) → fallback.
+      .mockResolvedValueOnce(resultRows([]))
       .mockResolvedValueOnce(resultRows([{ id: 3001 }]))
       .mockResolvedValueOnce(result(1))
       .mockResolvedValueOnce(result(1))
       .mockResolvedValueOnce(result(1));
 
-    mockTransaction.mockImplementation(async (callback: any) => callback({ query: clientQuery }));
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
 
     const app = await buildApp();
     try {
@@ -147,13 +194,21 @@ describe("invoice cancel endpoint", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().order_id).toBe(44);
 
-      expect(String(clientQuery.mock.calls[6][0])).toContain("SELECT id FROM inventory");
-      expect(clientQuery.mock.calls[6][1]).toEqual([202]);
+      // call 6 = SELECT order_item_batches (empty → fallback)
+      expect(String(clientQuery.mock.calls[6][0])).toContain(
+        "FROM order_item_batches",
+      );
       expect(String(clientQuery.mock.calls[7][0])).toContain(
+        "SELECT id FROM inventory",
+      );
+      expect(clientQuery.mock.calls[7][1]).toEqual([202]);
+      expect(String(clientQuery.mock.calls[8][0])).toContain(
         "UPDATE inventory SET quantity = quantity + $1, updated_at = NOW() WHERE id = $2",
       );
-      expect(clientQuery.mock.calls[7][1]).toEqual([2, 3001]);
-      expect(String(clientQuery.mock.calls[8][0])).toContain("status = 'cancelled'");
+      expect(clientQuery.mock.calls[8][1]).toEqual([2, 3001]);
+      expect(String(clientQuery.mock.calls[9][0])).toContain(
+        "status = 'cancelled'",
+      );
     } finally {
       await app.close();
     }

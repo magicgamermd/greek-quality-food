@@ -61,7 +61,7 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
 
   it("skips awaiting lines entirely (no inventory UPDATE issued)", async () => {
     // Two items: one normal, one awaiting. Only the normal line should hit
-    // the deductProductStock path.
+    // the FEFO deduction path (deductBatched).
     const clientQuery = vi
       .fn()
       // 1. SELECT * FROM orders WHERE id = $1 FOR UPDATE
@@ -80,6 +80,8 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
             quantity: "2",
             unit_price: "10",
             line_status: "normal",
+            is_returning: false,
+            batch_id: null,
           },
           {
             id: 602,
@@ -88,20 +90,34 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
             quantity: "5",
             unit_price: "20",
             line_status: "awaiting",
+            is_returning: false,
+            batch_id: null,
           },
         ]),
       )
-      // 3. deductProductStock pre-check (normal, allowNegative=false)
-      .mockResolvedValueOnce(rows([{ qty: "10" }]))
-      // 4. UPDATE inventory ... RETURNING quantity
-      .mockResolvedValueOnce(rows([{ quantity: "8" }]))
-      // 5. SELECT purchase_price FROM products
-      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
-      // 6. UPDATE order_items SET cost_unit_price (only for normal line)
+      // 3. allocateFefo SELECT (one batch covers the whole qty)
+      .mockResolvedValueOnce(
+        rows([
+          {
+            batch_id: 30,
+            batch_number: "B-7",
+            expiry_date: "2099-01-01",
+            purchase_price: "5",
+            available: "10",
+          },
+        ]),
+      )
+      // 4. UPDATE inventory (batch 30)
       .mockResolvedValueOnce(rows([]))
-      // 7. UPDATE orders SET status='fulfilled'
+      // 5. UPDATE batches (batch 30)
       .mockResolvedValueOnce(rows([]))
-      // 8. INSERT INTO notifications
+      // 6. INSERT order_item_batches (batch 30)
+      .mockResolvedValueOnce(rows([]))
+      // 7. UPDATE order_items SET cost_unit_price, batch_id, cost_source_batch_id
+      .mockResolvedValueOnce(rows([]))
+      // 8. UPDATE orders SET status='fulfilled'
+      .mockResolvedValueOnce(rows([]))
+      // 9. INSERT INTO notifications
       .mockResolvedValueOnce(rows([]));
 
     mockTransaction.mockImplementation(async (callback: any) =>
@@ -114,27 +130,32 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
     });
     expect(res.statusCode).toBe(200);
 
-    // Only ONE UPDATE inventory should have fired (for the normal line).
+    // Only ONE UPDATE inventory should have fired (for the normal line),
+    // targeting product 7, warehouse 1, batch 30.
     const inventoryUpdates = clientQuery.mock.calls.filter((c: any[]) =>
       String(c[0]).includes("UPDATE inventory"),
     );
     expect(inventoryUpdates).toHaveLength(1);
+    expect(inventoryUpdates[0]![1]).toEqual([2, 7, 1, 30]);
 
-    // The single deduct should target product 7 (the normal line), not 8.
-    expect(inventoryUpdates[0]![1]).toEqual([2, 7]);
+    // Exactly one order_item_batches insert (the awaiting line is skipped).
+    const oibInserts = clientQuery.mock.calls.filter((c: any[]) =>
+      String(c[0]).includes("INSERT INTO order_item_batches"),
+    );
+    expect(oibInserts).toHaveLength(1);
+    expect(oibInserts[0]![1]).toEqual([601, 30, 2, 5]);
 
-    // No UPDATE order_items SET cost_unit_price for product 8.
+    // The cost snapshot UPDATE targets order_item 601 (cost 5*2/2 = 5).
     const costSnapshots = clientQuery.mock.calls.filter((c: any[]) =>
       String(c[0]).includes("SET cost_unit_price"),
     );
     expect(costSnapshots).toHaveLength(1);
-    expect(costSnapshots[0]![1]).toEqual([5, 601]);
+    expect(costSnapshots[0]![1]).toEqual([5, 30, 601]);
   });
 
-  it("on a paid_not_taken line, allows inventory to go negative (no pre-check SELECT)", async () => {
-    // Inventory currently 0; a paid_not_taken line for qty=3 should still
-    // deduct (allowNegative=true), so the helper does NOT issue the
-    // pre-check SELECT — it goes straight to the UPDATE.
+  it("on a paid_not_taken line, изписва FEFO по партида", async () => {
+    // paid_not_taken вече минава през FEFO като всеки друг ред — стоката
+    // трябва да съществува по партида.
     const clientQuery = vi
       .fn()
       // 1. SELECT * FROM orders WHERE id = $1 FOR UPDATE
@@ -153,18 +174,34 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
             quantity: "3",
             unit_price: "10",
             line_status: "paid_not_taken",
+            is_returning: false,
+            batch_id: null,
           },
         ]),
       )
-      // 3. UPDATE inventory ... RETURNING quantity → -3
-      .mockResolvedValueOnce(rows([{ quantity: "-3" }]))
-      // 4. SELECT purchase_price FROM products
-      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
-      // 5. UPDATE order_items SET cost_unit_price
+      // 3. allocateFefo SELECT
+      .mockResolvedValueOnce(
+        rows([
+          {
+            batch_id: 40,
+            batch_number: "B-9",
+            expiry_date: "2099-01-01",
+            purchase_price: "5",
+            available: "10",
+          },
+        ]),
+      )
+      // 4. UPDATE inventory (batch 40)
       .mockResolvedValueOnce(rows([]))
-      // 6. UPDATE orders SET status='fulfilled'
+      // 5. UPDATE batches (batch 40)
       .mockResolvedValueOnce(rows([]))
-      // 7. INSERT INTO notifications
+      // 6. INSERT order_item_batches (batch 40)
+      .mockResolvedValueOnce(rows([]))
+      // 7. UPDATE order_items snapshot
+      .mockResolvedValueOnce(rows([]))
+      // 8. UPDATE orders SET status='fulfilled'
+      .mockResolvedValueOnce(rows([]))
+      // 9. INSERT INTO notifications
       .mockResolvedValueOnce(rows([]));
 
     mockTransaction.mockImplementation(async (callback: any) =>
@@ -177,20 +214,12 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
     });
     expect(res.statusCode).toBe(200);
 
-    // No pre-check SELECT against inventory — allowNegative=true skips it.
-    const preCheckSelects = clientQuery.mock.calls.filter(
-      (c: any[]) =>
-        String(c[0]).includes("COALESCE(SUM(quantity)") &&
-        String(c[0]).includes("FROM inventory"),
-    );
-    expect(preCheckSelects).toHaveLength(0);
-
-    // The UPDATE inventory must still fire (deducts the stock).
+    // FEFO deduction fired for product 9, batch 40, qty 3.
     const inventoryUpdates = clientQuery.mock.calls.filter((c: any[]) =>
       String(c[0]).includes("UPDATE inventory"),
     );
     expect(inventoryUpdates).toHaveLength(1);
-    expect(inventoryUpdates[0]![1]).toEqual([3, 9]);
+    expect(inventoryUpdates[0]![1]).toEqual([3, 9, 1, 40]);
   });
 });
 
@@ -381,7 +410,7 @@ describe("Batch F1 — POST /orders/:id/items/:itemId/confirm-from-awaiting", ()
     await app.close();
   });
 
-  it("flips awaiting → normal AND deducts stock (allowNegative=false)", async () => {
+  it("flips awaiting → normal AND изписва FEFO по партида", async () => {
     const clientQuery = vi
       .fn()
       // 1. SELECT * FROM order_items WHERE id = $1 AND order_id = $2 FOR UPDATE
@@ -393,16 +422,29 @@ describe("Batch F1 — POST /orders/:id/items/:itemId/confirm-from-awaiting", ()
             product_id: 7,
             quantity: "2",
             line_status: "awaiting",
+            batch_id: null,
           },
         ]),
       )
-      // 2. deductProductStock pre-check (allowNegative=false)
-      .mockResolvedValueOnce(rows([{ qty: "5" }]))
-      // 3. UPDATE inventory ... RETURNING quantity
-      .mockResolvedValueOnce(rows([{ quantity: "3" }]))
-      // 4. SELECT purchase_price FROM products
-      .mockResolvedValueOnce(rows([{ purchase_price: "4" }]))
-      // 5. UPDATE order_items SET line_status='normal', cost_unit_price=$1
+      // 2. allocateFefo SELECT
+      .mockResolvedValueOnce(
+        rows([
+          {
+            batch_id: 50,
+            batch_number: "B-A",
+            expiry_date: "2099-01-01",
+            purchase_price: "4",
+            available: "5",
+          },
+        ]),
+      )
+      // 3. UPDATE inventory (batch 50)
+      .mockResolvedValueOnce(rows([]))
+      // 4. UPDATE batches (batch 50)
+      .mockResolvedValueOnce(rows([]))
+      // 5. INSERT order_item_batches (batch 50)
+      .mockResolvedValueOnce(rows([]))
+      // 6. UPDATE order_items SET line_status='normal', cost_unit_price, batch_id
       .mockResolvedValueOnce(
         rows([
           { id: 1, order_id: 10, line_status: "normal", cost_unit_price: "4" },
@@ -421,21 +463,22 @@ describe("Batch F1 — POST /orders/:id/items/:itemId/confirm-from-awaiting", ()
       line_status: "normal",
     });
 
-    // Pre-check SELECT did fire (allowNegative=false).
-    const preCheck = clientQuery.mock.calls.find((c: any[]) =>
-      String(c[0]).includes("COALESCE(SUM(quantity)"),
-    );
-    expect(preCheck).toBeDefined();
-
-    // UPDATE inventory was called with quantity=2, product=7.
+    // FEFO deduction fired for product 7, batch 50, qty 2.
     const update = clientQuery.mock.calls.find((c: any[]) =>
       String(c[0]).includes("UPDATE inventory"),
     );
     expect(update).toBeDefined();
-    expect(update![1]).toEqual([2, 7]);
+    expect(update![1]).toEqual([2, 7, 1, 50]);
+
+    // order_item_batches insert recorded the allocation.
+    const oibInsert = clientQuery.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("INSERT INTO order_item_batches"),
+    );
+    expect(oibInsert).toBeDefined();
+    expect(oibInsert![1]).toEqual([1, 50, 2, 4]);
   });
 
-  it("refuses 409 when stock is insufficient", async () => {
+  it("refuses 400 when stock is insufficient (FEFO)", async () => {
     const clientQuery = vi
       .fn()
       // 1. SELECT * FROM order_items
@@ -447,11 +490,12 @@ describe("Batch F1 — POST /orders/:id/items/:itemId/confirm-from-awaiting", ()
             product_id: 7,
             quantity: "5",
             line_status: "awaiting",
+            batch_id: null,
           },
         ]),
       )
-      // 2. pre-check returns 1 → 1 < 5 ⇒ throws 409
-      .mockResolvedValueOnce(rows([{ qty: "1" }]));
+      // 2. allocateFefo SELECT — no available batches → InsufficientStockError → 400
+      .mockResolvedValueOnce(rows([]));
     mockTransaction.mockImplementationOnce(async (cb: any) =>
       cb({ query: clientQuery }),
     );
@@ -460,7 +504,7 @@ describe("Batch F1 — POST /orders/:id/items/:itemId/confirm-from-awaiting", ()
       method: "POST",
       url: "/orders/10/items/1/confirm-from-awaiting",
     });
-    expect(res.statusCode).toBe(409);
+    expect(res.statusCode).toBe(400);
   });
 
   it("rejects 400 on a non-awaiting line", async () => {

@@ -76,17 +76,36 @@ function setupFulfillMocks(opts: { orderId: number; items: FakeItem[] }) {
       if (text.includes("FROM order_items WHERE order_id = $1")) {
         return rows(itemRows);
       }
-      // deductProductStock pre-check (only used when allowNegative=false).
-      if (text.includes("FROM inventory") && text.includes("SUM(quantity)")) {
-        return rows([{ qty: "999" }]);
+      // allocateFefo SELECT (inventory JOIN batches ... FOR UPDATE). Returns
+      // one non-expired batch with ample stock so FEFO succeeds.
+      if (
+        text.includes("FROM inventory") &&
+        text.includes("JOIN batches") &&
+        text.includes("FOR UPDATE")
+      ) {
+        return rows([
+          {
+            batch_id: 700 + (params[0] ?? 0),
+            batch_number: "B-FEFO",
+            expiry_date: "2099-01-01",
+            purchase_price: "50",
+            available: "100",
+          },
+        ]);
       }
-      // The deduct UPDATE — we still need to return rowCount > 0 so the
-      // helper does not fall into the INSERT branch.
+      // The deduct UPDATE (per batch) — return rowCount > 0.
       if (
         text.includes("UPDATE inventory") &&
         text.includes("SET quantity = quantity -")
       ) {
         return { rows: [{ quantity: "100" }], rowCount: 1 } as any;
+      }
+      // UPDATE batches / INSERT order_item_batches (FEFO bookkeeping).
+      if (
+        text.includes("UPDATE batches") ||
+        text.includes("INSERT INTO order_item_batches")
+      ) {
+        return { rows: [], rowCount: 1 } as any;
       }
       // The refund UPDATE for return lines (the new path we are adding).
       if (
