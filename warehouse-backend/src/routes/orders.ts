@@ -2021,6 +2021,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                     item.product_id,
                     1,
                     item.quantity,
+                    lineStatus === "paid_not_taken",
                     item.batch_id,
                   );
                   expiryWarnings.push(...deduction.warnings);
@@ -2357,6 +2358,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               item.product_id,
               1,
               parseFloat(item.quantity),
+              item.line_status === "paid_not_taken",
               item.batch_id ?? undefined,
             );
             expiryWarnings.push(...deduction.warnings);
@@ -2474,7 +2476,7 @@ export default async function orderRoutes(app: FastifyInstance) {
   // paid_not_taken (легаси/директна предаване — backward compat за
   // повиквания от ниско ниво и за стари UI кешове). И двата прехода
   // отиват в normal. Stock не се пипа — изтеглен е при оригиналния
-  // fulfill (allowNegative=true за paid_not_taken).
+  // fulfill (back-order/shortfall срещу откриващата партида за paid_not_taken).
   app.post(
     "/:id/items/:itemId/handover",
     { preHandler: ordersManagePreHandler },
@@ -2611,6 +2613,7 @@ export default async function orderRoutes(app: FastifyInstance) {
             item.product_id,
             1,
             parseFloat(item.quantity),
+            item.line_status === "paid_not_taken",
             item.batch_id ?? undefined,
           );
         } catch (err) {
@@ -3147,6 +3150,41 @@ export default async function orderRoutes(app: FastifyInstance) {
     return { oversell_items };
   }
 
+  // Find-or-create откриваща партида 'НАЧАЛНО' за продукт. Ползва се за
+  // back-order изписване (платени поръчки, чиято стока още я няма по партиди).
+  // Откриващата е без срок (expiry_date NULL) и носи продуктовата
+  // purchase_price като себестойност.
+  async function getOrCreateOpeningBatch(
+    client: PoolClient,
+    productId: number,
+  ): Promise<{ id: number; purchase_price: number }> {
+    const { rows: existing } = await client.query(
+      `SELECT id, purchase_price FROM batches
+        WHERE product_id = $1 AND batch_number = 'НАЧАЛНО'
+        ORDER BY id ASC LIMIT 1
+        FOR UPDATE`,
+      [productId],
+    );
+    if (existing[0]) {
+      return {
+        id: existing[0].id,
+        purchase_price: parseFloat(existing[0].purchase_price ?? "0"),
+      };
+    }
+    const { rows: prod } = await client.query(
+      "SELECT purchase_price FROM products WHERE id = $1",
+      [productId],
+    );
+    const purchasePrice = parseFloat(prod[0]?.purchase_price ?? "0");
+    const { rows: created } = await client.query(
+      `INSERT INTO batches (product_id, batch_number, expiry_date, quantity, purchase_price)
+       VALUES ($1, 'НАЧАЛНО', NULL, 0, $2)
+       RETURNING id`,
+      [productId, purchasePrice],
+    );
+    return { id: created[0].id, purchase_price: purchasePrice };
+  }
+
   /**
    * GQF batch-aware изписване по партиди (FEFO или ръчно подадена партида).
    *
@@ -3154,7 +3192,10 @@ export default async function orderRoutes(app: FastifyInstance) {
    *   - ако е подаден `manualBatchId` → заключва точно тази партида (FOR
    *     UPDATE), проверява за наличност и за изтекъл срок, изписва от нея;
    *   - иначе → allocateFefo() избира партиди по First-Expired-First-Out,
-   *     пропуска изтеклите и хвърля InsufficientStockError при недостиг.
+   *     пропуска изтеклите. При недостиг:
+   *       · allowBackorder=false → хвърля InsufficientStockError (блок);
+   *       · allowBackorder=true  → изписва налично + допълва остатъка (shortfall)
+   *         в МИНУС срещу откриващата 'НАЧАЛНО' партида (back-order за платени).
    *
    * За всяка засегната партида: намалява inventory + batches.quantity и
    * вмъква ред в order_item_batches (одит на разпределението + COGS).
@@ -3167,6 +3208,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     productId: number,
     warehouseId: number,
     qty: number,
+    allowBackorder: boolean,
     manualBatchId?: number,
   ): Promise<{
     cost: number;
@@ -3224,19 +3266,41 @@ export default async function orderRoutes(app: FastifyInstance) {
     } else {
       const res = await allocateFefo(client, productId, warehouseId, qty, {
         warnDays: 30,
+        allowShortfall: allowBackorder,
       });
       allocations = res.allocations;
       warnings = res.warnings;
+
+      // Back-order: остатъкът се изписва в МИНУС срещу откриващата партида,
+      // за да остане наличността по партида одитируема (платени поръчки).
+      if (res.shortfall > 0) {
+        const opening = await getOrCreateOpeningBatch(client, productId);
+        allocations.push({
+          batch_id: opening.id,
+          quantity: res.shortfall,
+          unit_cost: opening.purchase_price,
+        });
+      }
     }
 
     let cost = 0;
     for (const allocation of allocations) {
-      await client.query(
+      // Find-or-create inventory ред (продукт/склад/партида), за да можем да
+      // изпишем дори когато няма заприходен ред (back-order → отрицателна
+      // наличност срещу откриващата партида).
+      const updated = await client.query(
         `UPDATE inventory
             SET quantity = quantity - $1, updated_at = NOW()
           WHERE product_id = $2 AND warehouse_id = $3 AND batch_id = $4`,
         [allocation.quantity, productId, warehouseId, allocation.batch_id],
       );
+      if (!updated.rowCount) {
+        await client.query(
+          `INSERT INTO inventory (product_id, batch_id, warehouse_id, quantity, updated_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [productId, allocation.batch_id, warehouseId, -allocation.quantity],
+        );
+      }
       await client.query(
         `UPDATE batches SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2`,
         [allocation.quantity, allocation.batch_id],

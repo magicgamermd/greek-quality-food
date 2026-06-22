@@ -142,4 +142,81 @@ describe("allocateFefo", () => {
     expect(res.allocations).toHaveLength(1);
     expect(res.allocations[0].quantity).toBe(5);
   });
+
+  it("shortfall=0 при пълно покритие", async () => {
+    const client = mkClient([
+      {
+        batch_id: 1,
+        batch_number: "B1",
+        expiry_date: "2026-07-01",
+        purchase_price: "1.00",
+        available: "100",
+      },
+    ]);
+    const res = await allocateFefo(client, 1, 1, 5, { today: TODAY });
+    expect(res.shortfall).toBe(0);
+  });
+
+  it("allowShortfall: частично покритие връща allocations + shortfall (не хвърля)", async () => {
+    const client = mkClient([
+      {
+        batch_id: 1,
+        batch_number: "B1",
+        expiry_date: "2026-07-01",
+        purchase_price: "1.00",
+        available: "3",
+      },
+    ]);
+    const res = await allocateFefo(client, 1, 1, 10, {
+      today: TODAY,
+      allowShortfall: true,
+    });
+    expect(res.allocations).toHaveLength(1);
+    expect(res.allocations[0].quantity).toBe(3);
+    expect(res.shortfall).toBe(7);
+  });
+
+  it("allowShortfall: при нулева наличност връща празни allocations + пълен shortfall", async () => {
+    const client = mkClient([]);
+    const res = await allocateFefo(client, 1, 1, 8, {
+      today: TODAY,
+      allowShortfall: true,
+    });
+    expect(res.allocations).toHaveLength(0);
+    expect(res.shortfall).toBe(8);
+  });
+
+  it("allowShortfall НЕ заобикаля изтекли партиди (изтеклите остават пропуснати)", async () => {
+    const client = mkClient([
+      {
+        batch_id: 1,
+        batch_number: "OLD",
+        expiry_date: "2026-01-01",
+        purchase_price: "1.00",
+        available: "100",
+      },
+    ]);
+    const res = await allocateFefo(client, 1, 1, 5, {
+      today: TODAY,
+      allowShortfall: true,
+    });
+    // Изтеклата партида е пропусната → нищо не е разпределено, всичко е shortfall.
+    expect(res.allocations).toHaveLength(0);
+    expect(res.shortfall).toBe(5);
+  });
+
+  it("без allowShortfall при недостиг хвърля (back-compat)", async () => {
+    const client = mkClient([
+      {
+        batch_id: 1,
+        batch_number: "B1",
+        expiry_date: "2026-07-01",
+        purchase_price: "1.00",
+        available: "3",
+      },
+    ]);
+    await expect(
+      allocateFefo(client, 1, 1, 10, { today: TODAY }),
+    ).rejects.toBeInstanceOf(InsufficientStockError);
+  });
 });

@@ -3,11 +3,12 @@
 // Covers the new logic added by Batch F1:
 //   - POST /orders/:id/fulfill — branches on order_items.line_status:
 //     * 'awaiting'        → skip entirely (no stock change, no COGS)
-//     * 'paid_not_taken'  → deduct with allowNegative=true
-//     * 'normal'          → deduct with allowNegative=false (pre-check)
+//     * 'paid_not_taken'  → FEFO deduct + back-order: непокритият остатък се
+//                            изписва срещу откриващата 'НАЧАЛНО' партида
+//     * 'normal'          → FEFO deduct; блокира при липса/изтекъл (400)
 //   - POST /orders/:id/items/:itemId/handover (paid_not_taken → normal)
 //   - POST /orders/:id/items/:itemId/confirm-from-awaiting
-//     (awaiting → normal + deduct stock now, refuses 409 on insufficient)
+//     (awaiting → normal + FEFO deduct now)
 //   - GET /orders ?has_paid_not_taken=true / ?has_awaiting=true filter params
 //     wire EXISTS clauses into the WHERE.
 //
@@ -191,8 +192,8 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
           },
         ]),
       )
-      // 4. UPDATE inventory (batch 40)
-      .mockResolvedValueOnce(rows([]))
+      // 4. UPDATE inventory (batch 40) — rowCount 1
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 } as any)
       // 5. UPDATE batches (batch 40)
       .mockResolvedValueOnce(rows([]))
       // 6. INSERT order_item_batches (batch 40)
@@ -220,6 +221,123 @@ describe("Batch F1 — line_status flows in /fulfill", () => {
     );
     expect(inventoryUpdates).toHaveLength(1);
     expect(inventoryUpdates[0]![1]).toEqual([3, 9, 1, 40]);
+  });
+
+  it("paid_not_taken back-order: успява без налична партида (минус срещу 'НАЧАЛНО')", async () => {
+    // Няма налична партида → FEFO връща shortfall=2. Тъй като линията е
+    // платена (paid_not_taken), деференциалът се изписва срещу откриващата
+    // партида в минус — поръчката се изпълнява (200), не блокира.
+    const clientQuery = vi
+      .fn()
+      // 1. SELECT * FROM orders WHERE id = $1 FOR UPDATE
+      .mockResolvedValueOnce(
+        rows([
+          { id: 52, status: "pending", partner_id: 1, total_amount: "30" },
+        ]),
+      )
+      // 2. SELECT * FROM order_items
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 801,
+            order_id: 52,
+            product_id: 12,
+            quantity: "2",
+            unit_price: "10",
+            line_status: "paid_not_taken",
+            is_returning: false,
+            batch_id: null,
+          },
+        ]),
+      )
+      // 3. allocateFefo SELECT → нищо налично (shortfall=2)
+      .mockResolvedValueOnce(rows([]))
+      // 4. getOrCreateOpeningBatch: SELECT откриваща → липсва
+      .mockResolvedValueOnce(rows([]))
+      // 5. SELECT purchase_price FROM products
+      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
+      // 6. INSERT batches (НАЧАЛНО) RETURNING id
+      .mockResolvedValueOnce(rows([{ id: 999 }]))
+      // 7. UPDATE inventory (откриваща) → rowCount 0 → INSERT branch
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      // 8. INSERT inventory (откриваща, минус)
+      .mockResolvedValueOnce(rows([]))
+      // 9. UPDATE batches (откриваща, минус)
+      .mockResolvedValueOnce(rows([]))
+      // 10. INSERT order_item_batches (откриваща, shortfall)
+      .mockResolvedValueOnce(rows([]))
+      // 11. UPDATE order_items snapshot
+      .mockResolvedValueOnce(rows([]))
+      // 12. UPDATE orders SET status='fulfilled'
+      .mockResolvedValueOnce(rows([]))
+      // 13. INSERT INTO notifications
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/52/fulfill",
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Откриваща партида е създадена.
+    const openingInsert = clientQuery.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("INSERT INTO batches"),
+    );
+    expect(openingInsert).toBeDefined();
+
+    // Наличността по откриващата партида е изписана в минус (INSERT с -2).
+    const invInsert = clientQuery.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("INSERT INTO inventory"),
+    );
+    expect(invInsert).toBeDefined();
+    expect(invInsert![1]).toEqual([12, 999, 1, -2]);
+
+    // order_item_batches ред за shortfall срещу откриващата (unit_cost=5).
+    const oibInsert = clientQuery.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("INSERT INTO order_item_batches"),
+    );
+    expect(oibInsert).toBeDefined();
+    expect(oibInsert![1]).toEqual([801, 999, 2, 5]);
+  });
+
+  it("НОРМАЛНА линия без налична партида → блок 400 (без back-order)", async () => {
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          { id: 53, status: "pending", partner_id: 1, total_amount: "10" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 802,
+            order_id: 53,
+            product_id: 13,
+            quantity: "1",
+            unit_price: "10",
+            line_status: "normal",
+            is_returning: false,
+            batch_id: null,
+          },
+        ]),
+      )
+      // allocateFefo SELECT → нищо налично → InsufficientStockError → 400
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/53/fulfill",
+    });
+    expect(res.statusCode).toBe(400);
   });
 });
 
@@ -438,8 +556,8 @@ describe("Batch F1 — POST /orders/:id/items/:itemId/confirm-from-awaiting", ()
           },
         ]),
       )
-      // 3. UPDATE inventory (batch 50)
-      .mockResolvedValueOnce(rows([]))
+      // 3. UPDATE inventory (batch 50) — rowCount 1 → не влиза в INSERT branch
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 } as any)
       // 4. UPDATE batches (batch 50)
       .mockResolvedValueOnce(rows([]))
       // 5. INSERT order_item_batches (batch 50)

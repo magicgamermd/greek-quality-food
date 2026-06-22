@@ -241,6 +241,139 @@ describe("orders route — back-order / negative inventory", () => {
     }
   });
 
+  it("paid_not_taken back-order: успява без наличност (минус срещу 'НАЧАЛНО')", async () => {
+    // Платена линия без налична партида → НЕ блокира; изписва shortfall в
+    // минус срещу откриващата партида и поръчката се изпълнява.
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          { id: 45, status: "pending", partner_id: 1, total_amount: "30" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 530,
+            order_id: 45,
+            product_id: 14,
+            quantity: "3",
+            unit_price: "10",
+            line_status: "paid_not_taken",
+            is_returning: false,
+            batch_id: null,
+          },
+        ]),
+      )
+      // allocateFefo SELECT → нищо налично (shortfall=3)
+      .mockResolvedValueOnce(rows([]))
+      // getOrCreateOpeningBatch: SELECT откриваща → липсва
+      .mockResolvedValueOnce(rows([]))
+      // SELECT purchase_price FROM products
+      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
+      // INSERT batches (НАЧАЛНО) RETURNING id
+      .mockResolvedValueOnce(rows([{ id: 888 }]))
+      // UPDATE inventory (откриваща) → rowCount 0 → INSERT branch
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      // INSERT inventory (откриваща, минус)
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE batches (откриваща, минус)
+      .mockResolvedValueOnce(rows([]))
+      // INSERT order_item_batches
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE order_items snapshot
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE orders SET status='fulfilled'
+      .mockResolvedValueOnce(rows([]))
+      // INSERT INTO notifications
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders/45/fulfill",
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      // Минус наличност срещу откриващата партида (INSERT с -3).
+      const invInsert = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("INSERT INTO inventory"),
+      );
+      expect(invInsert).toBeDefined();
+      expect(invInsert![1]).toEqual([14, 888, 1, -3]);
+
+      // order_item_batches ред за shortfall.
+      const oibInsert = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("INSERT INTO order_item_batches"),
+      );
+      expect(oibInsert).toBeDefined();
+      expect(oibInsert![1]).toEqual([530, 888, 3, 5]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("ИЗТЕКЛА партида → блок 400 (дори за paid_not_taken? не — нормална линия)", async () => {
+    // Изтеклата партида се пропуска от FEFO. За НОРМАЛНА линия без друга
+    // налична партида → InsufficientStockError → 400.
+    const expired = "2000-01-01";
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          { id: 46, status: "pending", partner_id: 1, total_amount: "10" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 540,
+            order_id: 46,
+            product_id: 15,
+            quantity: "1",
+            unit_price: "10",
+            line_status: "normal",
+            is_returning: false,
+            batch_id: null,
+          },
+        ]),
+      )
+      // allocateFefo SELECT → само изтекла партида (пропусната) → 400
+      .mockResolvedValueOnce(
+        rows([
+          {
+            batch_id: 77,
+            batch_number: "OLD",
+            expiry_date: expired,
+            purchase_price: "5",
+            available: "100",
+          },
+        ]),
+      );
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders/46/fulfill",
+      });
+
+      expect(res.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("POST /orders succeeds with warnings.oversell when stock is insufficient", async () => {
     const clientQuery = vi
       .fn()
