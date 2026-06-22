@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { BarChart3, Camera, CreditCard, LogOut, Trophy } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -24,6 +25,23 @@ export function OwnerLayout() {
   const { logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Докато сме в Owner частта (/owner) активираме owner PWA манифеста, така че
+  // "Инсталирай" тук дава Owner приложението. При напускане се връща главният
+  // манифест (/manifest.webmanifest), за да се инсталира целият софтуер от "/".
+  useEffect(() => {
+    const links = Array.from(
+      document.querySelectorAll<HTMLLinkElement>('link[rel="manifest"]'),
+    );
+    if (links.length === 0) return;
+    const previous = links.map(
+      (l) => l.getAttribute("href") ?? "/manifest.webmanifest",
+    );
+    links.forEach((l) => l.setAttribute("href", "/owner.webmanifest"));
+    return () => {
+      links.forEach((l, i) => l.setAttribute("href", previous[i]));
+    };
+  }, []);
 
   const currentRouteName =
     ownerRouteNames[location.pathname] ?? ownerRouteNames["/owner"];

@@ -25,13 +25,17 @@ export default defineConfig({
         "apple-touch-icon.svg",
       ],
       manifest: {
-        name: "Greek Quality Food Owner PWA",
-        short_name: "GQF",
+        // ОСНОВНО приложение (целият складов софтуер). Owner-ът има отделен
+        // манифест (/owner.webmanifest), който се активира динамично на /owner
+        // страниците — така главното приложение се инсталира от "/", а owner
+        // PWA-то остава отделно инсталируемо от "/owner".
+        name: "Greek Quality Food",
+        short_name: "GQF Склад",
         description:
-          "Анализи на собственика и приемане на входяща стока за Greek Quality Food",
-        id: "/owner",
-        start_url: "/owner/dashboard",
-        scope: "/owner",
+          "Складова система Greek Quality Food — приемане, поръчки, фактури, партиди, брак",
+        id: "/",
+        start_url: "/",
+        scope: "/",
         display: "standalone",
         display_override: ["standalone", "browser"],
         theme_color: "#0b1222",
@@ -54,27 +58,27 @@ export default defineConfig({
         ],
         shortcuts: [
           {
-            name: "Анализи и печалба",
-            short_name: "Анализи",
-            url: "/owner/dashboard",
+            name: "Приемане на стоки",
+            short_name: "Приемане",
+            url: "/incoming",
             icons: [{ src: "/icon-192.svg", sizes: "192x192" }],
           },
           {
-            name: "Сканирай фактура",
-            short_name: "Сканирай",
-            url: "/owner/scan",
+            name: "Поръчки",
+            short_name: "Поръчки",
+            url: "/orders",
             icons: [{ src: "/icon-192.svg", sizes: "192x192" }],
           },
           {
-            name: "Неплатени фактури",
-            short_name: "Плащания",
-            url: "/owner/payments",
+            name: "Фактури",
+            short_name: "Фактури",
+            url: "/invoices",
             icons: [{ src: "/icon-192.svg", sizes: "192x192" }],
           },
           {
-            name: "Топ продукти и партньори",
-            short_name: "Топ",
-            url: "/owner/top",
+            name: "Брак",
+            short_name: "Брак",
+            url: "/writeoffs",
             icons: [{ src: "/icon-192.svg", sizes: "192x192" }],
           },
         ],
