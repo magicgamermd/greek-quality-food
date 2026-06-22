@@ -63,18 +63,6 @@ const allNavItems: Array<{
     permission: PERMISSIONS.INCOMING_MANAGE,
   },
   {
-    to: "/stock-movements",
-    icon: ArrowLeftRight,
-    label: "Завеждане / Изписване",
-    permission: PERMISSIONS.STOCK_MOVEMENTS_MANAGE,
-  },
-  {
-    to: "/writeoffs",
-    icon: Trash2,
-    label: "Брак",
-    permission: PERMISSIONS.INVENTORY_VIEW,
-  },
-  {
     to: "/orders",
     icon: ShoppingCart,
     label: "Поръчки",
@@ -121,6 +109,18 @@ const allNavItems: Array<{
     icon: BarChart3,
     label: "Анализи",
     permission: PERMISSIONS.REPORTS_VIEW,
+  },
+  {
+    to: "/stock-movements",
+    icon: ArrowLeftRight,
+    label: "Завеждане / Изписване",
+    permission: PERMISSIONS.STOCK_MOVEMENTS_MANAGE,
+  },
+  {
+    to: "/writeoffs",
+    icon: Trash2,
+    label: "Брак",
+    permission: PERMISSIONS.INVENTORY_VIEW,
   },
   {
     to: "/purchase-orders",
