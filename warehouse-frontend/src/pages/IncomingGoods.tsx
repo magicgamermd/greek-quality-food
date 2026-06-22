@@ -2216,7 +2216,7 @@ export function IncomingGoods() {
                     key={index}
                     className="grid grid-cols-12 gap-3 items-end border rounded-lg p-3"
                   >
-                    <div className="col-span-12 md:col-span-5 space-y-1.5">
+                    <div className="col-span-12 md:col-span-3 space-y-1.5">
                       <Label>Артикул</Label>
                       <div className="space-y-2">
                         <div className="relative">
@@ -2328,7 +2328,7 @@ export function IncomingGoods() {
                         ) : null}
                       </div>
                     </div>
-                    <div className="col-span-4 md:col-span-2 space-y-1.5">
+                    <div className="col-span-4 md:col-span-1 space-y-1.5">
                       <Label>Кол-во</Label>
                       <Input
                         ref={(el) => {
@@ -2353,7 +2353,7 @@ export function IncomingGoods() {
                         placeholder="0"
                       />
                     </div>
-                    <div className="col-span-4 md:col-span-2 space-y-1.5">
+                    <div className="col-span-4 md:col-span-1 space-y-1.5">
                       <Label>Мярка</Label>
                       <Input
                         ref={(el) => {
@@ -2398,7 +2398,7 @@ export function IncomingGoods() {
                         placeholder="0.00"
                       />
                     </div>
-                    <div className="col-span-6 md:col-span-3 space-y-1.5">
+                    <div className="col-span-6 md:col-span-2 space-y-1.5">
                       <Label>Партида</Label>
                       <Input
                         value={item.batch_number}
@@ -2414,7 +2414,7 @@ export function IncomingGoods() {
                         placeholder="напр. L2024-15"
                       />
                     </div>
-                    <div className="col-span-6 md:col-span-3 space-y-1.5">
+                    <div className="col-span-4 md:col-span-2 space-y-1.5">
                       <Label>Срок на годност</Label>
                       <Input
                         type="date"
