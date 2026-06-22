@@ -18,6 +18,7 @@ import { Products } from "@/pages/Products";
 import { Inventory } from "@/pages/Inventory";
 import { IncomingGoods } from "@/pages/IncomingGoods";
 import { StockMovements } from "@/pages/StockMovements";
+import { Writeoffs } from "@/pages/Writeoffs";
 import { Orders } from "@/pages/Orders";
 import { WarehousePacking } from "@/pages/WarehousePacking";
 import { EcontQueue } from "@/pages/EcontQueue";
@@ -201,6 +202,14 @@ function AppRoutes() {
           element={
             <ProtectedRoute allowedRoles={["admin", "warehouse"]}>
               <IncomingGoods />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="writeoffs"
+          element={
+            <ProtectedRoute allowedRoles={["admin", "warehouse"]}>
+              <Writeoffs />
             </ProtectedRoute>
           }
         />

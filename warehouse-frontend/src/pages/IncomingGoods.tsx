@@ -128,6 +128,107 @@ interface ManualRowProductOption {
   selling_price?: number | null;
 }
 
+// Self-contained product picker for NEW rows added to a pending delivery in
+// the edit modal. Uses the same `/products?...&catalog=true` search backing
+// the manual-create form, but keeps all of its state local so it can drop into
+// a single edit-row cell without touching the manual form's per-row maps.
+function EditRowProductSearch({
+  onSelect,
+}: {
+  onSelect: (product: ManualRowProductOption) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const debouncedQuery = useDebouncedValue(query.trim(), 300);
+
+  const searchQuery = useQuery({
+    queryKey: ["incoming", "edit-row-product-search", debouncedQuery],
+    queryFn: () => fetchManualProductOptions(debouncedQuery),
+    enabled: debouncedQuery.length >= 2,
+    staleTime: 30_000,
+  });
+
+  const results = open ? (searchQuery.data ?? []) : [];
+
+  const pick = (product: ManualRowProductOption) => {
+    onSelect(product);
+    setQuery(
+      product.name_bg || product.name_en || product.sku || `#${product.id}`,
+    );
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <Input
+        type="text"
+        value={query}
+        placeholder="Търси продукт…"
+        autoComplete="off"
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          setHighlight(0);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={(e) => {
+          if (results.length === 0) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setHighlight((h) => Math.min(h + 1, results.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setHighlight((h) => Math.max(h - 1, 0));
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            const chosen = results[highlight];
+            if (chosen) pick(chosen);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+      />
+      {open && debouncedQuery.length >= 2 && (
+        <div className="absolute z-20 mt-1 w-full max-h-60 overflow-auto rounded-md border bg-white shadow-lg">
+          {searchQuery.isFetching ? (
+            <div className="px-3 py-2 text-sm text-gray-500">Търсене…</div>
+          ) : results.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-gray-500">
+              Няма намерени продукти.
+            </div>
+          ) : (
+            results.map((product, idx) => (
+              <button
+                key={product.id}
+                type="button"
+                className={`block w-full text-left px-3 py-2 text-sm hover:bg-purple-50 ${
+                  idx === highlight ? "bg-purple-50" : ""
+                }`}
+                // onMouseDown so it fires before the input's onBlur closes us
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pick(product);
+                }}
+              >
+                <span className="font-medium">
+                  {product.name_bg || product.name_en || `#${product.id}`}
+                </span>
+                {product.sku && (
+                  <span className="ml-2 text-xs text-gray-500">
+                    {product.sku}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function itemDisplayName(item: ScannedInvoiceItem): string {
   return (
     item.name_bg ||
@@ -165,6 +266,10 @@ function normalizeScannedInvoice(raw: any): ScannedInvoice {
       unit: li.unit ?? "бр",
       price: unitPrice,
       unit_price: unitPrice,
+      batch_number: li.batch_number ?? li.batch_number_raw ?? null,
+      batch_number_raw: li.batch_number_raw ?? null,
+      expiry_date: li.expiry_date ?? li.expiry_date_raw ?? null,
+      expiry_date_raw: li.expiry_date_raw ?? null,
       total: toOptionalNumber(li.total_price ?? li.total),
       brand: li.brand ?? null,
       category_hint: li.category_hint ?? null,
@@ -247,6 +352,8 @@ export function IncomingGoods() {
       quantity: string;
       unit_price: string;
       unit: string;
+      batch_number: string;
+      expiry_date: string;
       original_purchase_price: number | null;
     }[]
   >([
@@ -256,6 +363,8 @@ export function IncomingGoods() {
       quantity: "",
       unit_price: "",
       unit: "бр",
+      batch_number: "",
+      expiry_date: "",
       original_purchase_price: null,
     },
   ]);
@@ -273,11 +382,15 @@ export function IncomingGoods() {
   const manualScrollRef = useRef<HTMLDivElement>(null);
   const invoiceNumberRef = useRef<HTMLInputElement>(null);
   const invoiceDateRef = useRef<HTMLInputElement>(null);
-  const rowInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const rowInputRefs = useRef<
+    Record<string, HTMLInputElement | HTMLSelectElement | null>
+  >({});
   const pendingFocusRef = useRef<string | null>(null);
 
   const ROW_FIELD_ORDER = [
     "product",
+    "batch_number",
+    "expiry_date",
     "quantity",
     "unit",
     "unit_price",
@@ -289,7 +402,7 @@ export function IncomingGoods() {
     const el = rowInputRefs.current[key];
     if (el) {
       el.focus();
-      el.select?.();
+      if (el instanceof HTMLInputElement) el.select();
       // Scroll the modal so the active field is visible.
       // For the product search field we center more aggressively to leave
       // room for the dropdown below it.
@@ -326,7 +439,7 @@ export function IncomingGoods() {
     const el = rowInputRefs.current[key];
     if (el) {
       el.focus();
-      el.select?.();
+      if (el instanceof HTMLInputElement) el.select();
       // Scroll the modal's container so the new row is visible
       if (manualScrollRef.current) {
         manualScrollRef.current.scrollTo({
@@ -443,6 +556,8 @@ export function IncomingGoods() {
         quantity: "",
         unit_price: "",
         unit: "бр",
+        batch_number: "",
+        expiry_date: "",
         original_purchase_price: null,
       },
     ]);
@@ -514,6 +629,34 @@ export function IncomingGoods() {
                 ...item,
                 selling_price: value === "" ? null : toOptionalNumber(value),
               }
+            : item,
+        ),
+      };
+    });
+  };
+
+  const updateRowBatchNumber = (rowIndex: number, value: string) => {
+    setScanned((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item, index) =>
+          index === rowIndex
+            ? { ...item, batch_number: value === "" ? null : value }
+            : item,
+        ),
+      };
+    });
+  };
+
+  const updateRowExpiryDate = (rowIndex: number, value: string) => {
+    setScanned((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item, index) =>
+          index === rowIndex
+            ? { ...item, expiry_date: value === "" ? null : value }
             : item,
         ),
       };
@@ -755,6 +898,11 @@ export function IncomingGoods() {
             selling_price: dbSelling,
             selling_price_db: dbSelling,
             unit: item.unit || "бр",
+            // Batch / expiry — editable on pending deliveries (FEFO).
+            batch_number: item.batch_number ?? "",
+            expiry_date: item.expiry_date
+              ? String(item.expiry_date).slice(0, 10)
+              : "",
             // Dirty flags
             dirty: false,
             toDelete: false,
@@ -780,9 +928,48 @@ export function IncomingGoods() {
     setCancelReason("");
   };
 
+  // Append a blank NEW row to a pending delivery's edit list. New rows carry
+  // `isNew` + `id: null` so they render with a product picker and are POSTed
+  // (not PATCHed) on save.
+  const addEditRow = () => {
+    setEditItems((current) => [
+      ...current,
+      {
+        id: null,
+        isNew: true,
+        product_id: null,
+        product_name: "",
+        quantity: "",
+        unit_price: "",
+        selling_price: "",
+        selling_price_db: "",
+        unit: "бр",
+        batch_number: "",
+        expiry_date: "",
+        dirty: true,
+        toDelete: false,
+      },
+    ]);
+  };
+
   const saveEditChangesMutation = useMutation({
     mutationFn: async () => {
       if (!selectedDoc) throw new Error("No doc selected");
+
+      // Validate NEW rows: each must have a picked product + quantity > 0.
+      // Block the whole save with a clear Bulgarian message rather than
+      // silently dropping a half-filled row the user expected to keep.
+      const incompleteNewRow = editItems.find(
+        (i) =>
+          i.isNew &&
+          !i.toDelete &&
+          (!i.product_id || !(Number(i.quantity) > 0)),
+      );
+      if (incompleteNewRow) {
+        throw new Error(
+          "Избери продукт и въведи количество (> 0) за всеки нов артикул.",
+        );
+      }
 
       // Delete marked items
       const toDelete = editItems.filter((i) => i.toDelete && i.id);
@@ -820,9 +1007,28 @@ export function IncomingGoods() {
           id: i.id,
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price || 0),
+          batch_number: (i.batch_number ?? "").trim() || null,
+          expiry_date: (i.expiry_date ?? "").trim() || null,
         }));
       if (dirty.length > 0) {
         await api.patch(`/incoming/${selectedDoc.id}/items`, { items: dirty });
+      }
+
+      // Create NEW rows (no id) on the pending delivery. Validation above
+      // guarantees product_id + quantity > 0 for any non-deleted new row.
+      const newRows = editItems.filter(
+        (i) => i.isNew && !i.toDelete && i.product_id && Number(i.quantity) > 0,
+      );
+      for (const row of newRows) {
+        await api.post(`/incoming/${selectedDoc.id}/items`, {
+          product_id: Number(row.product_id),
+          quantity: Number(row.quantity),
+          unit_price: Number(row.unit_price || 0),
+          selling_price:
+            row.selling_price !== "" ? Number(row.selling_price) : null,
+          batch_number: (row.batch_number ?? "").trim() || null,
+          expiry_date: (row.expiry_date ?? "").trim() || null,
+        });
       }
 
       // Sync changed selling prices back to the products catalog.
@@ -1093,6 +1299,8 @@ export function IncomingGoods() {
             unit: item.unit ?? undefined,
             quantity: item.quantity,
             unit_price: itemPrices[i] ?? item.unit_price ?? item.price ?? 0,
+            batch_number: item.batch_number || null,
+            expiry_date: item.expiry_date || null,
             selling_price:
               item.selling_price != null ? item.selling_price : undefined,
           };
@@ -1222,7 +1430,7 @@ export function IncomingGoods() {
     );
     setManualSearchDismissed((current) => ({ ...current, [rowIndex]: true }));
     // Focus the quantity field after picking a product
-    setTimeout(() => focusRowField(rowIndex, "quantity"), 0);
+    setTimeout(() => focusRowField(rowIndex, "batch_number"), 0);
   };
 
   const addManualRow = (focusIndex?: number) => {
@@ -1235,6 +1443,8 @@ export function IncomingGoods() {
           quantity: "",
           unit_price: "",
           unit: "бр",
+          batch_number: "",
+          expiry_date: "",
           original_purchase_price: null,
         },
       ];
@@ -1244,7 +1454,7 @@ export function IncomingGoods() {
   };
 
   const handleRowFieldEnter = (
-    e: React.KeyboardEvent<HTMLInputElement>,
+    e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>,
     index: number,
     field: RowField,
   ) => {
@@ -1283,7 +1493,7 @@ export function IncomingGoods() {
         }
         if (manualItems[index]?.product_id) {
           e.preventDefault();
-          focusRowField(index, "quantity");
+          focusRowField(index, "batch_number");
         }
       }
       return;
@@ -1324,6 +1534,8 @@ export function IncomingGoods() {
           quantity: Number(item.quantity),
           unit_price: Number(item.unit_price || 0),
           unit: item.unit.trim() || "бр",
+          batch_number: item.batch_number.trim() || null,
+          expiry_date: item.expiry_date || null,
         }))
         .filter((item) => item.product_name);
 
@@ -1811,16 +2023,97 @@ export function IncomingGoods() {
                             key={item.id ?? index}
                             className="grid grid-cols-12 md:grid-cols-[repeat(12,minmax(0,1fr))] gap-3 items-end border rounded-lg p-3"
                           >
-                            <div className="col-span-12 md:col-span-5 space-y-1.5">
+                            <div className="col-span-12 md:col-span-3 space-y-1.5">
                               <Label>Артикул</Label>
-                              <div
-                                className="h-11 flex items-center px-3 border rounded-md bg-gray-50 text-sm"
-                                title={item.product_name}
-                              >
-                                <span className="truncate">
-                                  {item.product_name}
-                                </span>
-                              </div>
+                              {item.isNew && !item.product_id ? (
+                                <EditRowProductSearch
+                                  onSelect={(product) =>
+                                    setEditItems((current) =>
+                                      current.map((entry, i) =>
+                                        i === index
+                                          ? {
+                                              ...entry,
+                                              product_id: product.id,
+                                              product_name:
+                                                product.name_bg ||
+                                                product.name_en ||
+                                                product.sku ||
+                                                `#${product.id}`,
+                                              unit: product.unit || entry.unit,
+                                              unit_price:
+                                                entry.unit_price ||
+                                                (product.purchase_price != null
+                                                  ? String(
+                                                      product.purchase_price,
+                                                    )
+                                                  : ""),
+                                              selling_price:
+                                                entry.selling_price ||
+                                                (product.selling_price != null
+                                                  ? String(
+                                                      product.selling_price,
+                                                    )
+                                                  : ""),
+                                              dirty: true,
+                                            }
+                                          : entry,
+                                      ),
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <div
+                                  className="h-11 flex items-center px-3 border rounded-md bg-gray-50 text-sm"
+                                  title={item.product_name}
+                                >
+                                  <span className="truncate">
+                                    {item.product_name}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                            <div className="col-span-6 md:col-span-2 space-y-1.5">
+                              <Label>Партида</Label>
+                              <Input
+                                type="text"
+                                value={item.batch_number ?? ""}
+                                disabled={readonly}
+                                placeholder="напр. L2024-15"
+                                onChange={(e) =>
+                                  setEditItems((current) =>
+                                    current.map((entry, i) =>
+                                      i === index
+                                        ? {
+                                            ...entry,
+                                            batch_number: e.target.value,
+                                            dirty: true,
+                                          }
+                                        : entry,
+                                    ),
+                                  )
+                                }
+                              />
+                            </div>
+                            <div className="col-span-6 md:col-span-2 space-y-1.5">
+                              <Label>Срок на годност</Label>
+                              <Input
+                                type="date"
+                                value={item.expiry_date ?? ""}
+                                disabled={readonly}
+                                onChange={(e) =>
+                                  setEditItems((current) =>
+                                    current.map((entry, i) =>
+                                      i === index
+                                        ? {
+                                            ...entry,
+                                            expiry_date: e.target.value,
+                                            dirty: true,
+                                          }
+                                        : entry,
+                                    ),
+                                  )
+                                }
+                              />
                             </div>
                             <div className="col-span-4 md:col-span-1 space-y-1.5">
                               <Label>Кол-во</Label>
@@ -1851,7 +2144,7 @@ export function IncomingGoods() {
                                 {item.unit}
                               </div>
                             </div>
-                            <div className="col-span-4 md:col-span-2 space-y-1.5">
+                            <div className="col-span-4 md:col-span-1 space-y-1.5">
                               <Label>Ед. цена</Label>
                               <Input
                                 type="number"
@@ -1874,7 +2167,7 @@ export function IncomingGoods() {
                                 }
                               />
                             </div>
-                            <div className="col-span-6 md:col-span-2 space-y-1.5">
+                            <div className="col-span-6 md:col-span-1 space-y-1.5">
                               <Label
                                 className={
                                   sellingPriceChanged
@@ -1925,11 +2218,16 @@ export function IncomingGoods() {
                                   aria-label="Изтрий артикул"
                                   onClick={() =>
                                     setEditItems((current) =>
-                                      current.map((entry, i) =>
-                                        i === index
-                                          ? { ...entry, toDelete: true }
-                                          : entry,
-                                      ),
+                                      // New unsaved rows: drop from the array
+                                      // (no backend item to delete). Existing
+                                      // rows: mark for DELETE on save.
+                                      item.isNew
+                                        ? current.filter((_, i) => i !== index)
+                                        : current.map((entry, i) =>
+                                            i === index
+                                              ? { ...entry, toDelete: true }
+                                              : entry,
+                                          ),
                                     )
                                   }
                                   title="Изтрий ред"
@@ -1951,6 +2249,19 @@ export function IncomingGoods() {
                         );
                       })}
                     </div>
+                  )}
+
+                  {selectedDoc?.status === "pending" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addEditRow}
+                      disabled={editSaving}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Добави артикул
+                    </Button>
                   )}
                 </div>
 
@@ -2170,9 +2481,9 @@ export function IncomingGoods() {
                 {manualItems.map((item, index) => (
                   <div
                     key={index}
-                    className="grid grid-cols-12 gap-3 items-end border rounded-lg p-3"
+                    className="grid grid-cols-1 md:grid-cols-[1.8fr_1fr_1fr_0.8fr_0.9fr_0.9fr_2.5rem] gap-3 items-end border rounded-lg p-3"
                   >
-                    <div className="col-span-12 md:col-span-5 space-y-1.5">
+                    <div className="space-y-1.5 min-w-0 md:order-1">
                       <Label>Артикул</Label>
                       <div className="space-y-2">
                         <div className="relative">
@@ -2205,7 +2516,7 @@ export function IncomingGoods() {
                               handleRowFieldEnter(e, index, "product")
                             }
                             placeholder="Търси продукт по име или SKU..."
-                            className="h-12 text-base pr-10"
+                            className="h-9 text-sm pr-9"
                           />
                           {getManualSearchLoading(index) ? (
                             <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -2284,7 +2595,7 @@ export function IncomingGoods() {
                         ) : null}
                       </div>
                     </div>
-                    <div className="col-span-4 md:col-span-2 space-y-1.5">
+                    <div className="space-y-1.5 md:order-4">
                       <Label>Кол-во</Label>
                       <Input
                         ref={(el) => {
@@ -2309,9 +2620,9 @@ export function IncomingGoods() {
                         placeholder="0"
                       />
                     </div>
-                    <div className="col-span-4 md:col-span-2 space-y-1.5">
+                    <div className="space-y-1.5 md:order-5">
                       <Label>Мярка</Label>
-                      <Input
+                      <select
                         ref={(el) => {
                           rowInputRefs.current[`${index}:unit`] = el;
                         }}
@@ -2326,10 +2637,32 @@ export function IncomingGoods() {
                           )
                         }
                         onKeyDown={(e) => handleRowFieldEnter(e, index, "unit")}
-                        placeholder="бр"
-                      />
+                        className="flex h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
+                      >
+                        {item.unit &&
+                        ![
+                          "бр",
+                          "кг",
+                          "г",
+                          "л",
+                          "мл",
+                          "оп.",
+                          "каш.",
+                          "пал.",
+                        ].includes(item.unit) ? (
+                          <option value={item.unit}>{item.unit}</option>
+                        ) : null}
+                        <option value="бр">бр</option>
+                        <option value="кг">кг</option>
+                        <option value="г">г</option>
+                        <option value="л">л</option>
+                        <option value="мл">мл</option>
+                        <option value="оп.">оп.</option>
+                        <option value="каш.">каш.</option>
+                        <option value="пал.">пал.</option>
+                      </select>
                     </div>
-                    <div className="col-span-4 md:col-span-2 space-y-1.5">
+                    <div className="space-y-1.5 md:order-6">
                       <Label>Ед. цена</Label>
                       <Input
                         ref={(el) => {
@@ -2354,7 +2687,51 @@ export function IncomingGoods() {
                         placeholder="0.00"
                       />
                     </div>
-                    <div className="col-span-12 md:col-span-1 flex justify-end items-end">
+                    <div className="space-y-1.5 md:order-2">
+                      <Label>Партида</Label>
+                      <Input
+                        ref={(el) => {
+                          rowInputRefs.current[`${index}:batch_number`] = el;
+                        }}
+                        value={item.batch_number}
+                        onChange={(e) =>
+                          setManualItems((current) =>
+                            current.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, batch_number: e.target.value }
+                                : entry,
+                            ),
+                          )
+                        }
+                        onKeyDown={(e) =>
+                          handleRowFieldEnter(e, index, "batch_number")
+                        }
+                        placeholder="напр. L2024-15"
+                      />
+                    </div>
+                    <div className="space-y-1.5 md:order-3">
+                      <Label>Срок на годност</Label>
+                      <Input
+                        type="date"
+                        ref={(el) => {
+                          rowInputRefs.current[`${index}:expiry_date`] = el;
+                        }}
+                        value={item.expiry_date}
+                        onChange={(e) =>
+                          setManualItems((current) =>
+                            current.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, expiry_date: e.target.value }
+                                : entry,
+                            ),
+                          )
+                        }
+                        onKeyDown={(e) =>
+                          handleRowFieldEnter(e, index, "expiry_date")
+                        }
+                      />
+                    </div>
+                    <div className="flex justify-end items-end md:order-7">
                       <Button
                         type="button"
                         variant="ghost"
@@ -2370,6 +2747,8 @@ export function IncomingGoods() {
                                     quantity: "",
                                     unit_price: "",
                                     unit: "бр",
+                                    batch_number: "",
+                                    expiry_date: "",
                                     original_purchase_price: null,
                                   },
                                 ]
@@ -2729,6 +3108,54 @@ export function IncomingGoods() {
                                     </p>
                                   )}
                               </div>
+                            </div>
+                          </div>
+
+                          {/* Batch number + expiry date (lot tracking) */}
+                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                Партида
+                              </Label>
+                              <Input
+                                value={item.batch_number ?? ""}
+                                onChange={(e) =>
+                                  updateRowBatchNumber(index, e.target.value)
+                                }
+                                placeholder="напр. L2024-15"
+                                className={
+                                  !item.batch_number
+                                    ? "border-amber-400 focus-visible:ring-amber-400"
+                                    : undefined
+                                }
+                              />
+                              {!item.batch_number && (
+                                <p className="text-[11px] text-amber-600">
+                                  Липсва партида
+                                </p>
+                              )}
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">
+                                Срок на годност
+                              </Label>
+                              <Input
+                                type="date"
+                                value={item.expiry_date ?? ""}
+                                onChange={(e) =>
+                                  updateRowExpiryDate(index, e.target.value)
+                                }
+                                className={
+                                  !item.expiry_date
+                                    ? "border-amber-400 focus-visible:ring-amber-400"
+                                    : undefined
+                                }
+                              />
+                              {!item.expiry_date && (
+                                <p className="text-[11px] text-amber-600">
+                                  Липсва срок на годност
+                                </p>
+                              )}
                             </div>
                           </div>
 

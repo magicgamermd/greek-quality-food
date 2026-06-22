@@ -44,12 +44,10 @@ describe("orders route — back-order / negative inventory", () => {
     mockQuery.mockResolvedValue({ rows: [] } as any);
   });
 
-  it("fulfill allows inventory.quantity to go negative (UPDATE drops the >= guard)", async () => {
-    // Order #42 has a single pending item (product 7, qty 3). Stock is 0.
-    // After Batch F1, normal lines refuse to go negative — paid_not_taken
-    // is the new opt-in for negative inventory (customer already paid,
-    // promised stock can run negative). The line_status='paid_not_taken'
-    // here keeps the test's intent (verify the >= guard is gone) intact.
+  it("fulfill изписва FEFO по партида (без guard върху наличността)", async () => {
+    // GQF: order #42 has a single pending item (product 7, qty 3). FEFO
+    // избира партида 60 (10 налични) и изписва 3. UPDATE inventory е по
+    // партида и не носи стария >= guard.
     const clientQuery = vi
       .fn()
       // 1. SELECT * FROM orders WHERE id = $1 FOR UPDATE
@@ -72,21 +70,35 @@ describe("orders route — back-order / negative inventory", () => {
             product_id: 7,
             quantity: "3",
             unit_price: "10",
-            line_status: "paid_not_taken",
+            line_status: "normal",
+            is_returning: false,
+            batch_id: null,
           },
         ]),
       )
-      // 3. deductProductStock UPDATE inventory ... RETURNING quantity
-      //    Current stock is 0 → new stock is -3. Row IS returned.
-      //    No pre-check SELECT — paid_not_taken passes allowNegative=true.
-      .mockResolvedValueOnce(rows([{ quantity: "-3" }]))
-      // 4. SELECT purchase_price FROM products WHERE id = $1
-      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
-      // 5. UPDATE order_items SET cost_unit_price ... (one per item)
+      // 3. allocateFefo SELECT
+      .mockResolvedValueOnce(
+        rows([
+          {
+            batch_id: 60,
+            batch_number: "B-60",
+            expiry_date: "2099-01-01",
+            purchase_price: "5",
+            available: "10",
+          },
+        ]),
+      )
+      // 4. UPDATE inventory (batch 60)
       .mockResolvedValueOnce(rows([]))
-      // 6. UPDATE orders SET status='fulfilled', fulfilled_at = NOW() ...
+      // 5. UPDATE batches (batch 60)
       .mockResolvedValueOnce(rows([]))
-      // 7. INSERT INTO notifications
+      // 6. INSERT order_item_batches
+      .mockResolvedValueOnce(rows([]))
+      // 7. UPDATE order_items snapshot
+      .mockResolvedValueOnce(rows([]))
+      // 8. UPDATE orders SET status='fulfilled'
+      .mockResolvedValueOnce(rows([]))
+      // 9. INSERT INTO notifications
       .mockResolvedValueOnce(rows([]));
 
     mockTransaction.mockImplementation(async (callback: any) =>
@@ -102,7 +114,7 @@ describe("orders route — back-order / negative inventory", () => {
 
       expect(res.statusCode).toBe(200);
 
-      // The deductProductStock UPDATE must NOT carry the old guard.
+      // The FEFO deduction UPDATE must NOT carry the old guard.
       const deductCall = clientQuery.mock.calls.find(
         (call: any[]) =>
           String(call[0]).includes("UPDATE inventory") &&
@@ -110,12 +122,13 @@ describe("orders route — back-order / negative inventory", () => {
       );
       expect(deductCall).toBeDefined();
       expect(String(deductCall![0])).not.toMatch(/quantity\s*>=\s*\$/);
+      expect(deductCall![1]).toEqual([3, 7, 1, 60]);
     } finally {
       await app.close();
     }
   });
 
-  it("fulfill falls back to INSERT when inventory row is missing entirely", async () => {
+  it("fulfill записва order_item_batches за разпределената партида", async () => {
     const clientQuery = vi
       .fn()
       .mockResolvedValueOnce(
@@ -131,18 +144,31 @@ describe("orders route — back-order / negative inventory", () => {
             product_id: 8,
             quantity: "2",
             unit_price: "10",
-            line_status: "paid_not_taken",
+            line_status: "normal",
+            is_returning: false,
+            batch_id: null,
           },
         ]),
       )
-      // UPDATE inventory ... RETURNING quantity → 0 rows (no match)
-      // No pre-check SELECT — paid_not_taken passes allowNegative=true.
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
-      // INSERT INTO inventory ... VALUES ($1, 1, $2, NULL)
+      // allocateFefo SELECT
+      .mockResolvedValueOnce(
+        rows([
+          {
+            batch_id: 61,
+            batch_number: "B-61",
+            expiry_date: "2099-01-01",
+            purchase_price: "5",
+            available: "5",
+          },
+        ]),
+      )
+      // UPDATE inventory
       .mockResolvedValueOnce(rows([]))
-      // SELECT purchase_price
-      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
-      // UPDATE order_items SET cost_unit_price
+      // UPDATE batches
+      .mockResolvedValueOnce(rows([]))
+      // INSERT order_item_batches
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE order_items snapshot
       .mockResolvedValueOnce(rows([]))
       // UPDATE orders SET status='fulfilled'
       .mockResolvedValueOnce(rows([]))
@@ -162,17 +188,18 @@ describe("orders route — back-order / negative inventory", () => {
 
       expect(res.statusCode).toBe(200);
 
-      const insertCall = clientQuery.mock.calls.find((call: any[]) =>
-        String(call[0]).includes("INSERT INTO inventory"),
+      const oibInsert = clientQuery.mock.calls.find((call: any[]) =>
+        String(call[0]).includes("INSERT INTO order_item_batches"),
       );
-      expect(insertCall).toBeDefined();
-      expect(insertCall![1]).toEqual([8, -2]);
+      expect(oibInsert).toBeDefined();
+      // [order_item_id, batch_id, quantity, unit_cost]
+      expect(oibInsert![1]).toEqual([510, 61, 2, 5]);
     } finally {
       await app.close();
     }
   });
 
-  it("insufficient_stock error is no longer thrown on fulfillment", async () => {
+  it("fulfill блокира с 400 когато няма неизтекла партидна наличност", async () => {
     const clientQuery = vi
       .fn()
       .mockResolvedValueOnce(
@@ -188,14 +215,13 @@ describe("orders route — back-order / negative inventory", () => {
             product_id: 9,
             quantity: "10",
             unit_price: "10",
-            line_status: "paid_not_taken",
+            line_status: "normal",
+            is_returning: false,
+            batch_id: null,
           },
         ]),
       )
-      .mockResolvedValueOnce(rows([{ quantity: "-10" }]))
-      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
-      .mockResolvedValueOnce(rows([]))
-      .mockResolvedValueOnce(rows([]))
+      // allocateFefo SELECT — no batches available → InsufficientStockError → 400
       .mockResolvedValueOnce(rows([]));
 
     mockTransaction.mockImplementation(async (callback: any) =>
@@ -209,8 +235,140 @@ describe("orders route — back-order / negative inventory", () => {
         url: "/orders/44/fulfill",
       });
 
+      expect(res.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("paid_not_taken back-order: успява без наличност (минус срещу 'НАЧАЛНО')", async () => {
+    // Платена линия без налична партида → НЕ блокира; изписва shortfall в
+    // минус срещу откриващата партида и поръчката се изпълнява.
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          { id: 45, status: "pending", partner_id: 1, total_amount: "30" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 530,
+            order_id: 45,
+            product_id: 14,
+            quantity: "3",
+            unit_price: "10",
+            line_status: "paid_not_taken",
+            is_returning: false,
+            batch_id: null,
+          },
+        ]),
+      )
+      // allocateFefo SELECT → нищо налично (shortfall=3)
+      .mockResolvedValueOnce(rows([]))
+      // getOrCreateOpeningBatch: SELECT откриваща → липсва
+      .mockResolvedValueOnce(rows([]))
+      // SELECT purchase_price FROM products
+      .mockResolvedValueOnce(rows([{ purchase_price: "5" }]))
+      // INSERT batches (НАЧАЛНО) RETURNING id
+      .mockResolvedValueOnce(rows([{ id: 888 }]))
+      // UPDATE inventory (откриваща) → rowCount 0 → INSERT branch
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      // INSERT inventory (откриваща, минус)
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE batches (откриваща, минус)
+      .mockResolvedValueOnce(rows([]))
+      // INSERT order_item_batches
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE order_items snapshot
+      .mockResolvedValueOnce(rows([]))
+      // UPDATE orders SET status='fulfilled'
+      .mockResolvedValueOnce(rows([]))
+      // INSERT INTO notifications
+      .mockResolvedValueOnce(rows([]));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders/45/fulfill",
+      });
+
       expect(res.statusCode).toBe(200);
-      expect(res.json()).not.toHaveProperty("error", "insufficient_stock");
+
+      // Минус наличност срещу откриващата партида (INSERT с -3).
+      const invInsert = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("INSERT INTO inventory"),
+      );
+      expect(invInsert).toBeDefined();
+      expect(invInsert![1]).toEqual([14, 888, 1, -3]);
+
+      // order_item_batches ред за shortfall.
+      const oibInsert = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("INSERT INTO order_item_batches"),
+      );
+      expect(oibInsert).toBeDefined();
+      expect(oibInsert![1]).toEqual([530, 888, 3, 5]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("ИЗТЕКЛА партида → блок 400 (дори за paid_not_taken? не — нормална линия)", async () => {
+    // Изтеклата партида се пропуска от FEFO. За НОРМАЛНА линия без друга
+    // налична партида → InsufficientStockError → 400.
+    const expired = "2000-01-01";
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        rows([
+          { id: 46, status: "pending", partner_id: 1, total_amount: "10" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: 540,
+            order_id: 46,
+            product_id: 15,
+            quantity: "1",
+            unit_price: "10",
+            line_status: "normal",
+            is_returning: false,
+            batch_id: null,
+          },
+        ]),
+      )
+      // allocateFefo SELECT → само изтекла партида (пропусната) → 400
+      .mockResolvedValueOnce(
+        rows([
+          {
+            batch_id: 77,
+            batch_number: "OLD",
+            expiry_date: expired,
+            purchase_price: "5",
+            available: "100",
+          },
+        ]),
+      );
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/orders/46/fulfill",
+      });
+
+      expect(res.statusCode).toBe(400);
     } finally {
       await app.close();
     }
@@ -339,9 +497,15 @@ describe("orders route — back-order / negative inventory", () => {
           },
         ]),
       )
+      // INSERT INTO batches (no batch_number on the line → auto batch)
+      .mockResolvedValueOnce(rows([{ id: 7001 }]))
       // INSERT INTO inventory ... ON CONFLICT DO UPDATE
       .mockResolvedValueOnce(rows([]))
+      // UPDATE incoming_items SET batch_id
+      .mockResolvedValueOnce(rows([]))
       // UPDATE products SET purchase_price
+      .mockResolvedValueOnce(rows([]))
+      // SELECT order_items pendingLines
       .mockResolvedValueOnce(rows([]))
       // INSERT INTO notifications
       .mockResolvedValueOnce(rows([]));

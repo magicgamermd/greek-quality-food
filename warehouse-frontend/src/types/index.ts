@@ -400,6 +400,10 @@ export interface ScannedInvoiceItem {
   unit: string;
   price: number;
   unit_price?: number;
+  batch_number?: string | null;
+  batch_number_raw?: string | null;
+  expiry_date?: string | null;
+  expiry_date_raw?: string | null;
   notes_raw?: string | null;
   total?: number | null;
   brand?: string | null;

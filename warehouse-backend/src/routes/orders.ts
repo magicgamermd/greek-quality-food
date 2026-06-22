@@ -8,6 +8,10 @@ import {
   PERMISSIONS,
 } from "../lib/permissions.js";
 import { restoreOrderItemsToInventory } from "../utils/order-stock.js";
+import {
+  allocateFefo,
+  InsufficientStockError,
+} from "../services/fefo-allocator.js";
 import { orderLineStatusSchema } from "../lib/order-line-status.js";
 import {
   computeBelowCostItems,
@@ -96,16 +100,18 @@ function isLatin(text: string): boolean {
   return /[a-zA-Z]/.test(text);
 }
 
-// MERT-M sells durable goods (Hendi, Bartscher, KitchenAid, Liebherr), so
-// order items are NOT linked to batches. The legacy `batch_id`, `batch_number`,
-// and `expiry_date` fields are gone from the input schema; FEFO allocation and
-// the `resolveBatchIdForItem()` helper have been deleted. Stock is deducted
-// per-product via a direct `UPDATE inventory` on the partial-unique row
-// (product_id, warehouse_id) WHERE batch_id IS NULL — see migration 045.
+// GQF продава нетрайни хранителни стоки → всяка наличност е по партида с
+// срок на годност. Изписването при експедиране е FEFO (First-Expired-First-
+// Out) през allocateFefo(): изтеклите партиди се блокират, COGS се снема от
+// реалната партида и се записва в order_item_batches. Касиерът може по
+// изключение да подаде конкретна партида на реда чрез optional `batch_id`
+// (ползва се вместо FEFO, но пак се проверява за изтекъл срок и наличност).
 const orderItemSchema = z.object({
   product_id: z.number().int(),
   quantity: z.number().positive(),
   unit_price: z.number().min(0).optional(),
+  // По избор — ръчно подадена партида за този ред (вместо автоматично FEFO).
+  batch_id: z.number().int().positive().optional(),
   // Per-line отстъпка % (0–100). Прилага се при запис на total_price.
   // Default 0 → backward-compatible за стари callers които не подават.
   discount_percent: z.number().min(0).max(100).optional().default(0),
@@ -1944,6 +1950,7 @@ export default async function orderRoutes(app: FastifyInstance) {
 
             let totalAmount = 0;
             const items = [];
+            const expiryWarnings: string[] = [];
 
             for (const item of body.items) {
               const prod = productMap.get(item.product_id);
@@ -1959,24 +1966,6 @@ export default async function orderRoutes(app: FastifyInstance) {
               );
               totalAmount += totalPrice;
 
-              // MERT-M: COGS is captured from products.purchase_price at the
-              // moment the order is (re)committed to stock. Batch-sourced COGS
-              // (cost_source_batch_id) is obsolete — left NULL in the DB.
-              let costUnitPrice: number | null = null;
-              if (mustReconcileStock) {
-                // Edit-order flow has historically allowed negative
-                // inventory (no pre-check). Preserve that behaviour
-                // explicitly so the new helper signature doesn't tighten
-                // edits unintentionally; line_status enforcement happens
-                // in the fulfill flow.
-                costUnitPrice = await deductProductStock(
-                  client,
-                  item.product_id,
-                  item.quantity,
-                  { allowNegative: true },
-                );
-              }
-
               // Snapshot the product identity AT THE MOMENT this line is
               // (re-)created. Existing rows that the user did not change are
               // not touched here — the loop DELETEs all order_items first and
@@ -1989,6 +1978,10 @@ export default async function orderRoutes(app: FastifyInstance) {
                 );
               }
 
+              // INSERT the line first so deductBatched() has an order_item_id
+              // to attach the per-batch allocations to. COGS / batch_id are
+              // back-filled below once FEFO has chosen the partidi.
+              const lineStatus = (item as any).line_status ?? "normal";
               const {
                 rows: [orderItem],
               } = await client.query(
@@ -2003,13 +1996,55 @@ export default async function orderRoutes(app: FastifyInstance) {
                   unitPrice,
                   discountPct,
                   totalPrice,
-                  costUnitPrice,
+                  null,
                   snap.name_bg,
                   snap.name_en,
                   snap.sku,
-                  (item as any).line_status ?? "normal",
+                  lineStatus,
                 ],
               );
+
+              // GQF: при редакция след fulfill/invoice (mustReconcileStock)
+              // стоката е била върната по-горе чрез restoreOrderItemsToInventory
+              // и сега се изписва наново по партиди (FEFO или ръчно подадена
+              // партида). Awaiting (предварителна поръчка) и returning редове
+              // не пипат наличност тук.
+              if (
+                mustReconcileStock &&
+                lineStatus !== "awaiting" &&
+                !(item as any).is_returning
+              ) {
+                try {
+                  const deduction = await deductBatched(
+                    client,
+                    orderItem.id,
+                    item.product_id,
+                    1,
+                    item.quantity,
+                    lineStatus === "paid_not_taken",
+                    item.batch_id,
+                  );
+                  expiryWarnings.push(...deduction.warnings);
+                  const firstBatch = deduction.allocations[0]?.batch_id ?? null;
+                  const costUnitPrice =
+                    item.quantity > 0 ? deduction.cost / item.quantity : null;
+                  const {
+                    rows: [refreshed],
+                  } = await client.query(
+                    `UPDATE order_items
+                        SET cost_unit_price = $1,
+                            batch_id = $2,
+                            cost_source_batch_id = $2
+                      WHERE id = $3 RETURNING *`,
+                    [costUnitPrice, firstBatch, orderItem.id],
+                  );
+                  items.push(refreshed);
+                  continue;
+                } catch (err) {
+                  throw asStockHttpError(err);
+                }
+              }
+
               items.push(orderItem);
             }
 
@@ -2064,8 +2099,15 @@ export default async function orderRoutes(app: FastifyInstance) {
               regenerated_invoice_id: regeneratedInvoiceId,
               regenerated_documents: mustReconcileStock,
             };
-            if (oversell_items.length > 0) {
-              putResponse.warnings = { oversell: oversell_items };
+            if (oversell_items.length > 0 || expiryWarnings.length > 0) {
+              putResponse.warnings = {
+                ...(oversell_items.length > 0
+                  ? { oversell: oversell_items }
+                  : {}),
+                ...(expiryWarnings.length > 0
+                  ? { expiry: expiryWarnings }
+                  : {}),
+              };
             }
             return putResponse;
           }
@@ -2249,65 +2291,91 @@ export default async function orderRoutes(app: FastifyInstance) {
           [id],
         );
 
-        // MERT-M: simple per-product deduction. COGS snapshot comes from
-        // products.purchase_price; batch-sourced COGS (cost_source_batch_id)
-        // stays NULL since there are no batches for durable goods.
+        // GQF: изписване по партиди (FEFO). За всеки ред deductBatched()
+        // избира партиди First-Expired-First-Out (или ползва ръчно подадена
+        // партида), снема COGS от реалната партида в order_item_batches и
+        // връща предупреждения за изтичащи скоро срокове.
         //
-        // Batch F1: branch on line_status —
-        //   - 'awaiting'        → pre-order; skip entirely (no stock, no COGS)
-        //   - 'paid_not_taken'  → customer already paid; allow inventory
-        //                          to go negative (promised stock)
-        //   - 'normal' (default) → standard pre-checked deduction
+        // line_status разклонения —
+        //   - 'awaiting'        → предварителна поръчка; пропуска изцяло
+        //   - 'paid_not_taken'  → клиентът вече е платил; пак FEFO (стоката
+        //                          трябва да съществува по партида)
+        //   - 'normal' (по подр.) → стандартно FEFO изписване
         //
-        // Замяна (product replacement, spec 4.2): is_returning lines come
-        // BACK from the customer, so their stock movement is REVERSED —
-        // increment inventory instead of decrementing. No COGS snapshot
-        // for return lines (the original sale already accounted for cost).
+        // Замяна (spec 4.2): is_returning редове идват ОБРАТНО от клиента →
+        // връщат се в наличност (по партидата на реда, ако има). Без COGS
+        // снимка (оригиналната продажба вече е отчела разхода).
+        const expiryWarnings: string[] = [];
         for (const item of items) {
           if (item.line_status === "awaiting") {
             continue;
           }
           if (item.is_returning) {
-            // Return line — add stock back. Mirror deductProductStock's
-            // UPDATE shape (same table, same WHERE on the partial-unique
-            // row). If no inventory row exists yet for this product,
-            // create one starting at +qty (parallels the negative-row
-            // creation in deductProductStock).
+            // Return line — add stock back. Ако редът има партида (batch_id),
+            // връщаме точно в нея; иначе fallback към реда без срок.
             const qty = parseFloat(item.quantity);
-            const { rowCount } = await client.query(
-              `UPDATE inventory
-                 SET quantity = quantity + $1,
-                     updated_at = NOW()
-               WHERE product_id = $2
-                 AND warehouse_id = 1
-                 AND batch_id IS NULL
-               RETURNING quantity`,
-              [qty, item.product_id],
-            );
-            if (!rowCount) {
-              await client.query(
-                `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
-                 VALUES ($1, 1, $2, NULL)`,
-                [item.product_id, qty],
+            if (item.batch_id) {
+              const restored = await client.query(
+                `UPDATE inventory
+                    SET quantity = quantity + $1, updated_at = NOW()
+                  WHERE product_id = $2 AND warehouse_id = 1 AND batch_id = $3`,
+                [qty, item.product_id, item.batch_id],
               );
+              if (!restored.rowCount) {
+                await client.query(
+                  `INSERT INTO inventory (product_id, batch_id, warehouse_id, quantity, updated_at)
+                   VALUES ($1, $2, 1, $3, NOW())`,
+                  [item.product_id, item.batch_id, qty],
+                );
+              }
+              await client.query(
+                "UPDATE batches SET quantity = quantity + $1, updated_at = NOW() WHERE id = $2",
+                [qty, item.batch_id],
+              );
+            } else {
+              const { rowCount } = await client.query(
+                `UPDATE inventory
+                   SET quantity = quantity + $1, updated_at = NOW()
+                 WHERE product_id = $2 AND warehouse_id = 1
+                 RETURNING quantity`,
+                [qty, item.product_id],
+              );
+              if (!rowCount) {
+                await client.query(
+                  `INSERT INTO inventory (product_id, warehouse_id, quantity)
+                   VALUES ($1, 1, $2)`,
+                  [item.product_id, qty],
+                );
+              }
             }
             // Skip COGS snapshot for return lines.
             continue;
           }
-          const allowNegative = item.line_status === "paid_not_taken";
-          const costUnitPrice = await deductProductStock(
-            client,
-            item.product_id,
-            parseFloat(item.quantity),
-            { allowNegative },
-          );
-
-          await client.query(
-            `UPDATE order_items
-             SET cost_unit_price = $1
-             WHERE id = $2`,
-            [costUnitPrice, item.id],
-          );
+          try {
+            const deduction = await deductBatched(
+              client,
+              item.id,
+              item.product_id,
+              1,
+              parseFloat(item.quantity),
+              item.line_status === "paid_not_taken",
+              item.batch_id ?? undefined,
+            );
+            expiryWarnings.push(...deduction.warnings);
+            const qtyNum = parseFloat(item.quantity);
+            const firstBatch = deduction.allocations[0]?.batch_id ?? null;
+            const costUnitPrice = qtyNum > 0 ? deduction.cost / qtyNum : null;
+            await client.query(
+              `UPDATE order_items
+                  SET cost_unit_price = $1,
+                      batch_id = $2,
+                      cost_source_batch_id = $2
+                WHERE id = $3`,
+              [costUnitPrice, firstBatch, item.id],
+            );
+          } catch (err) {
+            throw asStockHttpError(err);
+          }
         }
 
         // Mark as fulfilled
@@ -2325,6 +2393,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         return {
           message: "Order fulfilled successfully",
           order_id: parseInt(id),
+          warnings: expiryWarnings,
         };
       });
 
@@ -2407,7 +2476,7 @@ export default async function orderRoutes(app: FastifyInstance) {
   // paid_not_taken (легаси/директна предаване — backward compat за
   // повиквания от ниско ниво и за стари UI кешове). И двата прехода
   // отиват в normal. Stock не се пипа — изтеглен е при оригиналния
-  // fulfill (allowNegative=true за paid_not_taken).
+  // fulfill (back-order/shortfall срещу откриващата партида за paid_not_taken).
   app.post(
     "/:id/items/:itemId/handover",
     { preHandler: ordersManagePreHandler },
@@ -2533,22 +2602,41 @@ export default async function orderRoutes(app: FastifyInstance) {
             { statusCode: 400 },
           );
         }
-        const costUnitPrice = await deductProductStock(
-          client,
-          item.product_id,
-          parseFloat(item.quantity),
-          { allowNegative: false },
-        );
+        // GQF: изписване по партиди (FEFO) при потвърждаване на пристигнала
+        // предварителна поръчка. Блокира изтекли партиди и недостатъчна
+        // наличност (clean 400/409 чрез asStockHttpError).
+        let deduction;
+        try {
+          deduction = await deductBatched(
+            client,
+            item.id,
+            item.product_id,
+            1,
+            parseFloat(item.quantity),
+            item.line_status === "paid_not_taken",
+            item.batch_id ?? undefined,
+          );
+        } catch (err) {
+          throw asStockHttpError(err);
+        }
+        const qtyNum = parseFloat(item.quantity);
+        const firstBatch = deduction.allocations[0]?.batch_id ?? null;
+        const costUnitPrice = qtyNum > 0 ? deduction.cost / qtyNum : null;
         const {
           rows: [updated],
         } = await client.query(
           `UPDATE order_items
              SET line_status = 'normal',
-                 cost_unit_price = $1
-           WHERE id = $2 RETURNING *`,
-          [costUnitPrice, itemId],
+                 cost_unit_price = $1,
+                 batch_id = $2,
+                 cost_source_batch_id = $2
+           WHERE id = $3 RETURNING *`,
+          [costUnitPrice, firstBatch, itemId],
         );
-        return updated;
+        return {
+          ...updated,
+          warnings: deduction.warnings,
+        };
       });
     },
   );
@@ -3062,80 +3150,185 @@ export default async function orderRoutes(app: FastifyInstance) {
     return { oversell_items };
   }
 
-  /**
-   * MERT-M per-product stock deduction — back-order aware.
-   *
-   * First attempts an atomic UPDATE without a quantity guard so the
-   * inventory row is allowed to go negative (sells into the red). If
-   * no row exists for this product/warehouse yet, fall back to an
-   * INSERT with a negative quantity; the partial unique index
-   * `inventory_product_warehouse_nobatch_uidx` (migration 045) keeps
-   * this safe against concurrent inserts because there is only one
-   * batch_id-NULL row per product/warehouse.
-   *
-   * Returns the COGS unit price snapshotted from products.purchase_price
-   * for later profit reporting (unchanged from the old behaviour).
-   */
-  async function deductProductStock(
-    db: DbExecutor,
+  // Find-or-create откриваща партида 'НАЧАЛНО' за продукт. Ползва се за
+  // back-order изписване (платени поръчки, чиято стока още я няма по партиди).
+  // Откриващата е без срок (expiry_date NULL) и носи продуктовата
+  // purchase_price като себестойност.
+  async function getOrCreateOpeningBatch(
+    client: PoolClient,
     productId: number,
-    quantity: number,
-    options: { allowNegative?: boolean } = {},
-  ): Promise<number | null> {
-    const { allowNegative = false } = options;
+  ): Promise<{ id: number; purchase_price: number }> {
+    const { rows: existing } = await client.query(
+      `SELECT id, purchase_price FROM batches
+        WHERE product_id = $1 AND batch_number = 'НАЧАЛНО'
+        ORDER BY id ASC LIMIT 1
+        FOR UPDATE`,
+      [productId],
+    );
+    if (existing[0]) {
+      return {
+        id: existing[0].id,
+        purchase_price: parseFloat(existing[0].purchase_price ?? "0"),
+      };
+    }
+    const { rows: prod } = await client.query(
+      "SELECT purchase_price FROM products WHERE id = $1",
+      [productId],
+    );
+    const purchasePrice = parseFloat(prod[0]?.purchase_price ?? "0");
+    const { rows: created } = await client.query(
+      `INSERT INTO batches (product_id, batch_number, expiry_date, quantity, purchase_price)
+       VALUES ($1, 'НАЧАЛНО', NULL, 0, $2)
+       RETURNING id`,
+      [productId, purchasePrice],
+    );
+    return { id: created[0].id, purchase_price: purchasePrice };
+  }
 
-    // Pre-check: refuse to go below zero unless the caller explicitly
-    // opted in (used by paid_not_taken lines, where the customer has
-    // already paid so promised stock can run negative).
-    if (!allowNegative) {
-      const {
-        rows: [inv],
-      } = await db.query(
-        `SELECT COALESCE(SUM(quantity), 0)::numeric AS qty
-           FROM inventory
-          WHERE product_id = $1 AND warehouse_id = 1`,
-        [productId],
+  /**
+   * GQF batch-aware изписване по партиди (FEFO или ръчно подадена партида).
+   *
+   * Изписва `qty` за конкретен поръчков ред:
+   *   - ако е подаден `manualBatchId` → заключва точно тази партида (FOR
+   *     UPDATE), проверява за наличност и за изтекъл срок, изписва от нея;
+   *   - иначе → allocateFefo() избира партиди по First-Expired-First-Out,
+   *     пропуска изтеклите. При недостиг:
+   *       · allowBackorder=false → хвърля InsufficientStockError (блок);
+   *       · allowBackorder=true  → изписва налично + допълва остатъка (shortfall)
+   *         в МИНУС срещу откриващата 'НАЧАЛНО' партида (back-order за платени).
+   *
+   * За всяка засегната партида: намалява inventory + batches.quantity и
+   * вмъква ред в order_item_batches (одит на разпределението + COGS).
+   * Връща сумарния COGS, разпределенията (за снимка на order_items.batch_id /
+   * cost_unit_price / cost_source_batch_id) и предупреждения (изтичащи скоро).
+   */
+  async function deductBatched(
+    client: PoolClient,
+    orderItemId: number,
+    productId: number,
+    warehouseId: number,
+    qty: number,
+    allowBackorder: boolean,
+    manualBatchId?: number,
+  ): Promise<{
+    cost: number;
+    warnings: string[];
+    allocations: { batch_id: number; quantity: number; unit_cost: number }[];
+  }> {
+    let allocations: {
+      batch_id: number;
+      quantity: number;
+      unit_cost: number;
+    }[];
+    let warnings: string[] = [];
+
+    if (manualBatchId) {
+      const { rows } = await client.query(
+        `SELECT i.batch_id, b.batch_number, b.expiry_date, b.purchase_price,
+                i.quantity AS available
+           FROM inventory i
+           JOIN batches b ON b.id = i.batch_id
+          WHERE i.product_id = $1 AND i.warehouse_id = $2 AND i.batch_id = $3
+          FOR UPDATE`,
+        [productId, warehouseId, manualBatchId],
       );
-      const current = parseFloat(inv?.qty ?? "0");
-      if (current < quantity) {
+      const row = rows[0];
+      const today = new Date().toISOString().slice(0, 10);
+      if (!row) {
+        throw Object.assign(
+          new Error(`Няма наличност за партида ${manualBatchId}`),
+          { statusCode: 400 },
+        );
+      }
+      if (row.expiry_date && String(row.expiry_date).slice(0, 10) < today) {
         throw Object.assign(
           new Error(
-            `Insufficient stock for product ${productId}: have ${current}, need ${quantity}`,
+            `Партида ${row.batch_number ?? manualBatchId} е с изтекъл срок на годност`,
+          ),
+          { statusCode: 400 },
+        );
+      }
+      if (parseFloat(row.available) < qty) {
+        throw Object.assign(
+          new Error(
+            `Недостатъчна наличност за партида ${row.batch_number ?? manualBatchId}: налични ${parseFloat(row.available)}, искани ${qty}`,
           ),
           { statusCode: 409 },
         );
       }
+      allocations = [
+        {
+          batch_id: manualBatchId,
+          quantity: qty,
+          unit_cost: parseFloat(row.purchase_price ?? "0"),
+        },
+      ];
+    } else {
+      const res = await allocateFefo(client, productId, warehouseId, qty, {
+        warnDays: 30,
+        allowShortfall: allowBackorder,
+      });
+      allocations = res.allocations;
+      warnings = res.warnings;
+
+      // Back-order: остатъкът се изписва в МИНУС срещу откриващата партида,
+      // за да остане наличността по партида одитируема (платени поръчки).
+      if (res.shortfall > 0) {
+        const opening = await getOrCreateOpeningBatch(client, productId);
+        allocations.push({
+          batch_id: opening.id,
+          quantity: res.shortfall,
+          unit_cost: opening.purchase_price,
+        });
+      }
     }
 
-    const { rowCount } = await db.query(
-      `UPDATE inventory
-         SET quantity = quantity - $1,
-             updated_at = NOW()
-       WHERE product_id = $2
-         AND warehouse_id = 1
-         AND batch_id IS NULL
-       RETURNING quantity`,
-      [quantity, productId],
-    );
-
-    if (!rowCount) {
-      // No inventory row at all — a product that has never been
-      // delivered yet is being sold. Create a row starting at -qty.
-      await db.query(
-        `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
-         VALUES ($1, 1, $2, NULL)`,
-        [productId, -quantity],
+    let cost = 0;
+    for (const allocation of allocations) {
+      // Find-or-create inventory ред (продукт/склад/партида), за да можем да
+      // изпишем дори когато няма заприходен ред (back-order → отрицателна
+      // наличност срещу откриващата партида).
+      const updated = await client.query(
+        `UPDATE inventory
+            SET quantity = quantity - $1, updated_at = NOW()
+          WHERE product_id = $2 AND warehouse_id = $3 AND batch_id = $4`,
+        [allocation.quantity, productId, warehouseId, allocation.batch_id],
       );
+      if (!updated.rowCount) {
+        await client.query(
+          `INSERT INTO inventory (product_id, batch_id, warehouse_id, quantity, updated_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [productId, allocation.batch_id, warehouseId, -allocation.quantity],
+        );
+      }
+      await client.query(
+        `UPDATE batches SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2`,
+        [allocation.quantity, allocation.batch_id],
+      );
+      await client.query(
+        `INSERT INTO order_item_batches (order_item_id, batch_id, quantity, unit_cost)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          orderItemId,
+          allocation.batch_id,
+          allocation.quantity,
+          allocation.unit_cost,
+        ],
+      );
+      cost += allocation.quantity * allocation.unit_cost;
     }
 
-    const { rows: productRows } = await db.query(
-      "SELECT purchase_price FROM products WHERE id = $1",
-      [productId],
-    );
-    const fallbackCost = parseFloat(productRows[0]?.purchase_price ?? "0");
-    return Number.isFinite(fallbackCost) && fallbackCost > 0
-      ? fallbackCost
-      : null;
+    return { cost, warnings, allocations };
+  }
+
+  // Превръща InsufficientStockError (от allocateFefo) в чист 400 отговор с
+  // българско съобщение, така че глобалният error handler да върне
+  // подходящ HTTP статус вместо 500.
+  function asStockHttpError(err: unknown): unknown {
+    if (err instanceof InsufficientStockError) {
+      return Object.assign(new Error(err.message), { statusCode: 400 });
+    }
+    return err;
   }
 
   async function regenerateActiveInvoiceForOrder(
@@ -3614,6 +3807,10 @@ export default async function orderRoutes(app: FastifyInstance) {
         company,
         partner: effectiveReceiver(order),
         warehouse_name: "Склад Овча Купел",
+        // GQF: Стоковата разписка е ЧИСТА — без партида/срок на годност.
+        // Тези данни се появяват само на търговския документ. Затова тук
+        // НЕ подаваме batch_number/expiry_date (рендерът на разписката и
+        // без друго не ги изобразява).
         items: items.map((i: any) => ({
           sku: i.sku,
           name_bg: i.name_bg,
@@ -3624,8 +3821,6 @@ export default async function orderRoutes(app: FastifyInstance) {
           unit_price: parseFloat(i.unit_price),
           discount_percent: parseFloat(i.discount_percent ?? 0),
           total_price: parseFloat(i.total_price),
-          batch_number: i.batch_number,
-          expiry_date: i.expiry_date,
         })),
         vat_rate: includeVat ? 20 : 0,
         pricing_mode: pricingMode,
@@ -3685,21 +3880,88 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
       const outputPath = path.join(pdfDir, `commercial-doc-${id}.pdf`);
 
+      // GQF: Търговският документ показва партида + срок на годност за всеки
+      // продукт, с по ОТДЕЛЕН РЕД на партида. Ако поръчковият ред е изпълнен
+      // от няколко партиди (FEFO split), той се появява като няколко реда —
+      // същият продукт, всеки с номера/срока/количеството на своята партида.
+      // Източникът е order_item_batches (записан при експедиране).
+      const { rows: allocationRows } = await query(
+        `SELECT oi.id AS order_item_id,
+                oi.sku_snapshot     AS sku,
+                oi.name_bg_snapshot AS name_bg,
+                oi.name_en_snapshot AS name_en,
+                pr.unit, pr.brand,
+                oib.quantity        AS batch_qty,
+                b.batch_number,
+                b.expiry_date
+           FROM order_items oi
+           JOIN order_item_batches oib ON oib.order_item_id = oi.id
+           JOIN batches b ON b.id = oib.batch_id
+           LEFT JOIN products pr ON pr.id = oi.product_id
+          WHERE oi.order_id = $1
+            AND oi.line_status != 'awaiting'
+          ORDER BY oi.id, b.expiry_date ASC NULLS LAST, b.id`,
+        [id],
+      );
+
+      // Групираме разпределенията по order_item_id, за да можем да слеем
+      // редовете с партиди и fallback-редовете при запазен ред на поръчката.
+      const allocationsByItem = new Map<number, any[]>();
+      for (const row of allocationRows) {
+        const list = allocationsByItem.get(row.order_item_id) ?? [];
+        list.push(row);
+        allocationsByItem.set(row.order_item_id, list);
+      }
+
+      // За всеки поръчков ред (в реда от loadOrderWithBatches): ако има
+      // разпределения по партиди → по ред на партида; иначе → единичен
+      // fallback ред (legacy поръчки / неекспедирани редове), за да не
+      // изчезне нищо от документа.
+      const docItems: Array<{
+        sku?: string;
+        name_bg?: string;
+        name_en?: string;
+        brand?: string;
+        unit?: string;
+        quantity: number;
+        batch_number?: string | null;
+        expiry_date?: string | null;
+      }> = [];
+      for (const orderItem of items as any[]) {
+        const allocations = allocationsByItem.get(orderItem.id);
+        if (allocations && allocations.length > 0) {
+          for (const alloc of allocations) {
+            docItems.push({
+              sku: alloc.sku,
+              name_bg: alloc.name_bg,
+              name_en: alloc.name_en,
+              brand: alloc.brand,
+              unit: alloc.unit,
+              quantity: parseFloat(alloc.batch_qty),
+              batch_number: alloc.batch_number,
+              expiry_date: alloc.expiry_date,
+            });
+          }
+        } else {
+          docItems.push({
+            sku: orderItem.sku,
+            name_bg: orderItem.name_bg,
+            name_en: orderItem.name_en,
+            brand: orderItem.brand,
+            unit: orderItem.unit,
+            quantity: parseFloat(orderItem.quantity),
+            batch_number: orderItem.batch_number,
+            expiry_date: orderItem.expiry_date,
+          });
+        }
+      }
+
       await generateCommercialDocPdf({
         doc_number: docNumber,
         doc_date: order.order_date || order.created_at,
         company,
         partner: effectiveReceiver(order),
-        items: items.map((i: any) => ({
-          sku: i.sku,
-          name_bg: i.name_bg,
-          name_en: i.name_en,
-          brand: i.brand,
-          unit: i.unit,
-          quantity: parseFloat(i.quantity),
-          batch_number: i.batch_number,
-          expiry_date: i.expiry_date,
-        })),
+        items: docItems,
         outputPath,
       });
 

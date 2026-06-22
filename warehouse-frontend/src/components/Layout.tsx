@@ -23,6 +23,7 @@ import {
   Boxes,
   ClipboardList,
   ArrowLeftRight,
+  Trash2,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePermissions } from "@/contexts/PermissionContext";
@@ -60,12 +61,6 @@ const allNavItems: Array<{
     icon: PackagePlus,
     label: "Приемане на стоки",
     permission: PERMISSIONS.INCOMING_MANAGE,
-  },
-  {
-    to: "/stock-movements",
-    icon: ArrowLeftRight,
-    label: "Завеждане / Изписване",
-    permission: PERMISSIONS.STOCK_MOVEMENTS_MANAGE,
   },
   {
     to: "/orders",
@@ -116,6 +111,18 @@ const allNavItems: Array<{
     permission: PERMISSIONS.REPORTS_VIEW,
   },
   {
+    to: "/stock-movements",
+    icon: ArrowLeftRight,
+    label: "Завеждане / Изписване",
+    permission: PERMISSIONS.STOCK_MOVEMENTS_MANAGE,
+  },
+  {
+    to: "/writeoffs",
+    icon: Trash2,
+    label: "Брак",
+    permission: PERMISSIONS.INVENTORY_VIEW,
+  },
+  {
     to: "/purchase-orders",
     icon: ClipboardList,
     label: "Заявки",
@@ -135,6 +142,7 @@ const routeNames: Record<string, string> = {
   "/inventory": "Склад",
   "/incoming": "Приемане",
   "/stock-movements": "Завеждане / Изписване",
+  "/writeoffs": "Брак",
   "/orders": "Поръчки",
   "/warehouse": "Склад пакетиране",
   "/econt": "Еконт доставки",

@@ -162,9 +162,18 @@ describe("incoming unresolved row auto-create", () => {
       const incomingItemInsert = txQueries.find(({ sql }) =>
         sql.includes("INSERT INTO incoming_items"),
       );
-      // MERT-M: no batch_id column on the insert any more.
+      // GQF: batch_number + expiry_date trail the insert params (null here
+      // because the OCR payload carried none). batch_id stays off the line
+      // until confirm resolves it.
       expect(incomingItemInsert?.params).toEqual([
-        601, 912, 3, 7.8, 23.4, 12.4,
+        601,
+        912,
+        3,
+        7.8,
+        23.4,
+        12.4,
+        null,
+        null,
       ]);
 
       const aliasInsert = txQueries.find(({ sql }) =>

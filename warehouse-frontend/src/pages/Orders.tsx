@@ -45,6 +45,11 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  BatchSelect,
+  isBatchExpired,
+  expiryColorClass,
+} from "@/components/BatchSelect";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
 import { useAppSettings } from "@/hooks/useAppSettings";
@@ -280,6 +285,24 @@ const emptyItem = (): OrderItemRow => makeOrderItemRow();
 
 function getEffectiveStock(item: OrderItemRow) {
   return item.stock;
+}
+
+/**
+ * GQF light submit guard: if a line has a selected batch whose expiry date is
+ * in the past, block the submit with a Bulgarian message. Lines with no batch
+ * (no stock → back-order) are intentionally NOT blocked — the backend decides.
+ * Throws so the mutation's onError surfaces it via the standard toast.
+ */
+function assertNoExpiredBatches(rows: OrderItemRow[]) {
+  const expired = rows.find(
+    (row) => row.batch_id && isBatchExpired(row.expiry_date),
+  );
+  if (expired) {
+    throw new Error(
+      `Изтекла партида за "${expired.product_name || "продукт"}". ` +
+        "Изберете партида с валиден срок на годност.",
+    );
+  }
 }
 
 async function openInvoicePdf(invoiceId: number, copies: 1 | 2 = 1) {
@@ -3968,6 +3991,15 @@ function EditOrderItemsModal({
             | "normal"
             | "paid_not_taken"
             | "awaiting",
+          // GQF: prefill the previously chosen batch when the backend returns
+          // it; otherwise BatchSelect re-applies the FEFO default on open.
+          batch_id:
+            (item as any).batch_id != null
+              ? String((item as any).batch_id)
+              : "",
+          expiry_date: (item as any).expiry_date
+            ? String((item as any).expiry_date).slice(0, 10)
+            : "",
         });
       }) || [];
 
@@ -4009,6 +4041,10 @@ function EditOrderItemsModal({
                 weight_kg: productWeight != null ? String(productWeight) : "",
                 original_weight_kg: productWeight,
                 cost_price: cost,
+                // GQF: reset batch on product change — BatchSelect re-applies
+                // the FEFO default for the new product once its batches load.
+                batch_id: "",
+                expiry_date: "",
               }
             : item,
         ),
@@ -4159,6 +4195,8 @@ function EditOrderItemsModal({
 
   const mutation = useMutation({
     mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
+      // GQF: block lines pointing at an expired batch before persisting.
+      assertNoExpiredBatches(validItems);
       const res = await api.put(`/orders/${order.id}`, {
         delivery_date: deliveryDate || undefined,
         notes: notes || undefined,
@@ -4170,6 +4208,8 @@ function EditOrderItemsModal({
           // Batch F1 — only send when not the default; spares the wire
           // and lets the backend's column DEFAULT 'normal' handle it.
           line_status: i.line_status !== "normal" ? i.line_status : undefined,
+          // GQF: партида (ако не е подадена, backend FEFO я избира)
+          batch_id: i.batch_id ? Number(i.batch_id) : undefined,
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
       });
@@ -4470,25 +4510,24 @@ function EditOrderItemsModal({
                             </ProductSearchBoundary>
                           )}
                         </TableCell>
-                        {/* GQF: Партида клетка — auto-select FEFO от backend
-                         *  (read-only display). Натиснете edit drawer за ръчен
-                         *  избор на конкретна партида. */}
+                        {/* GQF: Партида — реален избор + FEFO подсказка */}
                         <TableCell>
-                          {item.batch_id ? (
-                            <span className="text-xs font-mono text-gray-700">
-                              {item.batch_id}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-400">
-                              {item.product_id ? "авто (FEFO)" : "—"}
-                            </span>
-                          )}
+                          <BatchSelect
+                            productId={item.product_id}
+                            value={item.batch_id}
+                            onChange={(batchId, expiry) => {
+                              setItem(i, "batch_id", batchId);
+                              setItem(i, "expiry_date", expiry);
+                            }}
+                          />
                         </TableCell>
-                        {/* GQF: Срок на годност клетка */}
+                        {/* GQF: Срок на годност на избраната партида */}
                         <TableCell>
                           {item.expiry_date ? (
-                            <span className="text-xs text-gray-700">
-                              {item.expiry_date}
+                            <span
+                              className={`text-xs ${expiryColorClass(item.expiry_date)}`}
+                            >
+                              {formatDate(item.expiry_date)}
                             </span>
                           ) : (
                             <span className="text-xs text-gray-400">—</span>
@@ -5258,6 +5297,10 @@ function CreateOrderModal({
             cost_price: Number.isFinite(cost) && cost > 0 ? cost : 0,
             weight_kg: productWeight != null ? String(productWeight) : "",
             original_weight_kg: productWeight,
+            // GQF: reset batch on product change — BatchSelect re-applies the
+            // FEFO default for the new product once its batches load.
+            batch_id: "",
+            expiry_date: "",
           };
         }),
       );
@@ -5551,6 +5594,10 @@ function CreateOrderModal({
         });
         return res;
       }
+
+      // GQF: block lines that point at an expired batch (back-order lines
+      // with no batch are allowed — backend handles those).
+      assertNoExpiredBatches(validItems);
 
       const res = await api.post("/orders", {
         partner_id: Number(form.partner_id),
@@ -6365,23 +6412,24 @@ function CreateOrderModal({
                                   </ProductSearchBoundary>
                                 )}
                               </TableCell>
-                              {/* GQF: Партида (auto FEFO от backend) */}
+                              {/* GQF: Партида — реален избор + FEFO подсказка */}
                               <TableCell>
-                                {item.batch_id ? (
-                                  <span className="text-xs font-mono text-gray-700">
-                                    {item.batch_id}
-                                  </span>
-                                ) : (
-                                  <span className="text-xs text-gray-400">
-                                    {item.product_id ? "авто (FEFO)" : "—"}
-                                  </span>
-                                )}
+                                <BatchSelect
+                                  productId={item.product_id}
+                                  value={item.batch_id}
+                                  onChange={(batchId, expiry) => {
+                                    setItem(i, "batch_id", batchId);
+                                    setItem(i, "expiry_date", expiry);
+                                  }}
+                                />
                               </TableCell>
-                              {/* GQF: Срок на годност */}
+                              {/* GQF: Срок на годност на избраната партида */}
                               <TableCell>
                                 {item.expiry_date ? (
-                                  <span className="text-xs text-gray-700">
-                                    {item.expiry_date}
+                                  <span
+                                    className={`text-xs ${expiryColorClass(item.expiry_date)}`}
+                                  >
+                                    {formatDate(item.expiry_date)}
                                   </span>
                                 ) : (
                                   <span className="text-xs text-gray-400">
