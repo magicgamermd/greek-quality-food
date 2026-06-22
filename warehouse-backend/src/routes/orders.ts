@@ -3807,6 +3807,10 @@ export default async function orderRoutes(app: FastifyInstance) {
         company,
         partner: effectiveReceiver(order),
         warehouse_name: "Склад Овча Купел",
+        // GQF: Стоковата разписка е ЧИСТА — без партида/срок на годност.
+        // Тези данни се появяват само на търговския документ. Затова тук
+        // НЕ подаваме batch_number/expiry_date (рендерът на разписката и
+        // без друго не ги изобразява).
         items: items.map((i: any) => ({
           sku: i.sku,
           name_bg: i.name_bg,
@@ -3817,8 +3821,6 @@ export default async function orderRoutes(app: FastifyInstance) {
           unit_price: parseFloat(i.unit_price),
           discount_percent: parseFloat(i.discount_percent ?? 0),
           total_price: parseFloat(i.total_price),
-          batch_number: i.batch_number,
-          expiry_date: i.expiry_date,
         })),
         vat_rate: includeVat ? 20 : 0,
         pricing_mode: pricingMode,
@@ -3878,21 +3880,88 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
       const outputPath = path.join(pdfDir, `commercial-doc-${id}.pdf`);
 
+      // GQF: Търговският документ показва партида + срок на годност за всеки
+      // продукт, с по ОТДЕЛЕН РЕД на партида. Ако поръчковият ред е изпълнен
+      // от няколко партиди (FEFO split), той се появява като няколко реда —
+      // същият продукт, всеки с номера/срока/количеството на своята партида.
+      // Източникът е order_item_batches (записан при експедиране).
+      const { rows: allocationRows } = await query(
+        `SELECT oi.id AS order_item_id,
+                oi.sku_snapshot     AS sku,
+                oi.name_bg_snapshot AS name_bg,
+                oi.name_en_snapshot AS name_en,
+                pr.unit, pr.brand,
+                oib.quantity        AS batch_qty,
+                b.batch_number,
+                b.expiry_date
+           FROM order_items oi
+           JOIN order_item_batches oib ON oib.order_item_id = oi.id
+           JOIN batches b ON b.id = oib.batch_id
+           LEFT JOIN products pr ON pr.id = oi.product_id
+          WHERE oi.order_id = $1
+            AND oi.line_status != 'awaiting'
+          ORDER BY oi.id, b.expiry_date ASC NULLS LAST, b.id`,
+        [id],
+      );
+
+      // Групираме разпределенията по order_item_id, за да можем да слеем
+      // редовете с партиди и fallback-редовете при запазен ред на поръчката.
+      const allocationsByItem = new Map<number, any[]>();
+      for (const row of allocationRows) {
+        const list = allocationsByItem.get(row.order_item_id) ?? [];
+        list.push(row);
+        allocationsByItem.set(row.order_item_id, list);
+      }
+
+      // За всеки поръчков ред (в реда от loadOrderWithBatches): ако има
+      // разпределения по партиди → по ред на партида; иначе → единичен
+      // fallback ред (legacy поръчки / неекспедирани редове), за да не
+      // изчезне нищо от документа.
+      const docItems: Array<{
+        sku?: string;
+        name_bg?: string;
+        name_en?: string;
+        brand?: string;
+        unit?: string;
+        quantity: number;
+        batch_number?: string | null;
+        expiry_date?: string | null;
+      }> = [];
+      for (const orderItem of items as any[]) {
+        const allocations = allocationsByItem.get(orderItem.id);
+        if (allocations && allocations.length > 0) {
+          for (const alloc of allocations) {
+            docItems.push({
+              sku: alloc.sku,
+              name_bg: alloc.name_bg,
+              name_en: alloc.name_en,
+              brand: alloc.brand,
+              unit: alloc.unit,
+              quantity: parseFloat(alloc.batch_qty),
+              batch_number: alloc.batch_number,
+              expiry_date: alloc.expiry_date,
+            });
+          }
+        } else {
+          docItems.push({
+            sku: orderItem.sku,
+            name_bg: orderItem.name_bg,
+            name_en: orderItem.name_en,
+            brand: orderItem.brand,
+            unit: orderItem.unit,
+            quantity: parseFloat(orderItem.quantity),
+            batch_number: orderItem.batch_number,
+            expiry_date: orderItem.expiry_date,
+          });
+        }
+      }
+
       await generateCommercialDocPdf({
         doc_number: docNumber,
         doc_date: order.order_date || order.created_at,
         company,
         partner: effectiveReceiver(order),
-        items: items.map((i: any) => ({
-          sku: i.sku,
-          name_bg: i.name_bg,
-          name_en: i.name_en,
-          brand: i.brand,
-          unit: i.unit,
-          quantity: parseFloat(i.quantity),
-          batch_number: i.batch_number,
-          expiry_date: i.expiry_date,
-        })),
+        items: docItems,
         outputPath,
       });
 
