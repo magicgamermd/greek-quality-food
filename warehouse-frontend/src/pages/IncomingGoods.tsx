@@ -2214,9 +2214,9 @@ export function IncomingGoods() {
                 {manualItems.map((item, index) => (
                   <div
                     key={index}
-                    className="grid grid-cols-1 md:grid-cols-[7.5rem_9rem_minmax(0,1fr)_7rem_6.5rem_6.5rem_2.5rem] gap-2 items-end border rounded-lg p-2"
+                    className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_7.5rem_9rem_7rem_6.5rem_6.5rem_2.5rem] gap-2 items-end border rounded-lg p-2"
                   >
-                    <div className="space-y-1.5 min-w-0 md:order-3">
+                    <div className="space-y-1.5 min-w-0 md:order-1">
                       <Label>Артикул</Label>
                       <div className="space-y-2">
                         <div className="relative">
@@ -2416,7 +2416,7 @@ export function IncomingGoods() {
                         placeholder="0.00"
                       />
                     </div>
-                    <div className="space-y-1.5 md:order-1">
+                    <div className="space-y-1.5 md:order-2">
                       <Label>Партида</Label>
                       <Input
                         value={item.batch_number}
@@ -2432,7 +2432,7 @@ export function IncomingGoods() {
                         placeholder="напр. L2024-15"
                       />
                     </div>
-                    <div className="space-y-1.5 md:order-2">
+                    <div className="space-y-1.5 md:order-3">
                       <Label>Срок на годност</Label>
                       <Input
                         type="date"
