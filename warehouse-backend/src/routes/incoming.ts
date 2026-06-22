@@ -2367,6 +2367,66 @@ export default async function incomingRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /incoming/:id/items — add a NEW line item to a pending delivery
+  app.post(
+    "/:id/items",
+    { preHandler: incomingManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const schema = z.object({
+        product_id: z.number().int().positive(),
+        quantity: z.number().positive(),
+        unit_price: z.number().min(0).default(0),
+        selling_price: z.number().min(0).optional().nullable(),
+        batch_number: z.string().trim().max(100).optional().nullable(),
+        expiry_date: z.string().trim().optional().nullable(),
+      });
+      const body = schema.parse(request.body);
+
+      return await transaction(async (client) => {
+        const { rows: docRows } = await client.query(
+          "SELECT id, status FROM incoming_goods WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+        if (!docRows[0]) {
+          return reply.status(404).send({ error: "Not found" });
+        }
+        if (docRows[0].status !== "pending") {
+          return reply
+            .status(400)
+            .send({ error: "Само чакащи доставки могат да се редактират." });
+        }
+        const prod = await client.query(
+          "SELECT id FROM products WHERE id = $1",
+          [body.product_id],
+        );
+        if (!prod.rows[0]) {
+          return reply.status(404).send({ error: "Продуктът не е намерен" });
+        }
+
+        const totalPrice = Number((body.quantity * body.unit_price).toFixed(2));
+        const { rows } = await client.query(
+          `INSERT INTO incoming_items (
+             incoming_goods_id, product_id, quantity, unit_price, total_price,
+             selling_price, batch_number, expiry_date
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+          [
+            id,
+            body.product_id,
+            body.quantity,
+            body.unit_price,
+            totalPrice,
+            body.selling_price ?? null,
+            (body.batch_number ?? "").trim() || null,
+            (body.expiry_date ?? "").trim() || null,
+          ],
+        );
+        return reply.status(201).send({ ok: true, item: rows[0] });
+      });
+    },
+  );
+
   // DELETE /incoming/:id/items/:itemId — delete a line from pending delivery
   app.delete(
     "/:id/items/:itemId",
