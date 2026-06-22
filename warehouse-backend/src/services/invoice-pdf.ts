@@ -1187,43 +1187,88 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       drawLine(doc, L, y, pageW, 0.5);
       y += 10;
 
-      const sigColW = pageW / 2 - 5;
+      // ── Боксов подпис-footer: Получил | Банка | Съставил (пунктирани кутии) ──
+      const sgap = 10;
+      const sboxW = (pageW - sgap * 2) / 3;
+      const sb1 = L;
+      const sb2 = L + sboxW + sgap;
+      const sb3 = L + (sboxW + sgap) * 2;
+      const boxH = 54;
+      const pad = 5;
+      doc.save();
+      doc.lineWidth(0.5).dash(2, { space: 2 });
+      doc.rect(sb1, y, sboxW, boxH).stroke();
+      doc.rect(sb2, y, sboxW, boxH).stroke();
+      doc.rect(sb3, y, sboxW, boxH).stroke();
+      doc.undash();
+      doc.restore();
+
+      const ty = y + pad;
+      const innerW = sboxW - pad * 2;
+      // Кутия 1 — Получил
       doc.fontSize(7.5).font("Main");
-      doc.text("Получател:", L, y, { width: 60 });
+      doc.text("Получил:", sb1 + pad, ty, { width: innerW, lineBreak: false });
       doc
         .font("MainBold")
-        .text(partner.contact_person || "________________", L + 60, y, {
-          width: sigColW - 60,
+        .text(partner.contact_person || "", sb1 + pad + 44, ty, {
+          width: innerW - 44,
+          lineBreak: false,
         });
-
-      doc.font("Main").fontSize(7.5);
-      doc.text("Банка:", rightColX, y, { width: 40 });
       doc
-        .font("MainBold")
-        .text(co.bank_name || "", rightColX + 40, y, { width: rValW });
-      y += 12;
-
-      doc.font("Main").fontSize(7.5);
-      doc.text("BIC:", rightColX, y, { width: 40 });
+        .font("Main")
+        .text("ЕГН/Л.К.:", sb1 + pad, ty + 12, {
+          width: innerW,
+          lineBreak: false,
+        });
       doc
-        .font("MainBold")
-        .text(co.bic || "", rightColX + 40, y, { width: rValW });
-      y += 12;
-
-      doc.font("Main").fontSize(7.5);
-      doc.text("IBAN:", rightColX, y, { width: 40 });
-      doc
-        .font("MainBold")
-        .text(co.iban || "", rightColX + 40, y, { width: rValW });
-      y += 18;
-
-      // "Съставил" — ЗДДС чл. 114, ал. 6 (отговорно лице за издаването)
+        .fontSize(6.2)
+        .fillColor("#666")
+        .text("Отговарящ за операцията", sb1 + pad, y + boxH - 10, {
+          width: innerW,
+        });
+      doc.fillColor("#000");
+      // Кутия 2 — Банка
       doc.fontSize(7.5).font("Main");
-      doc.text("Съставил:", L, y, { width: 60 });
-      doc.font("MainBold").text(co.mol || "________________", L + 60, y, {
-        width: sigColW - 60,
+      doc.text("Банка:", sb2 + pad, ty, { width: 38, lineBreak: false });
+      doc.font("MainBold").text(co.bank_name || "", sb2 + pad + 38, ty, {
+        width: innerW - 38,
+        lineBreak: false,
       });
-      y += 14;
+      doc
+        .font("Main")
+        .text("BIC:", sb2 + pad, ty + 13, { width: 38, lineBreak: false });
+      doc.font("MainBold").text(co.bic || "", sb2 + pad + 38, ty + 13, {
+        width: innerW - 38,
+        lineBreak: false,
+      });
+      doc
+        .font("Main")
+        .text("IBAN:", sb2 + pad, ty + 26, { width: 38, lineBreak: false });
+      doc.font("MainBold").text(co.iban || "", sb2 + pad + 38, ty + 26, {
+        width: innerW - 38,
+        lineBreak: false,
+      });
+      // Кутия 3 — Съставил (ЗДДС чл. 114, ал. 6)
+      doc.fontSize(7.5).font("Main");
+      doc.text("Съставил:", sb3 + pad, ty, { width: innerW, lineBreak: false });
+      doc.font("MainBold").text(co.mol || "", sb3 + pad + 48, ty, {
+        width: innerW - 48,
+        lineBreak: false,
+      });
+      doc
+        .font("Main")
+        .text("Шифър:", sb3 + pad, ty + 12, {
+          width: innerW,
+          lineBreak: false,
+        });
+      doc
+        .fontSize(6.2)
+        .fillColor("#666")
+        .text("Отговарящ за операцията", sb3 + pad, y + boxH - 10, {
+          width: innerW,
+        });
+      doc.fillColor("#000");
+      y += boxH + 8;
 
       doc.fontSize(7).font("Main");
       doc.text("Фактурата не подлежи на подпис.", L, y, { width: pageW });
