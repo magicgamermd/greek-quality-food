@@ -15,11 +15,19 @@ export interface FefoOptions {
   today?: string; // ISO YYYY-MM-DD; по подразбиране днес (за тестваемост)
   warnDays?: number; // праг за предупреждение за изтичащи (дни); по подр. 30
   allowExpired?: boolean; // по подразбиране false -> блокира изтекли
+  // По подразбиране false -> при недостиг хвърля InsufficientStockError.
+  // Когато е true -> връща частичните allocations + shortfall (back-order
+  // за вече платени поръчки). Не отслабва проверката за изтекли срокове
+  // (allowShortfall ≠ allowExpired — изтеклите остават пропуснати).
+  allowShortfall?: boolean;
 }
 
 export interface FefoResult {
   allocations: BatchAllocation[];
   warnings: string[];
+  // Непокрито количество от неизтекли партиди. 0 при пълно покритие.
+  // Различно от 0 само когато allowShortfall=true (иначе се хвърля грешка).
+  shortfall: number;
 }
 
 export class InsufficientStockError extends Error {
@@ -106,7 +114,12 @@ export async function allocateFefo(
   }
 
   if (remaining > 0) {
+    // Back-order режим: връщаме частичните allocations + непокрития остатък,
+    // вместо да блокираме (за вече платени поръчки).
+    if (opts.allowShortfall) {
+      return { allocations, warnings, shortfall: remaining };
+    }
     throw new InsufficientStockError(productId, quantity, availableNonExpired);
   }
-  return { allocations, warnings };
+  return { allocations, warnings, shortfall: 0 };
 }
