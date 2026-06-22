@@ -128,6 +128,107 @@ interface ManualRowProductOption {
   selling_price?: number | null;
 }
 
+// Self-contained product picker for NEW rows added to a pending delivery in
+// the edit modal. Uses the same `/products?...&catalog=true` search backing
+// the manual-create form, but keeps all of its state local so it can drop into
+// a single edit-row cell without touching the manual form's per-row maps.
+function EditRowProductSearch({
+  onSelect,
+}: {
+  onSelect: (product: ManualRowProductOption) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const debouncedQuery = useDebouncedValue(query.trim(), 300);
+
+  const searchQuery = useQuery({
+    queryKey: ["incoming", "edit-row-product-search", debouncedQuery],
+    queryFn: () => fetchManualProductOptions(debouncedQuery),
+    enabled: debouncedQuery.length >= 2,
+    staleTime: 30_000,
+  });
+
+  const results = open ? (searchQuery.data ?? []) : [];
+
+  const pick = (product: ManualRowProductOption) => {
+    onSelect(product);
+    setQuery(
+      product.name_bg || product.name_en || product.sku || `#${product.id}`,
+    );
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <Input
+        type="text"
+        value={query}
+        placeholder="Търси продукт…"
+        autoComplete="off"
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          setHighlight(0);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={(e) => {
+          if (results.length === 0) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setHighlight((h) => Math.min(h + 1, results.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setHighlight((h) => Math.max(h - 1, 0));
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            const chosen = results[highlight];
+            if (chosen) pick(chosen);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+      />
+      {open && debouncedQuery.length >= 2 && (
+        <div className="absolute z-20 mt-1 w-full max-h-60 overflow-auto rounded-md border bg-white shadow-lg">
+          {searchQuery.isFetching ? (
+            <div className="px-3 py-2 text-sm text-gray-500">Търсене…</div>
+          ) : results.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-gray-500">
+              Няма намерени продукти.
+            </div>
+          ) : (
+            results.map((product, idx) => (
+              <button
+                key={product.id}
+                type="button"
+                className={`block w-full text-left px-3 py-2 text-sm hover:bg-purple-50 ${
+                  idx === highlight ? "bg-purple-50" : ""
+                }`}
+                // onMouseDown so it fires before the input's onBlur closes us
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pick(product);
+                }}
+              >
+                <span className="font-medium">
+                  {product.name_bg || product.name_en || `#${product.id}`}
+                </span>
+                {product.sku && (
+                  <span className="ml-2 text-xs text-gray-500">
+                    {product.sku}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function itemDisplayName(item: ScannedInvoiceItem): string {
   return (
     item.name_bg ||
@@ -827,9 +928,48 @@ export function IncomingGoods() {
     setCancelReason("");
   };
 
+  // Append a blank NEW row to a pending delivery's edit list. New rows carry
+  // `isNew` + `id: null` so they render with a product picker and are POSTed
+  // (not PATCHed) on save.
+  const addEditRow = () => {
+    setEditItems((current) => [
+      ...current,
+      {
+        id: null,
+        isNew: true,
+        product_id: null,
+        product_name: "",
+        quantity: "",
+        unit_price: "",
+        selling_price: "",
+        selling_price_db: "",
+        unit: "бр",
+        batch_number: "",
+        expiry_date: "",
+        dirty: true,
+        toDelete: false,
+      },
+    ]);
+  };
+
   const saveEditChangesMutation = useMutation({
     mutationFn: async () => {
       if (!selectedDoc) throw new Error("No doc selected");
+
+      // Validate NEW rows: each must have a picked product + quantity > 0.
+      // Block the whole save with a clear Bulgarian message rather than
+      // silently dropping a half-filled row the user expected to keep.
+      const incompleteNewRow = editItems.find(
+        (i) =>
+          i.isNew &&
+          !i.toDelete &&
+          (!i.product_id || !(Number(i.quantity) > 0)),
+      );
+      if (incompleteNewRow) {
+        throw new Error(
+          "Избери продукт и въведи количество (> 0) за всеки нов артикул.",
+        );
+      }
 
       // Delete marked items
       const toDelete = editItems.filter((i) => i.toDelete && i.id);
@@ -872,6 +1012,23 @@ export function IncomingGoods() {
         }));
       if (dirty.length > 0) {
         await api.patch(`/incoming/${selectedDoc.id}/items`, { items: dirty });
+      }
+
+      // Create NEW rows (no id) on the pending delivery. Validation above
+      // guarantees product_id + quantity > 0 for any non-deleted new row.
+      const newRows = editItems.filter(
+        (i) => i.isNew && !i.toDelete && i.product_id && Number(i.quantity) > 0,
+      );
+      for (const row of newRows) {
+        await api.post(`/incoming/${selectedDoc.id}/items`, {
+          product_id: Number(row.product_id),
+          quantity: Number(row.quantity),
+          unit_price: Number(row.unit_price || 0),
+          selling_price:
+            row.selling_price !== "" ? Number(row.selling_price) : null,
+          batch_number: (row.batch_number ?? "").trim() || null,
+          expiry_date: (row.expiry_date ?? "").trim() || null,
+        });
       }
 
       // Sync changed selling prices back to the products catalog.
@@ -1868,14 +2025,52 @@ export function IncomingGoods() {
                           >
                             <div className="col-span-12 md:col-span-3 space-y-1.5">
                               <Label>Артикул</Label>
-                              <div
-                                className="h-11 flex items-center px-3 border rounded-md bg-gray-50 text-sm"
-                                title={item.product_name}
-                              >
-                                <span className="truncate">
-                                  {item.product_name}
-                                </span>
-                              </div>
+                              {item.isNew && !item.product_id ? (
+                                <EditRowProductSearch
+                                  onSelect={(product) =>
+                                    setEditItems((current) =>
+                                      current.map((entry, i) =>
+                                        i === index
+                                          ? {
+                                              ...entry,
+                                              product_id: product.id,
+                                              product_name:
+                                                product.name_bg ||
+                                                product.name_en ||
+                                                product.sku ||
+                                                `#${product.id}`,
+                                              unit: product.unit || entry.unit,
+                                              unit_price:
+                                                entry.unit_price ||
+                                                (product.purchase_price != null
+                                                  ? String(
+                                                      product.purchase_price,
+                                                    )
+                                                  : ""),
+                                              selling_price:
+                                                entry.selling_price ||
+                                                (product.selling_price != null
+                                                  ? String(
+                                                      product.selling_price,
+                                                    )
+                                                  : ""),
+                                              dirty: true,
+                                            }
+                                          : entry,
+                                      ),
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <div
+                                  className="h-11 flex items-center px-3 border rounded-md bg-gray-50 text-sm"
+                                  title={item.product_name}
+                                >
+                                  <span className="truncate">
+                                    {item.product_name}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                             <div className="col-span-6 md:col-span-2 space-y-1.5">
                               <Label>Партида</Label>
@@ -2023,11 +2218,16 @@ export function IncomingGoods() {
                                   aria-label="Изтрий артикул"
                                   onClick={() =>
                                     setEditItems((current) =>
-                                      current.map((entry, i) =>
-                                        i === index
-                                          ? { ...entry, toDelete: true }
-                                          : entry,
-                                      ),
+                                      // New unsaved rows: drop from the array
+                                      // (no backend item to delete). Existing
+                                      // rows: mark for DELETE on save.
+                                      item.isNew
+                                        ? current.filter((_, i) => i !== index)
+                                        : current.map((entry, i) =>
+                                            i === index
+                                              ? { ...entry, toDelete: true }
+                                              : entry,
+                                          ),
                                     )
                                   }
                                   title="Изтрий ред"
@@ -2049,6 +2249,19 @@ export function IncomingGoods() {
                         );
                       })}
                     </div>
+                  )}
+
+                  {selectedDoc?.status === "pending" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addEditRow}
+                      disabled={editSaving}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Добави артикул
+                    </Button>
                   )}
                 </div>
 
