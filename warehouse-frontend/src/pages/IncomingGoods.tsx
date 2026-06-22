@@ -797,6 +797,11 @@ export function IncomingGoods() {
             selling_price: dbSelling,
             selling_price_db: dbSelling,
             unit: item.unit || "бр",
+            // Batch / expiry — editable on pending deliveries (FEFO).
+            batch_number: item.batch_number ?? "",
+            expiry_date: item.expiry_date
+              ? String(item.expiry_date).slice(0, 10)
+              : "",
             // Dirty flags
             dirty: false,
             toDelete: false,
@@ -862,6 +867,8 @@ export function IncomingGoods() {
           id: i.id,
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price || 0),
+          batch_number: (i.batch_number ?? "").trim() || null,
+          expiry_date: (i.expiry_date ?? "").trim() || null,
         }));
       if (dirty.length > 0) {
         await api.patch(`/incoming/${selectedDoc.id}/items`, { items: dirty });
@@ -1859,7 +1866,7 @@ export function IncomingGoods() {
                             key={item.id ?? index}
                             className="grid grid-cols-12 md:grid-cols-[repeat(12,minmax(0,1fr))] gap-3 items-end border rounded-lg p-3"
                           >
-                            <div className="col-span-12 md:col-span-5 space-y-1.5">
+                            <div className="col-span-12 md:col-span-3 space-y-1.5">
                               <Label>Артикул</Label>
                               <div
                                 className="h-11 flex items-center px-3 border rounded-md bg-gray-50 text-sm"
@@ -1869,6 +1876,49 @@ export function IncomingGoods() {
                                   {item.product_name}
                                 </span>
                               </div>
+                            </div>
+                            <div className="col-span-6 md:col-span-2 space-y-1.5">
+                              <Label>Партида</Label>
+                              <Input
+                                type="text"
+                                value={item.batch_number ?? ""}
+                                disabled={readonly}
+                                placeholder="напр. L2024-15"
+                                onChange={(e) =>
+                                  setEditItems((current) =>
+                                    current.map((entry, i) =>
+                                      i === index
+                                        ? {
+                                            ...entry,
+                                            batch_number: e.target.value,
+                                            dirty: true,
+                                          }
+                                        : entry,
+                                    ),
+                                  )
+                                }
+                              />
+                            </div>
+                            <div className="col-span-6 md:col-span-2 space-y-1.5">
+                              <Label>Срок на годност</Label>
+                              <Input
+                                type="date"
+                                value={item.expiry_date ?? ""}
+                                disabled={readonly}
+                                onChange={(e) =>
+                                  setEditItems((current) =>
+                                    current.map((entry, i) =>
+                                      i === index
+                                        ? {
+                                            ...entry,
+                                            expiry_date: e.target.value,
+                                            dirty: true,
+                                          }
+                                        : entry,
+                                    ),
+                                  )
+                                }
+                              />
                             </div>
                             <div className="col-span-4 md:col-span-1 space-y-1.5">
                               <Label>Кол-во</Label>
@@ -1899,7 +1949,7 @@ export function IncomingGoods() {
                                 {item.unit}
                               </div>
                             </div>
-                            <div className="col-span-4 md:col-span-2 space-y-1.5">
+                            <div className="col-span-4 md:col-span-1 space-y-1.5">
                               <Label>Ед. цена</Label>
                               <Input
                                 type="number"
@@ -1922,7 +1972,7 @@ export function IncomingGoods() {
                                 }
                               />
                             </div>
-                            <div className="col-span-6 md:col-span-2 space-y-1.5">
+                            <div className="col-span-6 md:col-span-1 space-y-1.5">
                               <Label
                                 className={
                                   sellingPriceChanged
