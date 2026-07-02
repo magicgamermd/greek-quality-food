@@ -6,6 +6,10 @@ import {
   requirePermission,
   hasPermission,
 } from "../lib/permissions.js";
+import {
+  allocateFefo,
+  InsufficientStockError,
+} from "../services/fefo-allocator.js";
 
 /**
  * Stock movements — ръчни in/out adjustments на inventory.
@@ -153,49 +157,151 @@ export default async function stockMovementsRoutes(fastify: FastifyInstance) {
 
       try {
         const result = await transaction(async (client) => {
-          // Lock inventory ред + read current quantity. Ползваме partial unique
-          // index (product_id, warehouse_id) WHERE batch_id IS NULL — same
-          // pattern както в orders.fulfill и incoming.confirm.
-          const {
-            rows: [invRow],
-          } = await client.query(
-            `SELECT id, quantity FROM inventory
-              WHERE product_id = $1 AND warehouse_id = 1 AND batch_id IS NULL
+          // Общата налична количество за продукта в склад 1 — сума по ВСИЧКИ
+          // inventory редове (партидни + евент. non-batch). Ползва се за
+          // audit snapshot-а и за error съобщението. FOR UPDATE заключва
+          // всички редове на продукта в склада (same as FEFO allocator lock).
+          const { rows: invRows } = await client.query(
+            `SELECT COALESCE(SUM(quantity), 0) AS total
+               FROM inventory
+              WHERE product_id = $1 AND warehouse_id = 1
               FOR UPDATE`,
             [body.product_id],
           );
-          const currentQty = invRow ? parseFloat(invRow.quantity) : 0;
-          const delta =
-            body.movement_type === "in" ? body.quantity : -body.quantity;
-          const newQty = currentQty + delta;
+          const currentQty = parseFloat(invRows[0]?.total ?? "0");
 
-          // Guard срещу negative inventory за 'out' движения
-          if (
-            body.movement_type === "out" &&
-            newQty < -0.001 &&
-            !body.allow_negative
-          ) {
-            throw Object.assign(
-              new Error(
-                `Insufficient stock: have ${currentQty}, need ${body.quantity}`,
-              ),
-              { statusCode: 409 },
+          if (body.movement_type === "in") {
+            // 'in' движенията остават non-batch (unchanged path) — записват
+            // се срещу partial-unique-index реда (product_id, warehouse_id)
+            // WHERE batch_id IS NULL, same pattern както преди.
+            const {
+              rows: [nullRow],
+            } = await client.query(
+              `SELECT id, quantity FROM inventory
+                WHERE product_id = $1 AND warehouse_id = 1 AND batch_id IS NULL
+                FOR UPDATE`,
+              [body.product_id],
+            );
+            const nullQty = nullRow ? parseFloat(nullRow.quantity) : 0;
+            const newNullQty = nullQty + body.quantity;
+            const newQty = currentQty + body.quantity;
+
+            if (nullRow) {
+              await client.query(
+                `UPDATE inventory SET quantity = $1, updated_at = NOW() WHERE id = $2`,
+                [newNullQty, nullRow.id],
+              );
+            } else {
+              await client.query(
+                `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+                 VALUES ($1, 1, $2, NULL)`,
+                [body.product_id, newNullQty],
+              );
+            }
+
+            const {
+              rows: [movement],
+            } = await client.query(
+              `INSERT INTO stock_movements
+                  (product_id, warehouse_id, movement_type, quantity,
+                   quantity_before, quantity_after, reason, note, created_by)
+               VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8)
+               RETURNING *`,
+              [
+                body.product_id,
+                body.movement_type,
+                body.quantity,
+                currentQty,
+                newQty,
+                body.reason,
+                body.note ?? null,
+                userId,
+              ],
+            );
+
+            return movement;
+          }
+
+          // 'out' — FEFO/batch-aware изписване, огледало на orders.fulfill
+          // (deductBatched в orders.ts): allocateFefo() избира партиди по
+          // First-Expired-First-Out (пропуска изтеклите), после за всяка
+          // allocation се намалява inventory реда И batches.quantity.
+          let allocations: {
+            batch_id: number;
+            quantity: number;
+          }[];
+          try {
+            const res = await allocateFefo(
+              client,
+              body.product_id,
+              1,
+              body.quantity,
+              { allowShortfall: body.allow_negative },
+            );
+            allocations = res.allocations;
+
+            // Shortfall (само възможно при allow_negative=true): остатъкът
+            // отива в МИНУС срещу non-batch (batch_id IS NULL) реда — same
+            // семантика като преди (admin override пише директно на минус).
+            if (res.shortfall > 0) {
+              const {
+                rows: [nullRow],
+              } = await client.query(
+                `SELECT id, quantity FROM inventory
+                  WHERE product_id = $1 AND warehouse_id = 1 AND batch_id IS NULL
+                  FOR UPDATE`,
+                [body.product_id],
+              );
+              const nullQty = nullRow ? parseFloat(nullRow.quantity) : 0;
+              const newNullQty = nullQty - res.shortfall;
+              if (nullRow) {
+                await client.query(
+                  `UPDATE inventory SET quantity = $1, updated_at = NOW() WHERE id = $2`,
+                  [newNullQty, nullRow.id],
+                );
+              } else {
+                await client.query(
+                  `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
+                   VALUES ($1, 1, $2, NULL)`,
+                  [body.product_id, newNullQty],
+                );
+              }
+            }
+          } catch (err) {
+            if (err instanceof InsufficientStockError) {
+              throw Object.assign(
+                new Error(
+                  `Insufficient stock: have ${currentQty}, need ${body.quantity}`,
+                ),
+                { statusCode: 409 },
+              );
+            }
+            throw err;
+          }
+
+          // Приложи всяка allocation — same pattern като deductBatched() в
+          // orders.ts (намаля inventory реда за партидата + batches.quantity).
+          for (const allocation of allocations) {
+            const updated = await client.query(
+              `UPDATE inventory
+                  SET quantity = quantity - $1, updated_at = NOW()
+                WHERE product_id = $2 AND warehouse_id = 1 AND batch_id = $3`,
+              [allocation.quantity, body.product_id, allocation.batch_id],
+            );
+            if (!updated.rowCount) {
+              await client.query(
+                `INSERT INTO inventory (product_id, batch_id, warehouse_id, quantity, updated_at)
+                 VALUES ($1, $2, 1, $3, NOW())`,
+                [body.product_id, allocation.batch_id, -allocation.quantity],
+              );
+            }
+            await client.query(
+              `UPDATE batches SET quantity = quantity - $1, updated_at = NOW() WHERE id = $2`,
+              [allocation.quantity, allocation.batch_id],
             );
           }
 
-          if (invRow) {
-            await client.query(
-              `UPDATE inventory SET quantity = $1, updated_at = NOW() WHERE id = $2`,
-              [newQty, invRow.id],
-            );
-          } else {
-            // Няма inventory ред още — създаваме. За 'out' само ако allow_negative.
-            await client.query(
-              `INSERT INTO inventory (product_id, warehouse_id, quantity, batch_id)
-               VALUES ($1, 1, $2, NULL)`,
-              [body.product_id, newQty],
-            );
-          }
+          const newQty = currentQty - body.quantity;
 
           const {
             rows: [movement],
