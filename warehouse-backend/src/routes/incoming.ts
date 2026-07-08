@@ -334,6 +334,23 @@ function asNullableString(value: unknown): string | null {
   return str.length > 0 ? str : null;
 }
 
+// Нормализира срок на годност до 'YYYY-MM-DD' или null.
+// PostgreSQL DATE колона се чете от node-postgres като JS Date (на локална
+// полунощ), а от заявка идва като string. Форматираме Date по ЛОКАЛНИ
+// компоненти (същия часови пояс, в който драйверът я е разпарсил), за да
+// няма отместване на деня при повторно записване в DATE колона.
+function asNullableDateString(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  const str = String(value).trim();
+  return str.length > 0 ? str : null;
+}
+
 function normalizeStatus(value: unknown): CompletenessStatus {
   if (
     value === "complete" ||
@@ -2102,7 +2119,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
 
           // Резолюция/създаване на партида за реда (по продукт + номер).
           const bNum = (item.batch_number ?? "").trim() || null;
-          const exp = (item.expiry_date ?? "").trim() || null;
+          const exp = asNullableDateString(item.expiry_date);
           let batchId: number;
           const foundBatch = bNum
             ? await client.query(

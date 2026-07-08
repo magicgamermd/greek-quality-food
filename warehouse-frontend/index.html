@@ -2,6 +2,54 @@
 <html lang="bg">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Two PWAs share this single SPA (the full software at "/" and the Owner
+      app at "/owner"). The browser decides which app "Add to Home Screen"
+      installs from the <link rel="manifest"> present when it evaluates the
+      page — which happens at load, BEFORE React (OwnerLayout) can swap it.
+      So on /owner we must repoint the manifest (and the iOS home-screen
+      title) to the Owner app the instant the link appears — including the
+      one vite-plugin-pwa injects at the end of <head>. A MutationObserver
+      catches both ahead of the browser's fetch, so installing from the Owner
+      app adds the Owner app, not the full software.
+    -->
+    <script>
+      (function () {
+        if (location.pathname.indexOf("/owner") !== 0) return;
+        var setOwner = function (l) {
+          if (l && l.getAttribute("href") !== "/owner.webmanifest")
+            l.setAttribute("href", "/owner.webmanifest");
+        };
+        document.querySelectorAll('link[rel="manifest"]').forEach(setOwner);
+        new MutationObserver(function (muts) {
+          for (var i = 0; i < muts.length; i++)
+            for (var j = 0; j < muts[i].addedNodes.length; j++) {
+              var n = muts[i].addedNodes[j];
+              if (
+                n.tagName === "LINK" &&
+                n.getAttribute &&
+                n.getAttribute("rel") === "manifest"
+              )
+                setOwner(n);
+            }
+        }).observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+        });
+        document.addEventListener("DOMContentLoaded", function () {
+          document.querySelectorAll('link[rel="manifest"]').forEach(setOwner);
+          var t = document.querySelector(
+            'meta[name="apple-mobile-web-app-title"]',
+          );
+          if (!t) {
+            t = document.createElement("meta");
+            t.setAttribute("name", "apple-mobile-web-app-title");
+            document.head.appendChild(t);
+          }
+          t.setAttribute("content", "GQF Owner");
+        });
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.svg" />
     <!-- Explicit manifest link ensures iOS / Android / desktop Chrome all

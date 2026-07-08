@@ -268,6 +268,71 @@ describe("incoming confirm inventory propagation", () => {
     }
   });
 
+  it("normalizes a DATE-typed expiry (JS Date from pg) instead of throwing on .trim()", async () => {
+    // Регресия: PostgreSQL DATE колона се чете от драйвера като JS Date,
+    // НЕ като string. Старият код правеше (item.expiry_date ?? "").trim(),
+    // но Date няма .trim() → TypeError → 500 и доставката не се
+    // потвърждаваше (прод: 50TIE00450, всеки ред със срок). Confirm трябва
+    // да нормализира Date → 'YYYY-MM-DD' (локални компоненти, без TZ дрифт).
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        resultRows([
+          { id: 77, status: "pending", invoice_number: "50TIE00450" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        resultRows([
+          {
+            id: 1,
+            product_id: 502,
+            batch_id: null,
+            batch_number: null,
+            // Точно каквото node-postgres връща за DATE колона: JS Date на
+            // локална полунощ (не ISO string).
+            expiry_date: new Date(2026, 6, 14),
+            quantity: 3,
+            unit_price: 9.9,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(resultRows([{ id: 7101 }])) // INSERT batches → id
+      .mockResolvedValueOnce(resultRows([])) // INSERT inventory (per batch)
+      .mockResolvedValueOnce(resultRows([])) // UPDATE incoming_items SET batch_id
+      .mockResolvedValueOnce(resultRows([])) // UPDATE purchase_price
+      .mockResolvedValueOnce(resultRows([])) // SELECT pendingLines
+      .mockResolvedValueOnce(resultRows([])); // INSERT notifications
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildAppWithRole("admin");
+    try {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/incoming/77/confirm",
+      });
+
+      // Преди фикса: 500 (TypeError: (item.expiry_date ?? "").trim ...).
+      expect(res.statusCode).toBe(200);
+
+      // Партидата се създава с нормализиран срок 'YYYY-MM-DD' (без TZ отместване).
+      const batchSql = String(clientQuery.mock.calls[2][0]);
+      expect(batchSql).toContain("INSERT INTO batches");
+      expect(clientQuery.mock.calls[2][1]).toEqual([
+        502,
+        "АВТО-77-502",
+        "2026-07-14",
+        3,
+        9.9,
+        "77",
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects a second confirm attempt once the delivery is already confirmed", async () => {
     // Route uses an atomic UPDATE WHERE status='pending' RETURNING * first.
     // An already-confirmed row fails the WHERE → 0 rows returned. The
