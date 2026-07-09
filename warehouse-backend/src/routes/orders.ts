@@ -3953,16 +3953,75 @@ export default async function orderRoutes(app: FastifyInstance) {
             });
           }
         } else {
-          docItems.push({
-            sku: orderItem.sku,
-            name_bg: orderItem.name_bg,
-            name_en: orderItem.name_en,
-            brand: orderItem.brand,
-            unit: orderItem.unit,
-            quantity: parseFloat(orderItem.quantity),
-            batch_number: orderItem.batch_number,
-            expiry_date: orderItem.expiry_date,
-          });
+          // Редът още не е експедиран → няма записани order_item_batches.
+          // Показваме FEFO ПРЕДВИЖДАНЕ (кои партиди + срокове ще излязат при
+          // експедиране), за да е пълен търговският документ веднага след
+          // създаване на поръчката. Само четене: allocateFefo не изписва
+          // наличност и не мени статус — реалното изписване пак става при
+          // експедиране (deductBatched), а FEFO е детерминистично, така че
+          // предвиждането съвпада с това, което после реално се изписва.
+          const qty = parseFloat(orderItem.quantity);
+          let previewAllocations: Awaited<
+            ReturnType<typeof allocateFefo>
+          >["allocations"] = [];
+          if (orderItem.product_id && qty > 0) {
+            try {
+              const preview = await transaction((client) =>
+                allocateFefo(client, orderItem.product_id, 1, qty, {
+                  allowShortfall: true,
+                }),
+              );
+              previewAllocations = preview.allocations;
+            } catch {
+              // При всякаква грешка падаме тихо към стария fallback ред долу.
+              previewAllocations = [];
+            }
+          }
+
+          if (previewAllocations.length > 0) {
+            for (const alloc of previewAllocations) {
+              docItems.push({
+                sku: orderItem.sku,
+                name_bg: orderItem.name_bg,
+                name_en: orderItem.name_en,
+                brand: orderItem.brand,
+                unit: orderItem.unit,
+                quantity: alloc.quantity,
+                batch_number: alloc.batch_number,
+                expiry_date: alloc.expiry_date,
+              });
+            }
+            // Ако наличността не покрива цялото количество, остатъкът върви
+            // като ред без партида, за да не изчезне количество от документа.
+            const covered = previewAllocations.reduce(
+              (sum, a) => sum + a.quantity,
+              0,
+            );
+            if (qty - covered > 1e-6) {
+              docItems.push({
+                sku: orderItem.sku,
+                name_bg: orderItem.name_bg,
+                name_en: orderItem.name_en,
+                brand: orderItem.brand,
+                unit: orderItem.unit,
+                quantity: qty - covered,
+                batch_number: null,
+                expiry_date: null,
+              });
+            }
+          } else {
+            // Няма наличност за предвиждане → запазваме досегашния fallback ред.
+            docItems.push({
+              sku: orderItem.sku,
+              name_bg: orderItem.name_bg,
+              name_en: orderItem.name_en,
+              brand: orderItem.brand,
+              unit: orderItem.unit,
+              quantity: qty,
+              batch_number: orderItem.batch_number,
+              expiry_date: orderItem.expiry_date,
+            });
+          }
         }
       }
 
