@@ -2118,15 +2118,20 @@ export default async function incomingRoutes(app: FastifyInstance) {
           const warehouseId = defaultWarehouseId;
 
           // Резолюция/създаване на партида за реда (по продукт + номер).
+          // Редове без подаден номер получават авто-номер ПО РЕД
+          // (АВТО-{доставка}-{ред}), не по продукт: два реда с един и същ
+          // продукт (различни лотове/срокове) иначе се блъскат в
+          // ux_batches_product_number и целият confirm гърми с 500.
+          // Lookup-ът върви винаги по effective номера, така че повторен
+          // опит/остатъчна партида се слива вместо да дублира.
           const bNum = (item.batch_number ?? "").trim() || null;
           const exp = asNullableDateString(item.expiry_date);
+          const effectiveBatchNumber = bNum ?? `АВТО-${id}-${item.id}`;
           let batchId: number;
-          const foundBatch = bNum
-            ? await client.query(
-                `SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2 LIMIT 1`,
-                [productId, bNum],
-              )
-            : { rows: [] as Array<{ id: number }> };
+          const foundBatch = await client.query(
+            `SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2 LIMIT 1`,
+            [productId, effectiveBatchNumber],
+          );
           if (foundBatch.rows.length) {
             batchId = foundBatch.rows[0].id;
             await client.query(
@@ -2145,14 +2150,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
                  (product_id, batch_number, expiry_date, quantity, purchase_price, delivery_id, received_date)
                VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE)
                RETURNING id`,
-              [
-                productId,
-                bNum ?? `АВТО-${id}-${productId}`,
-                exp,
-                qty,
-                unitPrice,
-                id,
-              ],
+              [productId, effectiveBatchNumber, exp, qty, unitPrice, id],
             );
             batchId = insBatch.rows[0].id;
           }
