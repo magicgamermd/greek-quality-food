@@ -10,6 +10,7 @@
 - **Търговски документ преди експедиране**: показва FEFO предвиждане (партиди+срокове) вместо празни редове; реалният запис остава при fulfill. PR #52.
 - **Оправен счупен frontend build на main**: econt в role union, `Order.econt_requested_at`, премахнат несъществуващ `searchPlaceholder` проп (StockMovements).
 - **Деплой пътища (важно)**: backend → merge в main → Railway auto (проект `gqf`, услуга backend); frontend → РЪЧНО `npx wrangler pages deploy dist --project-name=gqf-warehouse --branch=main` (CF Pages НЕ е git-свързан). ⚠️ Някакъв hook auto-комитва по main („feat: auto: task completed") — комитите бяха премествани на fix branch преди push.
+- **Единични цени с 3 знака (мигр. 101, ПРИЛОЖЕНА на прод 2026-07-11, PR #55)**: 7 колони NUMERIC(10,2)→(12,3) (products purchase/selling, incoming_items unit/selling, order_items.unit_price, price_list_items.price, stock_writeoffs.unit_cost); active_products view drop/recreate. Сумите остават 2 знака; фискалният принтер остава 2 знака (протокол). Форматери: formatEurUnitPrice/formatUnitPricePlain (backend), formatUnitPrice (frontend), step="0.001".
 - Предходно счупени тестове на main: 10 бр. в 7 файла (agent-routes, credit-note-partial, document-pdf, orders-quotation, payments-razpiska ×2, permissions-registry, products-search ×2) — spawn-нат отделен таск за тях.
 
 ## Re-baseline sync from MERTM — 2026-06-18 (branch `feat/gqf-sync-from-mertm`)
