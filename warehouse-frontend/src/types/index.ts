@@ -2,7 +2,7 @@ export interface User {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "warehouse" | "accountant" | "owner_mobile";
+  role: "admin" | "warehouse" | "accountant" | "owner_mobile" | "econt";
   created_at?: string;
 }
 
@@ -206,6 +206,8 @@ export interface Order {
   warranty_number?: string | null;
   warranty_issued_at?: string | null;
   dispatched_to_warehouse_at?: string | null;
+  // Еконт опашка — кога поръчката е заявена за Еконт доставка (NULL = не е).
+  econt_requested_at?: string | null;
   invoiced?: boolean;
   item_count?: number;
   partner?: Partner;

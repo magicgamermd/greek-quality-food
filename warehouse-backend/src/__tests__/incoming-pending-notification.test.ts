@@ -64,15 +64,17 @@ describe("Batch F1 — incoming confirm pending_order_ready notifications", () =
           },
         ]),
       )
-      // 2. INSERT batches (no batch_number on the line → auto batch)
+      // 2. SELECT batches (авто-номер по ред) → няма
+      .mockResolvedValueOnce(rows([]))
+      // 3. INSERT batches (no batch_number on the line → auto batch)
       .mockResolvedValueOnce(rows([{ id: 7001 }]))
-      // 3. INSERT inventory (per-batch UPSERT)
+      // 4. INSERT inventory (per-batch UPSERT)
       .mockResolvedValueOnce(rows([]))
-      // 4. UPDATE incoming_items SET batch_id
+      // 5. UPDATE incoming_items SET batch_id
       .mockResolvedValueOnce(rows([]))
-      // 5. UPDATE products SET purchase_price (unit_price > 0)
+      // 6. UPDATE products SET purchase_price (unit_price > 0)
       .mockResolvedValueOnce(rows([]))
-      // 6. SELECT order_items pendingLines — 2 matching rows
+      // 7. SELECT order_items pendingLines — 2 matching rows
       .mockResolvedValueOnce(
         rows([
           {
@@ -154,6 +156,7 @@ describe("Batch F1 — incoming confirm pending_order_ready notifications", () =
       .mockResolvedValueOnce(
         rows([{ id: 1, product_id: 999, quantity: 3, unit_price: 5 }]),
       )
+      .mockResolvedValueOnce(rows([])) // SELECT batches (авто-номер) → няма
       .mockResolvedValueOnce(rows([{ id: 7001 }])) // INSERT batches
       .mockResolvedValueOnce(rows([])) // INSERT inventory (per batch)
       .mockResolvedValueOnce(rows([])) // UPDATE incoming_items SET batch_id
@@ -192,6 +195,7 @@ describe("Batch F1 — incoming confirm pending_order_ready notifications", () =
       .mockResolvedValueOnce(
         rows([{ id: 1, product_id: 7, quantity: 1, unit_price: 5 }]),
       )
+      .mockResolvedValueOnce(rows([])) // SELECT batches (авто-номер) → няма
       .mockResolvedValueOnce(rows([{ id: 7001 }])) // INSERT batches
       .mockResolvedValueOnce(rows([])) // INSERT inventory (per batch)
       .mockResolvedValueOnce(rows([])) // UPDATE incoming_items SET batch_id
