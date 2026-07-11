@@ -290,6 +290,74 @@ interface IncomingStockReceiptItem {
   currency?: string;
 }
 
+export interface IncomingReceiptComputedLine {
+  lineTotal: number;
+  discountPercent: number;
+  discountAmount: number;
+}
+
+export interface IncomingReceiptTotals {
+  lines: IncomingReceiptComputedLine[];
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+}
+
+// Сумите на стоковата разписка — ЕДИН източник на истина, ред по ред.
+// Запазеният total_price е меродавен само когато е ≤ кол×цена: това е
+// реална отстъпка от доставчика (OCR-ната фактура пази нетния ред).
+// Стойност НАД кол×цена не може да е „отстъпка" — това е останал стар
+// сбор (ред, редактиран преди total_price да се преизчислява) → ползваме
+// кол×цена. Така всяка Стойност ≤ Кол×Ед.цена и блокът винаги се събира:
+// Общо = Междинна − Отстъпка (и никакво „-0.00" от float прах).
+export function computeIncomingReceiptTotals(
+  items: Array<{
+    quantity: number | string;
+    unit_price?: number | string | null;
+    total_price?: number | string | null;
+    discount_percent?: number | string | null;
+  }>,
+): IncomingReceiptTotals {
+  const lines: IncomingReceiptComputedLine[] = [];
+  let subtotal = 0;
+  let discountTotal = 0;
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  for (const item of items) {
+    const qty = toNum(item.quantity);
+    const price = toNum(item.unit_price);
+    // Закръгляме ПО РЕД (както показваме клетката) — така който събере
+    // колоната „Стойност" на калкулатор, получава точно Междинна/Общо.
+    // (Същото правило ползва и refreshIncomingTotalAmount за header-а.)
+    const baseTotal = round2(qty * price);
+    const rawLineTotal = round2(toNum(item.total_price));
+    const lineTotal =
+      rawLineTotal > 0 ? Math.min(rawLineTotal, baseTotal) : baseTotal;
+    const inferredDiscount =
+      baseTotal > 0
+        ? Math.max(0, ((baseTotal - lineTotal) / baseTotal) * 100)
+        : 0;
+    const discountPercent =
+      item.discount_percent != null
+        ? Math.max(0, toNum(item.discount_percent))
+        : inferredDiscount;
+    const discountAmount = round2(Math.max(0, baseTotal - lineTotal));
+
+    subtotal += baseTotal;
+    discountTotal += discountAmount;
+    lines.push({ lineTotal, discountPercent, discountAmount });
+  }
+
+  subtotal = round2(subtotal);
+  discountTotal = round2(discountTotal);
+  // Аритметична гаранция: крайното Общо е точно Междинна − Отстъпка
+  // (= сбора на редовете, понеже всичко е на центове още по ред).
+  const total = round2(subtotal - discountTotal);
+
+  return { lines, subtotal, discountTotal, total };
+}
+
 interface IncomingStockReceiptData {
   doc_number: string;
   doc_date: string;
@@ -975,32 +1043,18 @@ export async function generateIncomingStockReceiptPdf(
       .stroke();
     doc.moveDown(0.3);
 
-    let subtotal = 0;
-    let discountTotal = 0;
-    let total = 0;
+    // Един източник на истина за редове + тотали (Общо = Междинна −
+    // Отстъпка гарантирано; stale total_price > кол×цена се игнорира).
+    const { lines, subtotal, discountTotal, total } =
+      computeIncomingReceiptTotals(data.items);
     const rows: string[][] = [];
 
     for (let idx = 0; idx < data.items.length; idx += 1) {
       const item = data.items[idx];
+      const computed = lines[idx];
       const qty = toNum(item.quantity);
       const price = toNum(item.unit_price);
-      const baseTotal = qty * price;
-      const rawLineTotal = toNum(item.total_price);
-      const lineTotal = rawLineTotal > 0 ? rawLineTotal : baseTotal;
-      const inferredDiscount =
-        baseTotal > 0
-          ? Math.max(0, ((baseTotal - lineTotal) / baseTotal) * 100)
-          : 0;
-      const discountPercent =
-        item.discount_percent != null
-          ? Math.max(0, toNum(item.discount_percent))
-          : inferredDiscount;
-      const discountAmount = Math.max(0, baseTotal - lineTotal);
       const currency = (item.currency || "EUR").toUpperCase();
-
-      subtotal += baseTotal;
-      discountTotal += discountAmount;
-      total += lineTotal;
 
       rows.push([
         String(idx + 1),
@@ -1010,8 +1064,8 @@ export async function generateIncomingStockReceiptPdf(
         qty.toFixed(3),
         formatUnitPricePlain(price),
         currency,
-        formatEUR(discountPercent),
-        formatEUR(lineTotal),
+        formatEUR(computed.discountPercent),
+        formatEUR(computed.lineTotal),
       ]);
     }
 
