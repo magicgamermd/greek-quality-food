@@ -1,6 +1,16 @@
 # Greek Quality Food — STATUS
 
-**Last updated:** 2026-06-18
+**Last updated:** 2026-07-11
+
+## Прод фиксове около приемането на стоки — 2026-07-11 (PR #51/#52/#53, ЖИВИ)
+
+- **Confirm 500 №1 (DATE .trim)**: `PUT /incoming/:id/confirm` гърмеше на доставки със срокове — pg връща JS Date за DATE колона, кодът викаше `.trim()`. Фикс: `asNullableDateString` (Date → локално YYYY-MM-DD). PR #51.
+- **Confirm 500 №2 (дублиран АВТО номер)**: 2+ реда с един и същ продукт (два лота) → авто-номер `АВТО-{доставка}-{продукт}` се дублираше → unique violation. Фикс: авто-номер ПО РЕД `АВТО-{доставка}-{ред}` + lookup по effective номер; обща логика в `applyIncomingLineToStock`. Доказано живо: доставка 4 (Документ 110) → партиди АВТО-4-24/АВТО-4-25 за продукт 34 с отделни срокове. PR #53.
+- **Редакция на ПОТВЪРДЕНА доставка (ново)**: PATCH header, PATCH/POST/DELETE items работят и при `confirmed` — количество→delta по партида+inventory, срок/номер/цена→върху партидата (колизия на номер → 409), нов ред → партида+наличност веднага, изтрит ред → сваля наличността. Frontend: модалът е редактируем и за потвърдени (Потвърди/Откажи остават pending-only). PR #53.
+- **Търговски документ преди експедиране**: показва FEFO предвиждане (партиди+срокове) вместо празни редове; реалният запис остава при fulfill. PR #52.
+- **Оправен счупен frontend build на main**: econt в role union, `Order.econt_requested_at`, премахнат несъществуващ `searchPlaceholder` проп (StockMovements).
+- **Деплой пътища (важно)**: backend → merge в main → Railway auto (проект `gqf`, услуга backend); frontend → РЪЧНО `npx wrangler pages deploy dist --project-name=gqf-warehouse --branch=main` (CF Pages НЕ е git-свързан). ⚠️ Някакъв hook auto-комитва по main („feat: auto: task completed") — комитите бяха премествани на fix branch преди push.
+- Предходно счупени тестове на main: 10 бр. в 7 файла (agent-routes, credit-note-partial, document-pdf, orders-quotation, payments-razpiska ×2, permissions-registry, products-search ×2) — spawn-нат отделен таск за тях.
 
 ## Re-baseline sync from MERTM — 2026-06-18 (branch `feat/gqf-sync-from-mertm`)
 
