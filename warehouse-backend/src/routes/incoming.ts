@@ -462,6 +462,37 @@ async function adjustBatchStock(
   }
 }
 
+// Преизчислява header сумата на доставката от редовете ѝ — вика се след
+// всяка промяна на редове (редакция/добавяне/триене), иначе
+// incoming_goods.total_amount остава старият сбор от създаването.
+// Правилото за ред е огледало на стоковата разписка
+// (computeIncomingReceiptTotals): запазен total_price важи само когато е
+// ≤ кол×цена (реална отстъпка от доставчика); иначе кол×цена.
+async function refreshIncomingTotalAmount(
+  client: StockClient,
+  deliveryId: string,
+): Promise<void> {
+  await client.query(
+    `UPDATE incoming_goods
+        SET total_amount = COALESCE((
+              SELECT SUM(
+                       CASE WHEN COALESCE(ii.total_price, 0) > 0
+                            THEN LEAST(
+                              ii.total_price,
+                              ROUND((ii.quantity * ii.unit_price)::numeric, 2)
+                            )
+                            ELSE ROUND((ii.quantity * ii.unit_price)::numeric, 2)
+                       END
+                     )
+                FROM incoming_items ii
+               WHERE ii.incoming_goods_id = $1
+            ), 0),
+            updated_at = NOW()
+      WHERE id = $1`,
+    [deliveryId],
+  );
+}
+
 function normalizeStatus(value: unknown): CompletenessStatus {
   if (
     value === "complete" ||
@@ -2525,6 +2556,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
           }
         }
 
+        // Header сумата следва редовете.
+        await refreshIncomingTotalAmount(client, id);
+
         return { ok: true };
       });
     },
@@ -2605,6 +2639,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
           }
         }
 
+        // Header сумата следва редовете.
+        await refreshIncomingTotalAmount(client, id);
+
         return reply.status(201).send({ ok: true, item: rows[0] });
       });
     },
@@ -2664,6 +2701,10 @@ export default async function incomingRoutes(app: FastifyInstance) {
         if (rowCount === 0) {
           return reply.status(404).send({ error: "Item not found" });
         }
+
+        // Header сумата следва редовете.
+        await refreshIncomingTotalAmount(client, id);
+
         return { ok: true };
       });
     },
