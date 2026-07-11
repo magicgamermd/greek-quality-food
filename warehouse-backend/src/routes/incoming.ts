@@ -2421,6 +2421,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
         items: z.array(
           z.object({
             id: z.number().int(),
+            // Смяна на продукта на реда — при потвърдена доставка старата
+            // партида се връща и се създава нова за новия продукт.
+            product_id: z.number().int().positive().optional(),
             quantity: z.number().positive().optional(),
             unit_price: z.number().min(0).optional(),
             batch_number: z.string().trim().max(100).optional().nullable(),
@@ -2463,7 +2466,35 @@ export default async function incomingRoutes(app: FastifyInstance) {
           );
           if (!current) continue;
 
-          if (isConfirmed && current.batch_id) {
+          const wantsProductChange =
+            item.product_id !== undefined &&
+            item.product_id !== current.product_id;
+          if (wantsProductChange) {
+            const { rows: prodRows } = await client.query(
+              "SELECT id FROM products WHERE id = $1",
+              [item.product_id],
+            );
+            if (!prodRows[0]) {
+              throw Object.assign(new Error("Продуктът не е намерен"), {
+                statusCode: 404,
+              });
+            }
+            // При потвърдена доставка: първо връщаме ЦЕЛИЯ принос на реда
+            // от старата партида (старото количество). Новите стойности се
+            // прилагат наведнъж след UPDATE-а чрез applyIncomingLineToStock.
+            if (isConfirmed && current.batch_id) {
+              await adjustBatchStock(
+                client,
+                current.product_id,
+                current.batch_id,
+                -Number(current.quantity),
+              );
+            }
+          }
+
+          // Полевата пропагация важи само когато редът си остава на същия
+          // продукт — при смяна всичко се пренася от reapply-а по-долу.
+          if (isConfirmed && current.batch_id && !wantsProductChange) {
             // 1) Количество → delta върху партидата + наличността.
             if (item.quantity !== undefined) {
               const delta = item.quantity - Number(current.quantity);
@@ -2523,6 +2554,10 @@ export default async function incomingRoutes(app: FastifyInstance) {
           const updates: string[] = [];
           const vals: any[] = [];
           let idx = 1;
+          if (wantsProductChange) {
+            updates.push(`product_id = $${idx++}`);
+            vals.push(item.product_id);
+          }
           if (item.quantity !== undefined) {
             updates.push(`quantity = $${idx++}`);
             vals.push(item.quantity);
@@ -2553,6 +2588,30 @@ export default async function incomingRoutes(app: FastifyInstance) {
               `UPDATE incoming_items SET ${updates.join(", ")} WHERE incoming_goods_id = $${idx++} AND id = $${idx}`,
               vals,
             );
+          }
+
+          // Смяна на продукт при потвърдена доставка: редът (с новите си
+          // стойности) влиза в склада наново — нова/намерена партида за
+          // НОВИЯ продукт + наличност + връзка. Старата партида вече е
+          // върната по-горе.
+          if (isConfirmed && wantsProductChange) {
+            const {
+              rows: [fresh],
+            } = await client.query(
+              `SELECT id, product_id, quantity, unit_price, batch_number, expiry_date
+                 FROM incoming_items
+                WHERE incoming_goods_id = $1 AND id = $2`,
+              [id, item.id],
+            );
+            if (fresh) {
+              await applyIncomingLineToStock(client, id, fresh);
+              if (fresh.unit_price && Number(fresh.unit_price) > 0) {
+                await client.query(
+                  "UPDATE products SET purchase_price = $1, updated_at = NOW() WHERE id = $2",
+                  [fresh.unit_price, fresh.product_id],
+                );
+              }
+            }
           }
         }
 

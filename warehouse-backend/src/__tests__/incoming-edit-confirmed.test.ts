@@ -285,6 +285,102 @@ describe("editing a CONFIRMED delivery propagates to batches/inventory", () => {
     }
   });
 
+  it("PATCH сменя продукта на потвърден ред: връща старата партида и създава нова за новия продукт", async () => {
+    const clientQuery = vi
+      .fn()
+      // 0: SELECT incoming_goods FOR UPDATE → потвърдена
+      .mockResolvedValueOnce(res([{ id: 7, status: "confirmed" }]))
+      // 1: SELECT current item FOR UPDATE (продукт 55, партида 900, 4 бр)
+      .mockResolvedValueOnce(
+        res([
+          {
+            id: 30,
+            product_id: 55,
+            batch_id: 900,
+            quantity: "4",
+            unit_price: "5.00",
+          },
+        ]),
+      )
+      // 2: новият продукт съществува
+      .mockResolvedValueOnce(res([{ id: 77 }]))
+      // 3: reverse — UPDATE batches −4 (старата партида 900)
+      .mockResolvedValueOnce(res([], 1))
+      // 4: reverse — UPDATE inventory −4
+      .mockResolvedValueOnce(res([], 1))
+      // 5: UPDATE incoming_items SET product_id
+      .mockResolvedValueOnce(res([], 1))
+      // 6: SELECT fresh row (вече с новия продукт)
+      .mockResolvedValueOnce(
+        res([
+          {
+            id: 30,
+            product_id: 77,
+            quantity: "4",
+            unit_price: "5.00",
+            batch_number: null,
+            expiry_date: null,
+          },
+        ]),
+      )
+      // 7: applyIncomingLineToStock — SELECT batches (АВТО-7-30) → няма
+      .mockResolvedValueOnce(res([]))
+      // 8: INSERT batches → нова партида за новия продукт
+      .mockResolvedValueOnce(res([{ id: 960 }]))
+      // 9: INSERT inventory
+      .mockResolvedValueOnce(res([], 1))
+      // 10: UPDATE incoming_items SET batch_id
+      .mockResolvedValueOnce(res([], 1))
+      // 11: UPDATE products purchase_price (новият продукт)
+      .mockResolvedValueOnce(res([], 1))
+      // 12: refreshIncomingTotalAmount
+      .mockResolvedValueOnce(res([], 1));
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const r = await app.inject({
+        method: "PATCH",
+        url: "/incoming/7/items",
+        payload: { items: [{ id: 30, product_id: 77 }] },
+      });
+
+      expect(r.statusCode).toBe(200);
+
+      // Старата партида (900, продукт 55) е върната с ЦЯЛОТО количество.
+      expect(String(clientQuery.mock.calls[3][0])).toContain(
+        "UPDATE batches SET quantity = quantity + $1",
+      );
+      expect(clientQuery.mock.calls[3][1]).toEqual([-4, 900]);
+      expect(clientQuery.mock.calls[4][1]).toEqual([-4, 55, 1, 900]);
+
+      // Редът получава новия продукт.
+      expect(String(clientQuery.mock.calls[5][0])).toContain(
+        "UPDATE incoming_items SET product_id = $1",
+      );
+      expect(clientQuery.mock.calls[5][1]).toEqual([77, "7", 30]);
+
+      // Новата партида е за НОВИЯ продукт, с авто-номер по ред.
+      expect(clientQuery.mock.calls[7][1]).toEqual([77, "АВТО-7-30"]);
+      expect(String(clientQuery.mock.calls[8][0])).toContain(
+        "INSERT INTO batches",
+      );
+      // (количеството пътува като string от pg — драйверът го кастира)
+      expect(clientQuery.mock.calls[9][1]).toEqual([77, 1, 960, "4"]);
+      expect(clientQuery.mock.calls[10][1]).toEqual([960, 30]);
+
+      // Header сумата се преизчислява.
+      expect(String(clientQuery.mock.calls[12][0])).toContain(
+        "UPDATE incoming_goods",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("still rejects edits on cancelled deliveries", async () => {
     const clientQuery = vi
       .fn()

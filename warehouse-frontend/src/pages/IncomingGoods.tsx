@@ -905,6 +905,9 @@ export function IncomingGoods() {
             selling_price: dbSelling,
             selling_price_db: dbSelling,
             unit: item.unit || "бр",
+            // Снапшот на мярката от каталога — при промяна се синхронизира
+            // обратно към продукта при запис (като selling_price).
+            unit_db: item.unit || "бр",
             // Batch / expiry — editable on pending deliveries (FEFO).
             batch_number: item.batch_number ?? "",
             expiry_date: item.expiry_date
@@ -1012,6 +1015,9 @@ export function IncomingGoods() {
         .filter((i) => i.dirty && !i.toDelete && i.id)
         .map((i) => ({
           id: i.id,
+          // Смяна на продукта на реда (бекендът игнорира непроменен id;
+          // при потвърдена доставка складът се пренася автоматично).
+          ...(i.product_id ? { product_id: Number(i.product_id) } : {}),
           quantity: Number(i.quantity),
           unit_price: Number(i.unit_price || 0),
           batch_number: (i.batch_number ?? "").trim() || null,
@@ -1054,6 +1060,24 @@ export function IncomingGoods() {
           priceUpdates.map((i) =>
             api.put(`/products/${i.product_id}`, {
               selling_price: Number(i.selling_price),
+            }),
+          ),
+        );
+      }
+
+      // Мярката е свойство на продукта — променена мярка се записва
+      // обратно в каталога (огледало на selling_price sync-а).
+      const unitUpdates = editItems.filter((i) => {
+        if (i.toDelete || !i.product_id) return false;
+        const curr = String(i.unit ?? "").trim();
+        const prev = String(i.unit_db ?? "").trim();
+        return curr !== "" && curr !== prev;
+      });
+      if (unitUpdates.length > 0) {
+        await Promise.allSettled(
+          unitUpdates.map((i) =>
+            api.put(`/products/${i.product_id}`, {
+              unit: String(i.unit).trim(),
             }),
           ),
         );
@@ -2075,14 +2099,85 @@ export function IncomingGoods() {
                                     )
                                   }
                                 />
+                              ) : item.changingProduct ? (
+                                <div className="flex items-start gap-1">
+                                  <div className="flex-1 min-w-0">
+                                    <EditRowProductSearch
+                                      onSelect={(product) =>
+                                        setEditItems((current) =>
+                                          current.map((entry, i) =>
+                                            i === index
+                                              ? {
+                                                  ...entry,
+                                                  product_id: product.id,
+                                                  product_name:
+                                                    product.name_bg ||
+                                                    product.name_en ||
+                                                    product.sku ||
+                                                    `#${product.id}`,
+                                                  // Мярката идва от новия
+                                                  // продукт (и снапшотът ѝ,
+                                                  // за да няма фалшив sync).
+                                                  unit:
+                                                    product.unit || entry.unit,
+                                                  unit_db:
+                                                    product.unit || entry.unit,
+                                                  changingProduct: false,
+                                                  dirty: true,
+                                                }
+                                              : entry,
+                                          ),
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Отказ от смяната"
+                                    onClick={() =>
+                                      setEditItems((current) =>
+                                        current.map((entry, i) =>
+                                          i === index
+                                            ? { ...entry, changingProduct: false }
+                                            : entry,
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    ✕
+                                  </Button>
+                                </div>
                               ) : (
                                 <div
-                                  className="h-11 flex items-center px-3 border rounded-md bg-gray-50 text-sm"
+                                  className="h-11 flex items-center gap-1 px-3 border rounded-md bg-gray-50 text-sm"
                                   title={item.product_name}
                                 >
-                                  <span className="truncate">
+                                  <span className="truncate flex-1">
                                     {item.product_name}
                                   </span>
+                                  {!readonly && (
+                                    <button
+                                      type="button"
+                                      className="shrink-0 text-gray-400 hover:text-gray-700"
+                                      title="Смени продукта (складът се коригира автоматично)"
+                                      onClick={() =>
+                                        setEditItems((current) =>
+                                          current.map((entry, i) =>
+                                            i === index
+                                              ? {
+                                                  ...entry,
+                                                  changingProduct: true,
+                                                }
+                                              : entry,
+                                          ),
+                                        )
+                                      }
+                                    >
+                                      <PenLine className="h-4 w-4" />
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -2154,9 +2249,26 @@ export function IncomingGoods() {
                             </div>
                             <div className="col-span-4 md:col-span-1 space-y-1.5">
                               <Label>Мярка</Label>
-                              <div className="h-9 flex items-center px-3 border rounded-md bg-gray-50 text-sm">
-                                {item.unit}
-                              </div>
+                              <Input
+                                type="text"
+                                value={item.unit ?? ""}
+                                disabled={readonly}
+                                placeholder="бр"
+                                title="Мярката е на продукта — промяната се записва в каталога"
+                                onChange={(e) =>
+                                  setEditItems((current) =>
+                                    current.map((entry, i) =>
+                                      i === index
+                                        ? {
+                                            ...entry,
+                                            unit: e.target.value,
+                                            dirty: true,
+                                          }
+                                        : entry,
+                                    ),
+                                  )
+                                }
+                              />
                             </div>
                             <div className="col-span-4 md:col-span-1 space-y-1.5">
                               <Label>Ед. цена</Label>
