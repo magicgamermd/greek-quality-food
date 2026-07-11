@@ -351,6 +351,117 @@ function asNullableDateString(value: unknown): string | null {
   return str.length > 0 ? str : null;
 }
 
+// Минимален клиентски интерфейс (pg PoolClient в транзакция).
+type StockClient = {
+  query: (
+    text: string,
+    values?: unknown[],
+  ) => Promise<{ rows: any[]; rowCount: number | null }>;
+};
+
+// Прилага един входящ ред към склада: резолюция/създаване на партида,
+// наличност по партида и връзка на реда към партидата. Ползва се от
+// confirm И от добавяне на ред към вече потвърдена доставка.
+// Редове без подаден номер получават авто-номер ПО РЕД
+// (АВТО-{доставка}-{ред}), не по продукт: два реда с един и същ продукт
+// (различни лотове/срокове) иначе се блъскат в ux_batches_product_number
+// и целият confirm гърми с 500. Lookup-ът върви винаги по effective
+// номера, така че повторен опит/остатъчна партида се слива вместо да
+// дублира. Връща id-то на партидата.
+async function applyIncomingLineToStock(
+  client: StockClient,
+  deliveryId: string,
+  line: {
+    id: number;
+    product_id: number;
+    quantity: number;
+    unit_price?: number | null;
+    batch_number?: string | null;
+    expiry_date?: unknown;
+  },
+  warehouseId = 1,
+): Promise<number> {
+  const qty = line.quantity;
+  const unitPrice = line.unit_price ?? 0;
+  const bNum = (line.batch_number ?? "").trim() || null;
+  const exp = asNullableDateString(line.expiry_date);
+  const effectiveBatchNumber = bNum ?? `АВТО-${deliveryId}-${line.id}`;
+
+  let batchId: number;
+  const foundBatch = await client.query(
+    `SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2 LIMIT 1`,
+    [line.product_id, effectiveBatchNumber],
+  );
+  if (foundBatch.rows.length) {
+    batchId = foundBatch.rows[0].id;
+    await client.query(
+      `UPDATE batches
+          SET expiry_date = COALESCE($2, expiry_date),
+              purchase_price = $3,
+              delivery_id = $4,
+              quantity = quantity + $5,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [batchId, exp, unitPrice, deliveryId, qty],
+    );
+  } else {
+    const insBatch = await client.query(
+      `INSERT INTO batches
+         (product_id, batch_number, expiry_date, quantity, purchase_price, delivery_id, received_date)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE)
+       RETURNING id`,
+      [line.product_id, effectiveBatchNumber, exp, qty, unitPrice, deliveryId],
+    );
+    batchId = insBatch.rows[0].id;
+  }
+
+  // Наличност по партида (заменя счупения NULL-batch ON CONFLICT;
+  // старият partial index беше премахнат в миграция 080).
+  await client.query(
+    `INSERT INTO inventory (product_id, warehouse_id, batch_id, quantity, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (product_id, batch_id, warehouse_id)
+     DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity, updated_at = NOW()`,
+    [line.product_id, warehouseId, batchId, qty],
+  );
+
+  // Връзваме входящия ред към създадената/намерена партида.
+  await client.query(`UPDATE incoming_items SET batch_id = $1 WHERE id = $2`, [
+    batchId,
+    line.id,
+  ]);
+
+  return batchId;
+}
+
+// Коригира наличността по партидата на входящ ред с delta (положителна
+// или отрицателна) — при редакция/триене на ред от ПОТВЪРДЕНА доставка.
+async function adjustBatchStock(
+  client: StockClient,
+  productId: number,
+  batchId: number,
+  delta: number,
+  warehouseId = 1,
+): Promise<void> {
+  if (delta === 0) return;
+  await client.query(
+    `UPDATE batches SET quantity = quantity + $1, updated_at = NOW() WHERE id = $2`,
+    [delta, batchId],
+  );
+  const updated = await client.query(
+    `UPDATE inventory SET quantity = quantity + $1, updated_at = NOW()
+      WHERE product_id = $2 AND warehouse_id = $3 AND batch_id = $4`,
+    [delta, productId, warehouseId, batchId],
+  );
+  if (!updated.rowCount) {
+    await client.query(
+      `INSERT INTO inventory (product_id, batch_id, warehouse_id, quantity, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())`,
+      [productId, batchId, warehouseId, delta],
+    );
+  }
+}
+
 function normalizeStatus(value: unknown): CompletenessStatus {
   if (
     value === "complete" ||
@@ -2112,64 +2223,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
         // Add each item to inventory
         const defaultWarehouseId = 1; // Default warehouse
         for (const item of items) {
-          const productId = item.product_id;
-          const qty = item.quantity;
-          const unitPrice = item.unit_price ?? 0;
-          const warehouseId = defaultWarehouseId;
-
-          // Резолюция/създаване на партида за реда (по продукт + номер).
-          // Редове без подаден номер получават авто-номер ПО РЕД
-          // (АВТО-{доставка}-{ред}), не по продукт: два реда с един и същ
-          // продукт (различни лотове/срокове) иначе се блъскат в
-          // ux_batches_product_number и целият confirm гърми с 500.
-          // Lookup-ът върви винаги по effective номера, така че повторен
-          // опит/остатъчна партида се слива вместо да дублира.
-          const bNum = (item.batch_number ?? "").trim() || null;
-          const exp = asNullableDateString(item.expiry_date);
-          const effectiveBatchNumber = bNum ?? `АВТО-${id}-${item.id}`;
-          let batchId: number;
-          const foundBatch = await client.query(
-            `SELECT id FROM batches WHERE product_id = $1 AND batch_number = $2 LIMIT 1`,
-            [productId, effectiveBatchNumber],
-          );
-          if (foundBatch.rows.length) {
-            batchId = foundBatch.rows[0].id;
-            await client.query(
-              `UPDATE batches
-                  SET expiry_date = COALESCE($2, expiry_date),
-                      purchase_price = $3,
-                      delivery_id = $4,
-                      quantity = quantity + $5,
-                      updated_at = NOW()
-                WHERE id = $1`,
-              [batchId, exp, unitPrice, id, qty],
-            );
-          } else {
-            const insBatch = await client.query(
-              `INSERT INTO batches
-                 (product_id, batch_number, expiry_date, quantity, purchase_price, delivery_id, received_date)
-               VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE)
-               RETURNING id`,
-              [productId, effectiveBatchNumber, exp, qty, unitPrice, id],
-            );
-            batchId = insBatch.rows[0].id;
-          }
-
-          // Наличност по партида (заменя счупения NULL-batch ON CONFLICT;
-          // старият partial index беше премахнат в миграция 080).
-          await client.query(
-            `INSERT INTO inventory (product_id, warehouse_id, batch_id, quantity, updated_at)
-             VALUES ($1, $2, $3, $4, NOW())
-             ON CONFLICT (product_id, batch_id, warehouse_id)
-             DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity, updated_at = NOW()`,
-            [productId, warehouseId, batchId, qty],
-          );
-
-          // Връзваме входящия ред към създадената/намерена партида.
-          await client.query(
-            `UPDATE incoming_items SET batch_id = $1 WHERE id = $2`,
-            [batchId, item.id],
-          );
+          // Партида + наличност + връзка на реда (споделено с добавянето
+          // на ред към вече потвърдена доставка).
+          await applyIncomingLineToStock(client, id, item, defaultWarehouseId);
 
           // Update product's purchase_price to the latest unit_price
           if (item.unit_price && item.unit_price > 0) {
@@ -2256,7 +2312,10 @@ export default async function incomingRoutes(app: FastifyInstance) {
   // endpoint gets a 404, which matches the (now intentional) absence
   // of the feature.
 
-  // PATCH /incoming/:id — update header (invoice_number, invoice_date, supplier_id) while pending
+  // PATCH /incoming/:id — update header (invoice_number, invoice_date,
+  // supplier_id). Разрешено за чакащи И потвърдени доставки — header
+  // полетата не пипат склад/партиди, така че корекция след потвърждение
+  // е безопасна.
   app.patch(
     "/:id",
     { preHandler: incomingManagePreHandler },
@@ -2277,10 +2336,11 @@ export default async function incomingRoutes(app: FastifyInstance) {
         if (!rows[0]) {
           return reply.status(404).send({ error: "Not found" });
         }
-        if (rows[0].status !== "pending") {
-          return reply
-            .status(400)
-            .send({ error: "Само чакащи доставки могат да се редактират." });
+        if (rows[0].status !== "pending" && rows[0].status !== "confirmed") {
+          return reply.status(400).send({
+            error:
+              "Само чакащи или потвърдени доставки могат да се редактират.",
+          });
         }
 
         const fields: string[] = [];
@@ -2313,14 +2373,19 @@ export default async function incomingRoutes(app: FastifyInstance) {
     },
   );
 
-  // PATCH /incoming/:id/items — update quantity/unit_price of existing line items (pending only)
+  // PATCH /incoming/:id/items — update quantity/unit_price/batch/expiry of
+  // existing line items. Разрешено за чакащи И потвърдени доставки. При
+  // потвърдена доставка промените се пренасят върху реалната партида и
+  // наличността (количество → delta по партида+inventory; срок/номер/цена →
+  // върху партидата), така че складът остава верен след корекция.
   app.patch(
     "/:id/items",
     { preHandler: incomingManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string };
       // Партида/срок се редактират на входящия ред (огледало на create
-      // пътя). Реалната наличност по партида се създава при confirm.
+      // пътя). При pending реалната наличност по партида се създава при
+      // confirm; при confirmed я коригираме тук.
       const schema = z.object({
         items: z.array(
           z.object({
@@ -2342,13 +2407,88 @@ export default async function incomingRoutes(app: FastifyInstance) {
         if (!docRows[0]) {
           return reply.status(404).send({ error: "Not found" });
         }
-        if (docRows[0].status !== "pending") {
-          return reply
-            .status(400)
-            .send({ error: "Само чакащи доставки могат да се редактират." });
+        if (
+          docRows[0].status !== "pending" &&
+          docRows[0].status !== "confirmed"
+        ) {
+          return reply.status(400).send({
+            error:
+              "Само чакащи или потвърдени доставки могат да се редактират.",
+          });
         }
+        const isConfirmed = docRows[0].status === "confirmed";
 
         for (const item of body.items) {
+          // Текущият ред — нужен за delta по количеството и връзката към
+          // партидата (batch_id, попълнен при confirm).
+          const {
+            rows: [current],
+          } = await client.query(
+            `SELECT id, product_id, batch_id, quantity, unit_price
+               FROM incoming_items
+              WHERE incoming_goods_id = $1 AND id = $2
+              FOR UPDATE`,
+            [id, item.id],
+          );
+          if (!current) continue;
+
+          if (isConfirmed && current.batch_id) {
+            // 1) Количество → delta върху партидата + наличността.
+            if (item.quantity !== undefined) {
+              const delta = item.quantity - Number(current.quantity);
+              await adjustBatchStock(
+                client,
+                current.product_id,
+                current.batch_id,
+                delta,
+              );
+            }
+            // 2) Срок на годност → директно върху партидата.
+            if (item.expiry_date !== undefined) {
+              await client.query(
+                `UPDATE batches SET expiry_date = $1, updated_at = NOW() WHERE id = $2`,
+                [asNullableDateString(item.expiry_date), current.batch_id],
+              );
+            }
+            // 3) Номер на партида → преименуване (с проверка за колизия по
+            //    ux_batches_product_number, за да върнем чисто 409 вместо 500).
+            if (item.batch_number !== undefined) {
+              const newNumber =
+                (item.batch_number ?? "").trim() || `АВТО-${id}-${item.id}`;
+              const { rows: clash } = await client.query(
+                `SELECT id FROM batches
+                  WHERE product_id = $1 AND batch_number = $2 AND id <> $3
+                  LIMIT 1`,
+                [current.product_id, newNumber, current.batch_id],
+              );
+              if (clash.length) {
+                throw Object.assign(
+                  new Error(
+                    `Партида с номер "${newNumber}" вече съществува за този продукт.`,
+                  ),
+                  { statusCode: 409 },
+                );
+              }
+              await client.query(
+                `UPDATE batches SET batch_number = $1, updated_at = NOW() WHERE id = $2`,
+                [newNumber, current.batch_id],
+              );
+            }
+            // 4) Покупна цена → партидата (COGS) + продукта (както confirm).
+            if (item.unit_price !== undefined) {
+              await client.query(
+                `UPDATE batches SET purchase_price = $1, updated_at = NOW() WHERE id = $2`,
+                [item.unit_price, current.batch_id],
+              );
+              if (item.unit_price > 0) {
+                await client.query(
+                  "UPDATE products SET purchase_price = $1, updated_at = NOW() WHERE id = $2",
+                  [item.unit_price, current.product_id],
+                );
+              }
+            }
+          }
+
           const updates: string[] = [];
           const vals: any[] = [];
           let idx = 1;
@@ -2369,6 +2509,14 @@ export default async function incomingRoutes(app: FastifyInstance) {
             vals.push(item.expiry_date);
           }
           if (updates.length > 0) {
+            // total_price следва количество/цена (новите стойности, при
+            // частична редакция — допълнени от текущия ред).
+            if (item.quantity !== undefined || item.unit_price !== undefined) {
+              const newQty = item.quantity ?? Number(current.quantity);
+              const newPrice = item.unit_price ?? Number(current.unit_price);
+              updates.push(`total_price = $${idx++}`);
+              vals.push(Number((newQty * newPrice).toFixed(2)));
+            }
             vals.push(id, item.id);
             await client.query(
               `UPDATE incoming_items SET ${updates.join(", ")} WHERE incoming_goods_id = $${idx++} AND id = $${idx}`,
@@ -2382,7 +2530,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /incoming/:id/items — add a NEW line item to a pending delivery
+  // POST /incoming/:id/items — add a NEW line item. Разрешено за чакащи И
+  // потвърдени доставки. При потвърдена доставка редът влиза в склада
+  // веднага (партида + наличност), както би станало при confirm.
   app.post(
     "/:id/items",
     { preHandler: incomingManagePreHandler },
@@ -2406,10 +2556,14 @@ export default async function incomingRoutes(app: FastifyInstance) {
         if (!docRows[0]) {
           return reply.status(404).send({ error: "Not found" });
         }
-        if (docRows[0].status !== "pending") {
-          return reply
-            .status(400)
-            .send({ error: "Само чакащи доставки могат да се редактират." });
+        if (
+          docRows[0].status !== "pending" &&
+          docRows[0].status !== "confirmed"
+        ) {
+          return reply.status(400).send({
+            error:
+              "Само чакащи или потвърдени доставки могат да се редактират.",
+          });
         }
         const prod = await client.query(
           "SELECT id FROM products WHERE id = $1",
@@ -2437,6 +2591,20 @@ export default async function incomingRoutes(app: FastifyInstance) {
             (body.expiry_date ?? "").trim() || null,
           ],
         );
+
+        // При потвърдена доставка новият ред влиза в склада веднага
+        // (същата логика като confirm за един ред).
+        if (docRows[0].status === "confirmed") {
+          const batchId = await applyIncomingLineToStock(client, id, rows[0]);
+          rows[0].batch_id = batchId;
+          if (body.unit_price > 0) {
+            await client.query(
+              "UPDATE products SET purchase_price = $1, updated_at = NOW() WHERE id = $2",
+              [body.unit_price, body.product_id],
+            );
+          }
+        }
+
         return reply.status(201).send({ ok: true, item: rows[0] });
       });
     },
@@ -2457,10 +2625,36 @@ export default async function incomingRoutes(app: FastifyInstance) {
         if (!rows[0]) {
           return reply.status(404).send({ error: "Not found" });
         }
-        if (rows[0].status !== "pending") {
-          return reply
-            .status(400)
-            .send({ error: "Само чакащи доставки могат да се редактират." });
+        if (rows[0].status !== "pending" && rows[0].status !== "confirmed") {
+          return reply.status(400).send({
+            error:
+              "Само чакащи или потвърдени доставки могат да се редактират.",
+          });
+        }
+
+        // При потвърдена доставка редът вече е в склада — триенето първо
+        // сваля количеството от партидата + наличността.
+        if (rows[0].status === "confirmed") {
+          const {
+            rows: [line],
+          } = await client.query(
+            `SELECT id, product_id, batch_id, quantity
+               FROM incoming_items
+              WHERE incoming_goods_id = $1 AND id = $2
+              FOR UPDATE`,
+            [id, itemId],
+          );
+          if (!line) {
+            return reply.status(404).send({ error: "Item not found" });
+          }
+          if (line.batch_id) {
+            await adjustBatchStock(
+              client,
+              line.product_id,
+              line.batch_id,
+              -Number(line.quantity),
+            );
+          }
         }
 
         const { rowCount } = await client.query(
