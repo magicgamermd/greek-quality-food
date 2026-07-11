@@ -61,3 +61,31 @@ export function formatEurAmountPlain(
 ): string {
   return toEurAmount(value, sourceCurrency).toFixed(2);
 }
+
+// ЕДИНИЧНИ цени (доставни/продажни) са с до 3 знака след запетаята
+// (мигр. 101). Показваме минимум 2 ("9,25"), а третият се появява само
+// когато го има ("9,253") — така qty × ед.цена съвпада със сумата на
+// реда. СУМИТЕ остават на 2-знаковите форматери по-горе.
+const BG_UNIT_PRICE_FORMATTER = new Intl.NumberFormat("bg-BG", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 3,
+  useGrouping: true,
+});
+
+/** BG-locale единична цена: "12 345,25" / "12 345,253". Display only. */
+export function formatEurUnitPrice(
+  value: number | string,
+  sourceCurrency?: string | null,
+): string {
+  return BG_UNIT_PRICE_FORMATTER.format(toEurAmount(value, sourceCurrency));
+}
+
+/** Plain единична цена с точка: "9.25" / "9.253" (за PDF-и с dot стил). */
+export function formatUnitPricePlain(
+  value: number | string,
+  sourceCurrency?: string | null,
+): string {
+  const eur = toEurAmount(value, sourceCurrency);
+  const three = eur.toFixed(3);
+  return three.endsWith("0") ? eur.toFixed(2) : three;
+}

@@ -227,6 +227,15 @@ function EditRowProductSearch({
   );
 }
 
+// Единичните цени са с до 3 знака (мигр. 101). Hint текстовете ги показват
+// с третия знак само когато го има — иначе 9.253 би излизало като "9.25€"
+// и изглежда сякаш системата е закръглила.
+function fmtPrice3(v: number): string {
+  if (!Number.isFinite(v)) return "0.00";
+  const three = v.toFixed(3);
+  return three.endsWith("0") ? v.toFixed(2) : three;
+}
+
 function itemDisplayName(item: ScannedInvoiceItem): string {
   return (
     item.name_bg ||
@@ -2154,7 +2163,7 @@ export function IncomingGoods() {
                               <Input
                                 type="number"
                                 min="0"
-                                step="0.01"
+                                step="0.001"
                                 value={item.unit_price}
                                 disabled={readonly}
                                 onChange={(e) =>
@@ -2190,7 +2199,7 @@ export function IncomingGoods() {
                               <Input
                                 type="number"
                                 min="0"
-                                step="0.01"
+                                step="0.001"
                                 value={item.selling_price ?? ""}
                                 disabled={readonly || !item.product_id}
                                 placeholder={item.product_id ? "0.00" : "—"}
@@ -2677,7 +2686,7 @@ export function IncomingGoods() {
                         }}
                         type="number"
                         min="0"
-                        step="0.01"
+                        step="0.001"
                         value={item.unit_price}
                         onChange={(e) =>
                           setManualItems((current) =>
@@ -2994,7 +3003,7 @@ export function IncomingGoods() {
                               </p>
                               <p className="text-xs text-muted-foreground mt-0.5">
                                 {item.quantity} {item.unit || "бр"} ×{" "}
-                                {Number(unitPrice).toFixed(2)}€ ={" "}
+                                {fmtPrice3(Number(unitPrice))}€ ={" "}
                                 {total.toFixed(2)}€
                               </p>
                               {item.name_en &&
@@ -3060,7 +3069,7 @@ export function IncomingGoods() {
                                 </Label>
                                 <Input
                                   type="number"
-                                  step="0.01"
+                                  step="0.001"
                                   value={unitPrice}
                                   onChange={(e) =>
                                     setItemPrices((p) => ({
@@ -3072,13 +3081,13 @@ export function IncomingGoods() {
                                 />
                                 {dbPrice != null && (
                                   <p className="text-[11px] text-muted-foreground">
-                                    База: {dbPrice.toFixed(2)}€
+                                    База: {fmtPrice3(dbPrice)}€
                                     {priceDiff != null &&
                                     Math.abs(priceDiff) >= 0.01 ? (
                                       <span className="text-violet-600 font-semibold">
                                         {" "}
                                         ({priceDiff > 0 ? "+" : ""}
-                                        {priceDiff.toFixed(2)}€)
+                                        {fmtPrice3(priceDiff)}€)
                                       </span>
                                     ) : (
                                       <span className="text-emerald-600">
@@ -3097,7 +3106,7 @@ export function IncomingGoods() {
                                   type="number"
                                   inputMode="decimal"
                                   min="0"
-                                  step="0.01"
+                                  step="0.001"
                                   value={item.selling_price ?? ""}
                                   onChange={(e) =>
                                     updateRowSellingPrice(index, e.target.value)

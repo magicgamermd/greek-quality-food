@@ -39,6 +39,7 @@ import {
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
 import {
   formatCurrency,
+  formatUnitPrice,
   formatUnit,
   getApiErrorMessage,
   stockColorClass,
@@ -65,7 +66,12 @@ const PRICE_GROUP_FIELDS = [
 function formatPrice(v: number | null | undefined): string {
   if (v == null) return "";
   const n = Number(v);
-  return Number.isFinite(n) ? n.toFixed(2) : "";
+  if (!Number.isFinite(n)) return "";
+  // Единичните цени са с до 3 знака (мигр. 101). Пълним формата с третия
+  // знак само когато го има — иначе записът на формата би закръглил тихо
+  // 9.253 → 9.25.
+  const three = n.toFixed(3);
+  return three.endsWith("0") ? n.toFixed(2) : three;
 }
 
 function buildFormState(
@@ -333,7 +339,7 @@ function ProductModal({
                     <Label className="text-xs">{f.label}</Label>
                     <Input
                       type="number"
-                      step="0.01"
+                      step="0.001"
                       value={raw}
                       onChange={(e) => set(f.key, e.target.value)}
                       placeholder="0.00"
@@ -590,11 +596,7 @@ function CategoryManagerModal({
 }
 
 type PriceFilter =
-  | "with_price"
-  | "all"
-  | "no_price"
-  | "zero_stock"
-  | "negative_stock";
+  "with_price" | "all" | "no_price" | "zero_stock" | "negative_stock";
 type StockTab = "active" | "catalog";
 
 export function Products() {
@@ -1029,13 +1031,13 @@ export function Products() {
                       >
                         <TableCell>
                           {p.purchase_price
-                            ? formatCurrency(p.purchase_price)
+                            ? formatUnitPrice(p.purchase_price)
                             : "—"}
                         </TableCell>
                       </Can>
                       <TableCell>
                         {p.selling_price
-                          ? formatCurrency(p.selling_price)
+                          ? formatUnitPrice(p.selling_price)
                           : "—"}
                       </TableCell>
                       <Can

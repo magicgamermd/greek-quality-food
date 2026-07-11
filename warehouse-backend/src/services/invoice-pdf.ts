@@ -1,7 +1,11 @@
 import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
-import { formatEurAmount, toEurAmount } from "../utils/currency.js";
+import {
+  formatEurAmount,
+  formatEurUnitPrice,
+  toEurAmount,
+} from "../utils/currency.js";
 import { mapUnit } from "./units.js";
 
 // Resolve font paths — works in both src/ and dist/
@@ -960,7 +964,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               description,
               unit,
               qty.toFixed(3),
-              formatEur(price, sourceCurrency),
+              formatEurUnitPrice(price, sourceCurrency),
               `${vatRateLabel}%`,
               formatEur(total, sourceCurrency),
             ]
@@ -970,7 +974,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               description,
               unit,
               qty.toFixed(3),
-              formatEur(price, sourceCurrency),
+              formatEurUnitPrice(price, sourceCurrency),
               formatEur(total, sourceCurrency),
             ];
 

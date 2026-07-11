@@ -9,7 +9,7 @@
 import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
-import { formatEurAmount } from "../utils/currency.js";
+import { formatEurAmount, formatEurUnitPrice } from "../utils/currency.js";
 
 function getFontPath(filename: string): string {
   const candidates = [
@@ -153,7 +153,7 @@ export async function generateProtocolPdf(data: ProtocolData): Promise<void> {
         align: "right",
       });
       doc.text(item.unit, colsX[2], y, { width: 50, align: "left" });
-      doc.text(formatEurAmount(item.unit_price), colsX[3], y, {
+      doc.text(formatEurUnitPrice(item.unit_price), colsX[3], y, {
         width: 70,
         align: "right",
       });

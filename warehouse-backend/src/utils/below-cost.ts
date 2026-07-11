@@ -41,10 +41,11 @@ export function computeBelowCostItems(
         quantity: line.quantity,
         unit_price: line.unit_price,
         discount_percent: discount,
-        effective_price: Math.round(effective * 100) / 100,
+        // Единичните цени са с 3 знака след запетаята (мигр. 101).
+        effective_price: Math.round(effective * 1000) / 1000,
         purchase_price: cost.purchase_price,
         loss_per_unit:
-          Math.round((cost.purchase_price - effective) * 100) / 100,
+          Math.round((cost.purchase_price - effective) * 1000) / 1000,
       });
     }
   }

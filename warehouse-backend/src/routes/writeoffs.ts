@@ -145,10 +145,10 @@ async function writeoffOneLine(
     }
   }
 
-  // Normalize monetary values to 2-decimal fixed precision before INSERT so
-  // total_cost matches the rounded unit_cost * quantity shown on the printed
-  // PDF. Floats here would silently drift.
-  const unitCostFixed = Number(unitCost.toFixed(2));
+  // Единичната себестойност е с 3 знака (мигр. 101, следва
+  // batches.purchase_price); total_cost остава пари с 2 знака и е
+  // закръгленото unit_cost × quantity, както излиза на печатния PDF.
+  const unitCostFixed = Number(unitCost.toFixed(3));
   const totalCost = Number((unitCostFixed * line.quantity).toFixed(2));
 
   // 3. INSERT stock_writeoffs (append-only), including protocol_number.

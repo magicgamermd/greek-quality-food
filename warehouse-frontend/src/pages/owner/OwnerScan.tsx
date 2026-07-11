@@ -1011,7 +1011,7 @@ function ItemRow({
               </label>
               <input
                 type="number"
-                step="0.01"
+                step="0.001"
                 value={item.selling_price ?? ""}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -1046,7 +1046,7 @@ function ItemRow({
             </label>
             <input
               type="number"
-              step="0.01"
+              step="0.001"
               value={item.quantity}
               onChange={(e) =>
                 onChange({ quantity: parseFloat(e.target.value) || 0 })
@@ -1259,7 +1259,7 @@ function CreateProductInline({
           </label>
           <input
             type="number"
-            step="0.01"
+            step="0.001"
             value={sellingPrice}
             onChange={(e) => setSellingPrice(e.target.value)}
             placeholder="по избор"

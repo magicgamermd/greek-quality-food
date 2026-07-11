@@ -11,7 +11,7 @@
 import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
-import { formatEurAmount } from "../utils/currency.js";
+import { formatEurAmount, formatEurUnitPrice } from "../utils/currency.js";
 
 function getFontPath(filename: string): string {
   const candidates = [
@@ -220,7 +220,7 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
           minimumFractionDigits: 0,
           maximumFractionDigits: 3,
         }),
-        fmtEur(effectivePrice),
+        formatEurUnitPrice(effectivePrice) + " €",
         fmtEur(lineTotal),
       ];
       cx = L;

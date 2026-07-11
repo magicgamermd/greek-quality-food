@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { query } from "../db.js";
+import { formatUnitPricePlain } from "../utils/currency.js";
 
 // Resolve font paths — works in both src/ and dist/
 function getFontPath(filename: string): string {
@@ -317,7 +318,7 @@ export async function renderWriteoffProtocolPdf(
         data.batch_number || "—",
         data.batch_expiry ? formatDate(data.batch_expiry) : "—",
         `${formatQuantity(data.quantity)}${data.product_unit ? " " + data.product_unit : ""}`,
-        formatMoney(data.unit_cost),
+        formatUnitPricePlain(data.unit_cost),
         formatMoney(data.total_cost),
       ];
 
@@ -754,7 +755,7 @@ export async function renderWriteoffMultiProtocolPdf(
           line.batch_number || "—",
           line.expiry_date ? formatDate(line.expiry_date) : "—",
           `${formatQuantity(line.quantity)}${line.product_unit ? " " + line.product_unit : ""}`,
-          formatMoney(line.unit_cost),
+          formatUnitPricePlain(line.unit_cost),
           formatMoney(line.total_cost),
           reasonLabel,
         ];
