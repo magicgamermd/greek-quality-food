@@ -99,17 +99,15 @@ async function fetchManualProductOptions(
       : [];
   return rows
     .filter((row: any) => Number.isFinite(Number(row?.id)))
-    .map(
-      (row: any): ManualRowProductOption => ({
-        id: Number(row.id),
-        name_bg: row.name_bg ?? null,
-        name_en: row.name_en ?? null,
-        sku: row.sku ?? null,
-        unit: row.unit ?? null,
-        purchase_price: toOptionalNumber(row.purchase_price),
-        selling_price: toOptionalNumber(row.selling_price),
-      }),
-    );
+    .map((row: any): ManualRowProductOption => ({
+      id: Number(row.id),
+      name_bg: row.name_bg ?? null,
+      name_en: row.name_en ?? null,
+      sku: row.sku ?? null,
+      unit: row.unit ?? null,
+      purchase_price: toOptionalNumber(row.purchase_price),
+      selling_price: toOptionalNumber(row.selling_price),
+    }));
 }
 
 function isMatchedForAutoLink(item: ScannedInvoiceItem): boolean {
@@ -1060,6 +1058,12 @@ export function IncomingGoods() {
 
   const editSaving = saveEditChangesMutation.isPending;
 
+  // Редакцията е позволена за чакащи И потвърдени доставки. При потвърдена
+  // доставка бекендът пренася корекциите (количество/срок/партида/цена,
+  // нови/изтрити редове) върху реалните партиди и наличността.
+  const docEditable =
+    selectedDoc?.status === "pending" || selectedDoc?.status === "confirmed";
+
   // Thin wrapper so callers keep the old `Promise<boolean>` contract while
   // the actual work lives in the mutation above.
   const saveEditChanges = async (): Promise<boolean> => {
@@ -1156,8 +1160,7 @@ export function IncomingGoods() {
           },
         );
         const invoiceNumber = quickRes.data?.invoice_number as
-          | string
-          | undefined;
+          string | undefined;
         if (invoiceNumber) {
           const dupCheck = await api.get(
             `/incoming/check-duplicate?invoice_number=${encodeURIComponent(invoiceNumber)}`,
@@ -1862,7 +1865,9 @@ export function IncomingGoods() {
             <DialogDescription>
               {selectedDoc?.status === "pending"
                 ? "Провери и редактирай артикулите преди потвърждение."
-                : "Детайли на доставката."}
+                : selectedDoc?.status === "confirmed"
+                  ? "Потвърдена доставка — корекциите се отразяват директно върху склада."
+                  : "Детайли на доставката."}
             </DialogDescription>
           </DialogHeader>
 
@@ -1875,8 +1880,8 @@ export function IncomingGoods() {
               </div>
             ) : (
               <>
-                {/* Header — editable for pending, readonly otherwise */}
-                {selectedDoc?.status === "pending" ? (
+                {/* Header — editable for pending/confirmed, readonly otherwise */}
+                {docEditable ? (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1.5">
                       <Label>Доставчик</Label>
@@ -2014,7 +2019,7 @@ export function IncomingGoods() {
                           );
                         }
 
-                        const readonly = selectedDoc?.status !== "pending";
+                        const readonly = !docEditable;
                         const sellingPriceChanged =
                           String(item.selling_price ?? "").trim() !==
                           String(item.selling_price_db ?? "").trim();
@@ -2251,7 +2256,7 @@ export function IncomingGoods() {
                     </div>
                   )}
 
-                  {selectedDoc?.status === "pending" && (
+                  {docEditable && (
                     <Button
                       type="button"
                       variant="outline"
@@ -2324,45 +2329,47 @@ export function IncomingGoods() {
               </Button>
             )}
             {selectedDoc?.status === "pending" && !showCancelConfirm && (
-              <>
-                <Button
-                  variant="outline"
-                  className="text-red-600 hover:text-red-700"
-                  onClick={() => setShowCancelConfirm(true)}
-                  disabled={editSaving || confirmIncomingMutation.isPending}
-                >
-                  Откажи
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    const ok = await saveEditChanges();
-                    if (ok) {
-                      // Reload to refresh IDs after deletions
-                      if (selectedDoc) void handleRowClick(selectedDoc);
-                    }
-                  }}
-                  disabled={
-                    editSaving ||
-                    confirmIncomingMutation.isPending ||
-                    !editItems.some((i) => i.dirty || i.toDelete)
+              <Button
+                variant="outline"
+                className="text-red-600 hover:text-red-700"
+                onClick={() => setShowCancelConfirm(true)}
+                disabled={editSaving || confirmIncomingMutation.isPending}
+              >
+                Откажи
+              </Button>
+            )}
+            {docEditable && !showCancelConfirm && (
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  const ok = await saveEditChanges();
+                  if (ok) {
+                    // Reload to refresh IDs after deletions
+                    if (selectedDoc) void handleRowClick(selectedDoc);
                   }
-                >
-                  {editSaving ? <Spinner size="sm" /> : null}
-                  Запази промените
-                </Button>
-                <Button
-                  onClick={confirmFromDetailsModal}
-                  disabled={editSaving || confirmIncomingMutation.isPending}
-                >
-                  {confirmIncomingMutation.isPending ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <CheckCircle className="h-4 w-4" />
-                  )}
-                  Потвърди доставката
-                </Button>
-              </>
+                }}
+                disabled={
+                  editSaving ||
+                  confirmIncomingMutation.isPending ||
+                  !editItems.some((i) => i.dirty || i.toDelete)
+                }
+              >
+                {editSaving ? <Spinner size="sm" /> : null}
+                Запази промените
+              </Button>
+            )}
+            {selectedDoc?.status === "pending" && !showCancelConfirm && (
+              <Button
+                onClick={confirmFromDetailsModal}
+                disabled={editSaving || confirmIncomingMutation.isPending}
+              >
+                {confirmIncomingMutation.isPending ? (
+                  <Spinner size="sm" />
+                ) : (
+                  <CheckCircle className="h-4 w-4" />
+                )}
+                Потвърди доставката
+              </Button>
             )}
           </DialogFooter>
         </DialogContent>

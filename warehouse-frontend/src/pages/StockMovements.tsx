@@ -386,7 +386,6 @@ function MovementForm({ movementType }: { movementType: MovementType }) {
             value={productId}
             onChange={(v) => setProductId(v)}
             placeholder="Избери продукт..."
-            searchPlaceholder="Търси по име или SKU..."
             emptyMessage="Няма намерени продукти"
           />
           {productMeta && (
