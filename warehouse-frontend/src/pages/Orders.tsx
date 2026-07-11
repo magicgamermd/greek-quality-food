@@ -60,6 +60,7 @@ import type { Order, OrderItem, Partner, PartnerOrderObject } from "@/types";
 import {
   formatDate,
   formatCurrency,
+  formatUnitPrice,
   formatOrderTotal,
   isoDateToday,
   getApiErrorMessage,
@@ -2045,7 +2046,7 @@ function OrderDetailModal({
                                 {item.quantity}
                               </TableCell>
                               <TableCell className="text-right text-sm">
-                                {formatCurrency(item.unit_price)}
+                                {formatUnitPrice(item.unit_price)}
                               </TableCell>
                               <TableCell className="text-right text-sm">
                                 {discountPct > 0 ? (
@@ -4588,7 +4589,7 @@ function EditOrderItemsModal({
                               editPriceRefs.current[item.row_key] = el;
                             }}
                             type="number"
-                            step="0.01"
+                            step="0.001"
                             min="0"
                             value={item.unit_price}
                             onChange={(e) =>
@@ -4815,7 +4816,7 @@ function EditOrderItemsModal({
                   return (
                     <li key={idx}>
                       {i.product_name}: продаваш на{" "}
-                      {formatCurrency(Number(i.unit_price))}, ДЦ{" "}
+                      {formatUnitPrice(Number(i.unit_price))}, ДЦ{" "}
                       {formatCurrency(i.cost_price)} (загуба{" "}
                       {formatCurrency(loss)})
                     </li>
@@ -6913,7 +6914,7 @@ function CreateOrderModal({
                       return (
                         <li key={idx}>
                           {i.product_name}: продаваш на{" "}
-                          {formatCurrency(Number(i.unit_price))}, ДЦ{" "}
+                          {formatUnitPrice(Number(i.unit_price))}, ДЦ{" "}
                           {formatCurrency(i.cost_price)} (загуба{" "}
                           {formatCurrency(loss)})
                         </li>

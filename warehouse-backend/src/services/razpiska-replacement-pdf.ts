@@ -18,6 +18,7 @@
 import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
+import { formatUnitPricePlain } from "../utils/currency.js";
 
 // ── Fonts (same lookup pattern as document-pdf.ts) ──────────────────
 function getFontPath(filename: string): string {
@@ -477,7 +478,7 @@ function drawSection(
       item.product_code || "",
       item.product_name || "—",
       formatQty(item.quantity),
-      formatEUR(item.unit_price),
+      formatUnitPricePlain(item.unit_price),
       formatEUR(sum),
     ];
     let cellX = leftCol;

@@ -567,7 +567,7 @@ function ItemRow({
         <Input
           type="number"
           min="0"
-          step="0.01"
+          step="0.001"
           value={item.unit_price || ""}
           onChange={(e) =>
             onChange({ ...item, unit_price: Number(e.target.value) || 0 })

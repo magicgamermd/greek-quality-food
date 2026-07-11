@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { mapUnit } from "./units.js";
+import { formatUnitPricePlain } from "../utils/currency.js";
 
 // ── Fonts ──────────────────────────────────────────────────────────
 function getFontPath(filename: string): string {
@@ -1007,7 +1008,7 @@ export async function generateIncomingStockReceiptPdf(
         item.name_bg || item.name_en || "—",
         mapUnit(item.unit || "бр"),
         qty.toFixed(3),
-        formatEUR(price),
+        formatUnitPricePlain(price),
         currency,
         formatEUR(discountPercent),
         formatEUR(lineTotal),
@@ -1463,7 +1464,7 @@ export async function generateStockDispatchPdf(
         item.name_bg || item.name_en || "—",
         mapUnit(item.unit || "бр"),
         formatQty(qty),
-        formatEUR(displayPrice),
+        formatUnitPricePlain(displayPrice),
         (item.currency || "EUR").toUpperCase(),
         formatEUR(displayLineTotal),
       ]);

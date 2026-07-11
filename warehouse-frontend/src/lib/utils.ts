@@ -52,6 +52,26 @@ export function formatCurrency(
   return EUR_FORMATTER.format(toEurAmount(n, sourceCurrency));
 }
 
+// ЕДИНИЧНИ цени (доставни/продажни) са с до 3 знака след запетаята
+// (мигр. 101). Минимум 2 ("9,25 €"), третият се показва само когато го
+// има ("9,253 €") — така qty × ед. цена съвпада със сумата на реда.
+// СУМИТЕ остават на formatCurrency (точно 2 знака).
+const EUR_UNIT_PRICE_FORMATTER = new Intl.NumberFormat("bg-BG", {
+  style: "currency",
+  currency: "EUR",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 3,
+});
+
+export function formatUnitPrice(
+  amount: number | string | null | undefined,
+  sourceCurrency?: string | null,
+): string {
+  const n = typeof amount === "string" ? parseFloat(amount) : Number(amount);
+  if (!Number.isFinite(n)) return EUR_UNIT_PRICE_FORMATTER.format(0);
+  return EUR_UNIT_PRICE_FORMATTER.format(toEurAmount(n, sourceCurrency));
+}
+
 /**
  * GQF: orders.total_amount е NET (без ДДС). За UI display на "Общо" —
  * сумата която клиентът трябва да плати — добавяме ДДС (× 1.2).

@@ -825,7 +825,7 @@ function PurchaseOrderDrawer({ open, onClose, orderId }: DrawerProps) {
                               }}
                               type="number"
                               min="0"
-                              step="0.01"
+                              step="0.001"
                               className="text-right"
                               value={item.quantity}
                               disabled={isReadOnly}
