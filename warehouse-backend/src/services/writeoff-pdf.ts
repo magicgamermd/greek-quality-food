@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { query } from "../db.js";
 import { formatUnitPricePlain } from "../utils/currency.js";
+import { displayBatchNumber } from "../utils/batch-display.js";
 
 // Resolve font paths — works in both src/ and dist/
 function getFontPath(filename: string): string {
@@ -315,7 +316,7 @@ export async function renderWriteoffProtocolPdf(
       const values: string[] = [
         "1",
         productLabel,
-        data.batch_number || "—",
+        displayBatchNumber(data.batch_number) || "—",
         data.batch_expiry ? formatDate(data.batch_expiry) : "—",
         `${formatQuantity(data.quantity)}${data.product_unit ? " " + data.product_unit : ""}`,
         formatUnitPricePlain(data.unit_cost),
@@ -752,7 +753,7 @@ export async function renderWriteoffMultiProtocolPdf(
         const values: string[] = [
           String(line.n),
           productLabel,
-          line.batch_number || "—",
+          displayBatchNumber(line.batch_number) || "—",
           line.expiry_date ? formatDate(line.expiry_date) : "—",
           `${formatQuantity(line.quantity)}${line.product_unit ? " " + line.product_unit : ""}`,
           formatUnitPricePlain(line.unit_cost),

@@ -600,6 +600,15 @@ const ProductSearch = forwardRef<
 /* ------------------------------------------------------------------ */
 /*  ISSUE 5: Order detail modal                                        */
 /* ------------------------------------------------------------------ */
+// Служебни партидни номера (авто-партида при доставка без номер,
+// откриваща партида при back-order) — складова идентичност, не се
+// показва на потребителя: редът просто няма партида.
+function displayBatchNumber(value?: string | null): string | null {
+  const v = (value ?? "").trim();
+  if (!v || v.startsWith("АВТО-") || v === "НАЧАЛНО") return null;
+  return v;
+}
+
 function OrderDetailModal({
   order,
   onClose,
@@ -2018,9 +2027,13 @@ function OrderDetailModal({
                               </TableCell>
                               {/* GQF: Партида (batch_number) + Срок на годност */}
                               <TableCell className="text-sm">
-                                {(item as any).batch_number ? (
+                                {displayBatchNumber(
+                                  (item as any).batch_number,
+                                ) ? (
                                   <span className="font-mono text-gray-700">
-                                    {(item as any).batch_number}
+                                    {displayBatchNumber(
+                                      (item as any).batch_number,
+                                    )}
                                   </span>
                                 ) : (
                                   <span className="text-xs text-gray-400">

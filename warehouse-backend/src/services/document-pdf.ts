@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { mapUnit } from "./units.js";
 import { formatUnitPricePlain } from "../utils/currency.js";
+import { displayBatchNumber } from "../utils/batch-display.js";
 
 // ── Fonts ──────────────────────────────────────────────────────────
 function getFontPath(filename: string): string {
@@ -1685,7 +1686,7 @@ export async function generateCommercialDocPdf(
         item.sku || "",
         item.name_bg || item.name_en || "—",
         mapUnit(item.unit || "бр"),
-        item.batch_number || "-",
+        displayBatchNumber(item.batch_number) || "-",
         expiryStr,
         qty.toFixed(3),
       ]);
