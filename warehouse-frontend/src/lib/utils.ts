@@ -170,3 +170,12 @@ export function stockColorClass(
   }
   return "text-gray-900";
 }
+
+// Служебни партидни номера (авто-партида при доставка без въведен номер,
+// откриваща партида при back-order) — складова идентичност, не се показва
+// на потребителя: редът/лотът се представя чрез срока си на годност.
+export function displayBatchNumber(value?: string | null): string | null {
+  const v = (value ?? "").trim();
+  if (!v || v.startsWith("АВТО-") || v === "НАЧАЛНО") return null;
+  return v;
+}

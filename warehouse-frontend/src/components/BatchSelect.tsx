@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Select } from "@/components/ui/select";
-import { formatDate, isoDateToday } from "@/lib/utils";
+import { displayBatchNumber, formatDate, isoDateToday } from "@/lib/utils";
 
 /**
  * GQF batch picker for order lines. Greek Quality Food продава нетрайни
@@ -92,10 +92,21 @@ export function useProductBatches(productId: string) {
 }
 
 function batchLabel(batch: Batch): string {
-  const number = batch.batch_number?.trim() || `#${batch.id}`;
-  const expiry = batch.expiry_date ? formatDate(batch.expiry_date) : "без срок";
   const qty = Number(batch.quantity);
-  return `${number} · ${expiry} · ${qty} бр.`;
+  // Служебните лотове (АВТО-*/НАЧАЛНО — създадени при доставка без въведен
+  // номер) нямат човешки номер: за касиера идентичността на лота Е срокът
+  // на годност. Реално въведените номера се показват както досега.
+  const realNumber = displayBatchNumber(batch.batch_number);
+  if (realNumber) {
+    const expiry = batch.expiry_date
+      ? formatDate(batch.expiry_date)
+      : "без срок";
+    return `${realNumber} · ${expiry} · ${qty}`;
+  }
+  if (batch.expiry_date) {
+    return `Срок ${formatDate(batch.expiry_date)} · ${qty}`;
+  }
+  return `Лот #${batch.id} · без срок · ${qty}`;
 }
 
 interface BatchSelectProps {
@@ -134,6 +145,22 @@ export function BatchSelect({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId, isLoading, value, fefoBatch?.id]);
+
+  // Заредени редове (редакция на поръчка) идват с batch_id, но БЕЗ срока
+  // на лота → колоната „Годност" стоеше на „—". Щом опциите пристигнат,
+  // подаваме срока на вече избрания лот нагоре (същият batch_id, само
+  // expiry-то се попълва).
+  const chosenExpiry = useMemo(() => {
+    if (!value) return null;
+    const chosen = batches.find((batch) => String(batch.id) === value);
+    return chosen ? (chosen.expiry_date ?? "") : null;
+  }, [batches, value]);
+  useEffect(() => {
+    if (!productId || isLoading || !value) return;
+    if (chosenExpiry == null) return;
+    onChange(value, chosenExpiry);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productId, isLoading, value, chosenExpiry]);
 
   if (!productId) {
     return <span className="text-xs text-gray-400">—</span>;

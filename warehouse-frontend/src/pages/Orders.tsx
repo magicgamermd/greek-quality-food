@@ -61,6 +61,7 @@ import {
   formatDate,
   formatCurrency,
   formatUnitPrice,
+  displayBatchNumber,
   formatOrderTotal,
   isoDateToday,
   getApiErrorMessage,
@@ -600,15 +601,6 @@ const ProductSearch = forwardRef<
 /* ------------------------------------------------------------------ */
 /*  ISSUE 5: Order detail modal                                        */
 /* ------------------------------------------------------------------ */
-// Служебни партидни номера (авто-партида при доставка без номер,
-// откриваща партида при back-order) — складова идентичност, не се
-// показва на потребителя: редът просто няма партида.
-function displayBatchNumber(value?: string | null): string | null {
-  const v = (value ?? "").trim();
-  if (!v || v.startsWith("АВТО-") || v === "НАЧАЛНО") return null;
-  return v;
-}
-
 function OrderDetailModal({
   order,
   onClose,
