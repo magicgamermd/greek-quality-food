@@ -202,6 +202,9 @@ const createProformaSchema = createInvoiceSchema;
 
 const regenerateInvoiceSchema = z.object({
   payment_method: invoicePaymentMethodSchema.optional(),
+  // Смяна на ДДС режима е позволена САМО за проформа (не-фискален
+  // документ). Реална фактура не сменя ДДС след издаване.
+  include_vat: z.boolean().optional(),
   // For regenerate, an absent field means "keep the previously stored
   // value" — handled via COALESCE in the UPDATE. Empty string is
   // treated the same as absent (no override). Length capped to match
@@ -804,10 +807,24 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             statusCode: 404,
           });
         }
-        if (invoice.document_type !== "invoice") {
-          throw Object.assign(new Error("Only invoices can be regenerated"), {
-            statusCode: 400,
-          });
+        const isProforma = invoice.document_type === "proforma";
+        if (invoice.document_type !== "invoice" && !isProforma) {
+          throw Object.assign(
+            new Error("Само фактури и проформи могат да се регенерират"),
+            { statusCode: 400 },
+          );
+        }
+        if (
+          body.include_vat !== undefined &&
+          body.include_vat !== (invoice.include_vat !== false) &&
+          !isProforma
+        ) {
+          throw Object.assign(
+            new Error(
+              "Издадена фактура не сменя ДДС режим — изтрий/анулирай я и издай нова.",
+            ),
+            { statusCode: 400 },
+          );
         }
         if (invoice.status === "cancelled") {
           throw Object.assign(
@@ -821,9 +838,12 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         // Find the order linked to this invoice
         const {
           rows: [order],
-        } = await client.query("SELECT * FROM orders WHERE invoice_id = $1", [
-          id,
-        ]);
+        } = await client.query(
+          isProforma
+            ? "SELECT * FROM orders WHERE proforma_invoice_id = $1"
+            : "SELECT * FROM orders WHERE invoice_id = $1",
+          [id],
+        );
 
         if (!order) {
           throw Object.assign(new Error("No order linked to this invoice"), {
@@ -866,7 +886,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           (sum: number, i: any) => sum + parseFloat(i.total_price),
           0,
         );
-        const includeVat = invoice.include_vat !== false;
+        const includeVat = body.include_vat ?? invoice.include_vat !== false;
         const vatRate = includeVat ? 20 : 0;
         const totalNet = totalNetLines;
         const totalVat = includeVat ? (totalNet * vatRate) / 100 : 0;
@@ -907,14 +927,16 @@ export default async function invoiceRoutes(app: FastifyInstance) {
              SET total_net = $1,
                  total_vat = $2,
                  total_gross = $3,
-                 payment_method = COALESCE($4, payment_method),
-                 vat_exemption_reason = COALESCE($5, vat_exemption_reason),
-                 invoice_note = COALESCE($6, invoice_note)
-           WHERE id = $7 RETURNING *`,
+                 include_vat = $4,
+                 payment_method = COALESCE($5, payment_method),
+                 vat_exemption_reason = COALESCE($6, vat_exemption_reason),
+                 invoice_note = COALESCE($7, invoice_note)
+           WHERE id = $8 RETURNING *`,
           [
             totalNet,
             totalVat,
             totalGross,
+            includeVat,
             body.payment_method ?? null,
             overrideExemption,
             overrideNote,
@@ -927,7 +949,12 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         const invoicesDir = path.resolve("uploads", "invoices");
         fs.mkdirSync(invoicesDir, { recursive: true });
 
-        const pdfPath = path.join(invoicesDir, `${invoice.invoice_number}.pdf`);
+        const pdfPath = path.join(
+          invoicesDir,
+          isProforma
+            ? `proforma-${invoice.invoice_number}.pdf`
+            : `${invoice.invoice_number}.pdf`,
+        );
         await generateInvoicePdf({
           invoice: updated,
           partner,
@@ -935,6 +962,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           items,
           vatRate,
           includeVat,
+          documentType: isProforma ? "proforma" : undefined,
           sourceCurrency: (updated as any).currency ?? null,
           outputPath: pdfPath,
           showBgn: company.show_bgn_on_invoice === true,

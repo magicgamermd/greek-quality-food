@@ -1419,18 +1419,37 @@ function OrderDetailModal({
 
   const regenerateInvoiceMutation = useMutation({
     mutationFn: (
-      input: number | { id: number; payment_method?: InvoicePaymentMethod },
+      input:
+        | number
+        | {
+            id: number;
+            payment_method?: InvoicePaymentMethod;
+            // Проформа: смяна на ДДС режима при преиздаване (реална
+            // фактура не сменя ДДС — backend-ът връща 400).
+            include_vat?: boolean;
+            vat_exemption_reason?: string;
+          },
     ) => {
       const id = typeof input === "number" ? input : input.id;
       const body =
-        typeof input === "number" || !input.payment_method
+        typeof input === "number"
           ? undefined
-          : { payment_method: input.payment_method };
+          : {
+              ...(input.payment_method
+                ? { payment_method: input.payment_method }
+                : {}),
+              ...(input.include_vat !== undefined
+                ? { include_vat: input.include_vat }
+                : {}),
+              ...(input.vat_exemption_reason
+                ? { vat_exemption_reason: input.vat_exemption_reason }
+                : {}),
+            };
       return api.put(`/invoices/${id}/regenerate`, body);
     },
     onSuccess: () => {
       invalidateAllOrderRelated();
-      toast.success("Фактурата е регенерирана");
+      toast.success("Документът е регенериран");
     },
     onError: (err: any) => {
       toast.error(
@@ -2641,24 +2660,72 @@ function OrderDetailModal({
                              номер. Старата проформа остава в БД като
                              reference (invoice.proforma_id linkва нагоре). */}
                       {detail.proforma_invoice_id ? (
-                        <Button
-                          type="button"
-                          onClick={() =>
-                            finalizeProformaMutation.mutate(
-                              detail.proforma_invoice_id!,
-                            )
-                          }
-                          disabled={finalizeProformaMutation.isPending}
-                          className="bg-emerald-600 hover:bg-emerald-700"
-                          title="Превърни проформата в реална фактура с фискален номер"
-                        >
-                          {finalizeProformaMutation.isPending ? (
-                            <Spinner size="sm" />
-                          ) : (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() =>
+                              void openInvoicePdf(detail.proforma_invoice_id!)
+                            }
+                            title="Отвори PDF на проформата"
+                          >
                             <FileText className="h-4 w-4" />
-                          )}
-                          Финализирай проформа
-                        </Button>
+                            Отвори проформа
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() =>
+                              regenerateInvoiceMutation.mutate(
+                                {
+                                  id: detail.proforma_invoice_id!,
+                                  include_vat: includeVat,
+                                  payment_method: paymentMethod,
+                                  vat_exemption_reason: !includeVat
+                                    ? vatExemptionReason.trim() || undefined
+                                    : undefined,
+                                },
+                                {
+                                  onSuccess: () =>
+                                    setTimeout(
+                                      () =>
+                                        void openInvoicePdf(
+                                          detail.proforma_invoice_id!,
+                                        ),
+                                      300,
+                                    ),
+                                },
+                              )
+                            }
+                            disabled={regenerateInvoiceMutation.isPending}
+                            title="Преиздай проформата с текущите настройки (ДДС режим, основание, плащане) — номерът се запазва"
+                          >
+                            {regenerateInvoiceMutation.isPending ? (
+                              <Spinner size="sm" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
+                            Преиздай {!includeVat && "(без ДДС)"}
+                          </Button>
+                          <Button
+                            type="button"
+                            onClick={() =>
+                              finalizeProformaMutation.mutate(
+                                detail.proforma_invoice_id!,
+                              )
+                            }
+                            disabled={finalizeProformaMutation.isPending}
+                            className="bg-emerald-600 hover:bg-emerald-700"
+                            title="Превърни проформата в реална фактура с фискален номер"
+                          >
+                            {finalizeProformaMutation.isPending ? (
+                              <Spinner size="sm" />
+                            ) : (
+                              <FileText className="h-4 w-4" />
+                            )}
+                            Финализирай проформа
+                          </Button>
+                        </>
                       ) : (
                         <Button
                           type="button"
