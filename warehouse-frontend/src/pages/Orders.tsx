@@ -2395,10 +2395,7 @@ function OrderDetailModal({
                       onRecordPayment({
                         ...detail,
                         payment_method: paymentMethod as
-                          | "cash"
-                          | "bank"
-                          | "cod"
-                          | "pos",
+                          "cash" | "bank" | "cod" | "pos",
                       })
                     }
                     className="border-emerald-500 text-emerald-700 hover:bg-emerald-50"
@@ -2419,12 +2416,56 @@ function OrderDetailModal({
                   Фактура:
                 </span>
 
-                {/* GQF: винаги "С ДДС" — за хранителни стоки цените са
-                 * с включено ДДС (gross). Премахваме MERT-M dropdown-а
-                 * "С ДДС / Без ДДС" — никой няма да издава фактура без
-                 * ДДС на търговец / клиент в България. Запазваме само
-                 * fallback индикатора при наличие на готова фактура. */}
-                {!hasInvoice ? null : (
+                {/* ДДС превключвател — върнат (беше премахнат като "никой
+                 * не издава без ДДС в България"), защото износ/ВОД клиенти
+                 * (напр. Bulstock) искат проформа/фактура БЕЗ ДДС.
+                 * Важи и за проформата, и за реалната фактура (payload-ите
+                 * пращат include_vat + vat_exemption_reason; finalize
+                 * наследява от проформата). При "Без ДДС" се отваря
+                 * диалогът за основание (задължително по ЗДДС). */}
+                {!hasInvoice ? (
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
+                    <span className="text-xs text-gray-500">ДДС:</span>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md ${
+                            includeVat
+                              ? "bg-[#6c3dff] text-white hover:bg-[#5a30d9]"
+                              : "bg-amber-500 text-white hover:bg-amber-600"
+                          }`}
+                          title="С или без ДДС (за износ/ВОД)"
+                        >
+                          {includeVat ? "С ДДС" : "Без ДДС"}
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        className="min-w-[180px]"
+                      >
+                        <DropdownMenuItem
+                          onClick={() => setIncludeVat(true)}
+                          className={includeVat ? "font-semibold" : ""}
+                        >
+                          С ДДС (20%)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setIncludeVat(false);
+                            // Основанието е задължително — отваряме диалога
+                            // (същия като моливчето ✎) да го попълнят.
+                            setInvoiceExtrasOpen(true);
+                          }}
+                          className={!includeVat ? "font-semibold" : ""}
+                        >
+                          Без ДДС (износ/ВОД — иска основание)
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                ) : (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
                     <span className="text-xs text-gray-500">ДДС:</span>
                     <span
@@ -2632,7 +2673,7 @@ function OrderDetailModal({
                           ) : (
                             <FileText className="h-4 w-4" />
                           )}
-                          Проформа
+                          Проформа {!includeVat && "(без ДДС)"}
                         </Button>
                       )}
                       {/* Compact „note" button — opens the extras dialog
@@ -4010,9 +4051,7 @@ function EditOrderItemsModal({
           original_weight_kg: productWeight,
           cost_price: Number.isFinite(costNum) && costNum > 0 ? costNum : 0,
           line_status: (item.line_status ?? "normal") as
-            | "normal"
-            | "paid_not_taken"
-            | "awaiting",
+            "normal" | "paid_not_taken" | "awaiting",
           // GQF: prefill the previously chosen batch when the backend returns
           // it; otherwise BatchSelect re-applies the FEFO default on open.
           batch_id:
