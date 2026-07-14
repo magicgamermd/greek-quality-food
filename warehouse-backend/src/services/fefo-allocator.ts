@@ -46,6 +46,23 @@ export class InsufficientStockError extends Error {
 const toNum = (v: unknown) =>
   v == null ? 0 : typeof v === "number" ? v : parseFloat(String(v));
 
+// PostgreSQL DATE стига до node-postgres като JS Date (на локална
+// полунощ). Нормализираме по ЛОКАЛНИ компоненти до 'YYYY-MM-DD' —
+// String(date).slice(0,10) даваше "Tue Mar 31": грешни срокове по
+// документите (FEFO preview на търговския документ) И счупено сравнение
+// за изтекли партиди (буква > цифра → нищо не се брои за изтекло).
+const normalizeExpiry = (v: unknown): string | null => {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    const year = v.getFullYear();
+    const month = String(v.getMonth() + 1).padStart(2, "0");
+    const day = String(v.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  const s = String(v).trim();
+  return s ? s.slice(0, 10) : null;
+};
+
 const todayISO = (opts: FefoOptions) =>
   opts.today ?? new Date().toISOString().slice(0, 10);
 
@@ -84,9 +101,7 @@ export async function allocateFefo(
   let availableNonExpired = 0;
 
   for (const row of rows) {
-    const expiry = row.expiry_date
-      ? String(row.expiry_date).slice(0, 10)
-      : null;
+    const expiry = normalizeExpiry(row.expiry_date);
     const isExpired = expiry != null && expiry < today;
     if (isExpired && !opts.allowExpired) continue;
 

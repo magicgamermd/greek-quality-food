@@ -38,6 +38,62 @@ describe("allocateFefo", () => {
     ]);
   });
 
+  it("DATE колона (JS Date от pg) → ISO срок, не 'Tue Mar 31' боклук", async () => {
+    // Регресия (прод): node-postgres връща DATE като JS Date на локална
+    // полунощ. String(date).slice(0,10) даваше "Tue Mar 31" → грешни
+    // срокове на търговския документ (FEFO preview) при първи печат.
+    const client = mkClient([
+      {
+        batch_id: 1,
+        batch_number: "АВТО-4-24",
+        expiry_date: new Date(2027, 2, 31), // 31.03.2027 локално
+        purchase_price: "9.25",
+        available: "16.635",
+      },
+    ]);
+    const res = await allocateFefo(client, 1, 1, 5, { today: TODAY });
+    expect(res.allocations[0].expiry_date).toBe("2027-03-31");
+  });
+
+  it("ИЗТЕКЛА партида като JS Date СЕ пропуска (счупеното string сравнение)", async () => {
+    // Преди: "Tue Mar 31" < "2026-06-22" е false (буква > цифра) → изтекли
+    // партиди се разпределяха. С нормализация датата се сравнява коректно.
+    const client = mkClient([
+      {
+        batch_id: 1,
+        batch_number: "СТАРА",
+        expiry_date: new Date(2026, 0, 15), // 15.01.2026 — изтекла
+        purchase_price: "1.00",
+        available: "10",
+      },
+      {
+        batch_id: 2,
+        batch_number: "ПРЯСНА",
+        expiry_date: new Date(2026, 11, 1), // 01.12.2026
+        purchase_price: "1.00",
+        available: "10",
+      },
+    ]);
+    const res = await allocateFefo(client, 1, 1, 5, { today: TODAY });
+    expect(res.allocations).toHaveLength(1);
+    expect(res.allocations[0].batch_id).toBe(2);
+  });
+
+  it("изтичаща скоро партида като JS Date вдига предупреждение с ISO дата", async () => {
+    const client = mkClient([
+      {
+        batch_id: 1,
+        batch_number: "B1",
+        expiry_date: new Date(2026, 6, 1), // 01.07.2026 — до 30 дни от TODAY
+        purchase_price: "1.00",
+        available: "10",
+      },
+    ]);
+    const res = await allocateFefo(client, 1, 1, 5, { today: TODAY });
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings[0]).toContain("2026-07-01");
+  });
+
   it("разделя линия по няколко партиди", async () => {
     const client = mkClient([
       {
