@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -8,7 +8,16 @@ import {
   PackageCheck,
   PackageX,
   Pencil,
+  ChevronRight,
+  ChevronDown,
+  Check,
 } from "lucide-react";
+import { toast } from "@/lib/toast";
+import {
+  isBatchExpired,
+  isBatchExpiringSoon,
+  type Batch,
+} from "@/components/BatchSelect";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import type { StockLevel } from "@/types";
@@ -52,6 +61,150 @@ function normalizeInventoryItem(item: any): StockLevel {
       item.total_quantity ?? item.total_stock ?? item.quantity ?? 0,
     ),
   };
+}
+
+// Партидите на продукт — разгъващ се панел под реда в Склада. Показва
+// номер (служебните АВТО-* се виждат тук — това е складовата
+// идентичност), СРОК НА ГОДНОСТ (редактируем на място — точно за
+// случая „стоката изглежда изчезнала, а е с грешно въведен/изтекъл
+// срок") и количество. Изтекла партида → червено.
+function ProductBatchesPanel({
+  productId,
+  canEdit,
+}: {
+  productId: number;
+  canEdit: boolean;
+}) {
+  const qc = useQueryClient();
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["batches", String(productId)],
+    queryFn: async () => {
+      const res = await api.get("/batches", {
+        params: { product_id: productId, limit: 100 },
+      });
+      return (res.data?.data ?? []) as Batch[];
+    },
+  });
+
+  const saveExpiry = useMutation({
+    mutationFn: ({ id, expiry }: { id: number; expiry: string }) =>
+      api.put(`/batches/${id}`, { expiry_date: expiry || null }),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: ["batches"] });
+      setDrafts((d) => {
+        const next = { ...d };
+        delete next[vars.id];
+        return next;
+      });
+      toast.success("Срокът на партидата е обновен");
+    },
+    onError: (err: any) =>
+      toast.error(
+        getApiErrorMessage(err, "Грешка при запис на срока на партидата."),
+      ),
+  });
+
+  const batches = (data ?? []).filter((b) => Number(b.quantity) > 0);
+
+  if (isLoading)
+    return <div className="h-10 animate-pulse rounded-md bg-gray-100" />;
+  if (isError)
+    return (
+      <div className="text-xs text-red-500">
+        Грешка при зареждане на партидите.
+      </div>
+    );
+  if (batches.length === 0)
+    return (
+      <div className="text-xs text-gray-400">
+        Няма партиди с наличност за този продукт.
+      </div>
+    );
+
+  return (
+    <div className="space-y-1.5">
+      {batches.map((batch) => {
+        const expired = isBatchExpired(batch.expiry_date);
+        const soon = !expired && isBatchExpiringSoon(batch.expiry_date);
+        const stored = batch.expiry_date
+          ? String(batch.expiry_date).slice(0, 10)
+          : "";
+        const draft = drafts[batch.id] ?? stored;
+        const dirty = draft !== stored;
+        return (
+          <div
+            key={batch.id}
+            className="flex flex-wrap items-center gap-3 rounded-md border bg-white px-3 py-2"
+          >
+            <span className="font-mono text-xs text-gray-600 min-w-[110px]">
+              {batch.batch_number || `Лот #${batch.id}`}
+            </span>
+            <span className="text-xs text-gray-500">Срок:</span>
+            {canEdit ? (
+              <Input
+                type="date"
+                value={draft}
+                onChange={(e) =>
+                  setDrafts((d) => ({ ...d, [batch.id]: e.target.value }))
+                }
+                className={`h-8 w-40 text-xs ${
+                  expired
+                    ? "border-red-400 text-red-600"
+                    : soon
+                      ? "border-amber-400 text-amber-700"
+                      : ""
+                }`}
+              />
+            ) : (
+              <span
+                className={`text-xs ${
+                  expired
+                    ? "text-red-600"
+                    : soon
+                      ? "text-amber-600"
+                      : "text-gray-700"
+                }`}
+              >
+                {stored || "без срок"}
+              </span>
+            )}
+            {canEdit && dirty && (
+              <Button
+                size="sm"
+                className="h-8"
+                disabled={saveExpiry.isPending}
+                onClick={() =>
+                  saveExpiry.mutate({ id: batch.id, expiry: draft })
+                }
+              >
+                {saveExpiry.isPending ? (
+                  <Spinner size="sm" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+                Запази
+              </Button>
+            )}
+            {expired && <Badge variant="destructive">ИЗТЕКЛА</Badge>}
+            {soon && (
+              <Badge className="bg-amber-100 text-amber-800 border-amber-300">
+                Изтича скоро
+              </Badge>
+            )}
+            <span className="ml-auto text-xs text-gray-600">
+              Наличност: <b>{Number(batch.quantity)}</b>
+            </span>
+          </div>
+        );
+      })}
+      <div className="text-[11px] text-gray-400">
+        Промяната на срока важи веднага за FEFO при продажба. Изтекла стока се
+        изважда през Брак.
+      </div>
+    </div>
+  );
 }
 
 function AdjustStockModal({
@@ -203,6 +356,10 @@ function AdjustStockModal({
 }
 
 export function Inventory() {
+  // Разгънат продукт (партидите му със срокове) — един по едно.
+  const [expandedProductId, setExpandedProductId] = useState<number | null>(
+    null,
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = (searchParams.get("tab") as Tab) || "available";
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -398,10 +555,28 @@ export function Inventory() {
                     const isLow =
                       hasStock &&
                       item.total_quantity < (item.low_stock_threshold || 10);
+                    const expanded = expandedProductId === item.product_id;
                     return (
-                      <TableRow key={item.product_id}>
+                      <React.Fragment key={item.product_id}>
+                      <TableRow>
                         <TableCell className="font-medium">
-                          {item.product_name}
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-left hover:text-[#6c3dff]"
+                            title="Покажи партидите и сроковете на годност"
+                            onClick={() =>
+                              setExpandedProductId(
+                                expanded ? null : item.product_id,
+                              )
+                            }
+                          >
+                            {expanded ? (
+                              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                            )}
+                            {item.product_name}
+                          </button>
                         </TableCell>
                         <TableCell className="font-mono text-sm">
                           {item.sku}
@@ -459,6 +634,17 @@ export function Inventory() {
                           </TableCell>
                         )}
                       </TableRow>
+                      {expanded && (
+                        <TableRow className="bg-gray-50/60 hover:bg-gray-50/60">
+                          <TableCell colSpan={canAdjustStock ? 7 : 6}>
+                            <ProductBatchesPanel
+                              productId={item.product_id}
+                              canEdit={canAdjustStock}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      </React.Fragment>
                     );
                   })
                 )}

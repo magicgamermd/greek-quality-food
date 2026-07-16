@@ -35,9 +35,18 @@ export class InsufficientStockError extends Error {
     public productId: number,
     public requested: number,
     public available: number,
+    // Изтекла наличност (ако има) — за да е ясно, че стоката не липсва,
+    // а е с изтекъл срок (прод: „налични 0" при 12 изтекли бр. мляко).
+    public expiredQuantity = 0,
+    public latestExpiredDate: string | null = null,
   ) {
     super(
-      `Недостатъчна неизтекла наличност за продукт ${productId}: искани ${requested}, налични ${available}`,
+      `Недостатъчна неизтекла наличност за продукт ${productId}: искани ${requested}, налични ${available}` +
+        (expiredQuantity > 0
+          ? ` (${expiredQuantity} бр. са с изтекъл срок${
+              latestExpiredDate ? `, последен ${latestExpiredDate}` : ""
+            })`
+          : ""),
     );
     this.name = "InsufficientStockError";
   }
@@ -99,11 +108,19 @@ export async function allocateFefo(
   const warnings: string[] = [];
   let remaining = quantity;
   let availableNonExpired = 0;
+  let expiredQuantity = 0;
+  let latestExpiredDate: string | null = null;
 
   for (const row of rows) {
     const expiry = normalizeExpiry(row.expiry_date);
     const isExpired = expiry != null && expiry < today;
-    if (isExpired && !opts.allowExpired) continue;
+    if (isExpired && !opts.allowExpired) {
+      expiredQuantity += toNum(row.available);
+      if (latestExpiredDate == null || expiry! > latestExpiredDate) {
+        latestExpiredDate = expiry!;
+      }
+      continue;
+    }
 
     const available = toNum(row.available);
     availableNonExpired += available;
@@ -134,7 +151,13 @@ export async function allocateFefo(
     if (opts.allowShortfall) {
       return { allocations, warnings, shortfall: remaining };
     }
-    throw new InsufficientStockError(productId, quantity, availableNonExpired);
+    throw new InsufficientStockError(
+      productId,
+      quantity,
+      availableNonExpired,
+      expiredQuantity,
+      latestExpiredDate,
+    );
   }
   return { allocations, warnings, shortfall: 0 };
 }
