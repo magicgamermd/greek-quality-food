@@ -63,10 +63,13 @@ const toNum = (v: unknown) =>
 const normalizeExpiry = (v: unknown): string | null => {
   if (v == null) return null;
   if (v instanceof Date) {
-    const year = v.getFullYear();
+    // 2-цифрена година от OCR (запазена като 0027) → коригираме века,
+    // иначе сравнението „изтекла ли е" гледа година 27 сл. Хр.
+    let year = v.getFullYear();
+    if (year >= 0 && year < 100) year += 2000;
     const month = String(v.getMonth() + 1).padStart(2, "0");
     const day = String(v.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    return `${String(year).padStart(4, "0")}-${month}-${day}`;
   }
   const s = String(v).trim();
   return s ? s.slice(0, 10) : null;
