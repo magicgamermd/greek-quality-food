@@ -92,9 +92,13 @@ describe("inventory search ordering", () => {
       expect(String(sql)).toContain(
         "WHEN LOWER(COALESCE(p.sku, '')) = $3 THEN 0",
       );
-      // Legacy batch/expiry fragments must NOT leak into the new SQL
-      expect(String(sql)).not.toContain("batch_id");
-      expect(String(sql)).not.toContain("b.expiry_date");
+      // GQF върна партидите (за разлика от MERT-M ерата на този тест):
+      // складът показва колона „Годност" — най-ранния срок по лотовете
+      // с наличност — така че batches JOIN-ът е ОЧАКВАН в заявката.
+      expect(String(sql)).toContain(
+        "LEFT JOIN batches b ON b.id = inv.batch_id",
+      );
+      expect(String(sql)).toContain("earliest_expiry");
       expect(params).toEqual(["10001", "%10001%", "10001", "10001%", 25, 0]);
     } finally {
       await app.close();
