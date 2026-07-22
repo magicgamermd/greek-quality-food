@@ -950,6 +950,9 @@ export default async function orderRoutes(app: FastifyInstance) {
               cn.id AS credit_note_id,
               cn.invoice_number AS credit_note_number,
               prof.invoice_number AS proforma_invoice_number,
+              prof.include_vat AS proforma_include_vat,
+              prof.payment_method AS proforma_payment_method,
+              prof.vat_exemption_reason AS proforma_vat_exemption_reason,
               ${STOCK_DISPATCH_NUMBER_SQL} AS stock_dispatch_number,
               ${COMMERCIAL_DOC_NUMBER_SQL} AS commercial_document_number,
               ${WARRANTY_NUMBER_SQL} AS warranty_number,
@@ -978,20 +981,32 @@ export default async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Order not found" });
     }
 
-    // MERT-M: no batches — order items carry only product metadata.
-    // total_stock is included so the partner-history drawer can disable the
-    // "+" button for products that are currently out of stock.
-    // Identity (name_bg / name_en / sku) is read from the per-row
-    // snapshot so historical orders preserve the name that was on the
-    // document at issuance, even after the product is renamed in the
-    // catalog. Operational fields (unit / brand / weight / purchase_price)
-    // still LEFT-JOIN the live products row.
+    // GQF: партидите са върнати. Редът носи (а) избраната при създаване
+    // партида (oi.batch_id → b.*) и (б) РЕАЛНО изписаните при
+    // експедиране лотове (order_item_batches, FEFO split) като JSON —
+    // drawer-ът показва (б) с приоритет, иначе (а). Identity полетата
+    // остават от per-row snapshot-ите.
     const { rows: items } = await query(
       `SELECT oi.*,
               oi.name_bg_snapshot AS name_bg,
               oi.name_en_snapshot AS name_en,
               oi.sku_snapshot     AS sku,
               pr.unit, pr.brand, pr.weight_kg, pr.purchase_price,
+              b.batch_number,
+              b.expiry_date,
+              (
+                SELECT COALESCE(
+                  json_agg(json_build_object(
+                    'batch_number', ab.batch_number,
+                    'expiry_date', ab.expiry_date,
+                    'quantity', oib.quantity
+                  ) ORDER BY ab.expiry_date ASC NULLS LAST),
+                  '[]'::json
+                )
+                FROM order_item_batches oib
+                JOIN batches ab ON ab.id = oib.batch_id
+                WHERE oib.order_item_id = oi.id
+              ) AS batch_allocations,
               (
                 SELECT COALESCE(SUM(quantity), 0)
                 FROM inventory
@@ -999,6 +1014,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               )::numeric AS total_stock
        FROM order_items oi
        LEFT JOIN products pr ON pr.id = oi.product_id
+       LEFT JOIN batches b ON b.id = oi.batch_id
        WHERE oi.order_id = $1
        ORDER BY oi.id`,
       [id],

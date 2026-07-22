@@ -968,6 +968,31 @@ function OrderDetailModal({
     return () => document.removeEventListener("keydown", onKey);
   }, [order, detail?.order_date]);
 
+  // Настройките ДДС/плащане/основание СЕ ПОМНЯТ по поръчка: при отваряне
+  // се зареждат от вече издадения документ — реалната фактура с приоритет,
+  // иначе проформата. (Преди се връщаха на defaults при всяко отваряне.)
+  useEffect(() => {
+    if (!detail?.id) return;
+    const src: any = detail;
+    const docIncludeVat =
+      src.invoice_include_vat ?? src.proforma_include_vat ?? null;
+    const docPayment =
+      src.invoice_payment_method ?? src.proforma_payment_method ?? null;
+    const docReason = src.proforma_vat_exemption_reason ?? null;
+    if (docIncludeVat !== null && docIncludeVat !== undefined) {
+      setIncludeVat(docIncludeVat !== false);
+    }
+    if (docPayment) setPaymentMethod(docPayment);
+    if (docReason) setVatExemptionReason(docReason);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    detail?.id,
+    (detail as any)?.invoice_include_vat,
+    (detail as any)?.proforma_include_vat,
+    (detail as any)?.invoice_payment_method,
+    (detail as any)?.proforma_payment_method,
+  ]);
+
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       api.put(`/orders/${id}/status`, { status }),
@@ -2045,33 +2070,83 @@ function OrderDetailModal({
                               </TableCell>
                               {/* GQF: Партида (batch_number) + Срок на годност */}
                               <TableCell className="text-sm">
-                                {displayBatchNumber(
-                                  (item as any).batch_number,
-                                ) ? (
-                                  <span className="font-mono text-gray-700">
-                                    {displayBatchNumber(
-                                      (item as any).batch_number,
-                                    )}
-                                  </span>
-                                ) : (
-                                  <span className="text-xs text-gray-400">
-                                    —
-                                  </span>
-                                )}
+                                {/* Реално изписаните лотове (order_item_batches,
+                                    попълнени при Изпълни) с приоритет; преди
+                                    експедиране — избраната при създаване
+                                    партида (oi.batch_id). Служебните АВТО
+                                    номера не се показват — редът се
+                                    представя чрез срока си. */}
+                                {(() => {
+                                  const allocs =
+                                    ((item as any).batch_allocations as
+                                      | Array<{
+                                          batch_number: string | null;
+                                          expiry_date: string | null;
+                                        }>
+                                      | undefined) ?? [];
+                                  if (allocs.length > 0) {
+                                    return allocs.map((a, ai) => (
+                                      <div
+                                        key={ai}
+                                        className="font-mono text-gray-700"
+                                      >
+                                        {displayBatchNumber(a.batch_number) ?? (
+                                          <span className="text-xs text-gray-400">
+                                            —
+                                          </span>
+                                        )}
+                                      </div>
+                                    ));
+                                  }
+                                  const single = displayBatchNumber(
+                                    (item as any).batch_number,
+                                  );
+                                  return single ? (
+                                    <span className="font-mono text-gray-700">
+                                      {single}
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-gray-400">
+                                      —
+                                    </span>
+                                  );
+                                })()}
                               </TableCell>
                               <TableCell className="text-sm">
-                                {(item as any).expiry_date ? (
-                                  <span className="text-gray-700">
-                                    {String((item as any).expiry_date).slice(
-                                      0,
-                                      10,
-                                    )}
-                                  </span>
-                                ) : (
-                                  <span className="text-xs text-gray-400">
-                                    —
-                                  </span>
-                                )}
+                                {(() => {
+                                  const allocs =
+                                    ((item as any).batch_allocations as
+                                      | Array<{
+                                          batch_number: string | null;
+                                          expiry_date: string | null;
+                                        }>
+                                      | undefined) ?? [];
+                                  if (allocs.length > 0) {
+                                    return allocs.map((a, ai) => (
+                                      <div key={ai} className="text-gray-700">
+                                        {a.expiry_date ? (
+                                          String(a.expiry_date).slice(0, 10)
+                                        ) : (
+                                          <span className="text-xs text-gray-400">
+                                            —
+                                          </span>
+                                        )}
+                                      </div>
+                                    ));
+                                  }
+                                  return (item as any).expiry_date ? (
+                                    <span className="text-gray-700">
+                                      {String((item as any).expiry_date).slice(
+                                        0,
+                                        10,
+                                      )}
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-gray-400">
+                                      —
+                                    </span>
+                                  );
+                                })()}
                               </TableCell>
                               <TableCell className="text-right text-sm">
                                 {item.quantity}
