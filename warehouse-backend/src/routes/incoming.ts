@@ -19,6 +19,7 @@ import {
   SQL_OCR_COLLAPSE_EXPR,
 } from "../utils/invoice-normalization.js";
 import { generateIncomingStockReceiptPdf } from "../services/document-pdf.js";
+import { normalizeExpiryInput } from "../utils/expiry-input.js";
 
 // Length caps on free-form strings prevent both accidental DB bloat and
 // malicious payloads — e.g. a 100KB supplier_name ending up as an alias
@@ -1665,7 +1666,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
                 totalPrice,
                 stagedSellingPrice,
                 item.batch_number ?? null,
-                item.expiry_date ?? null,
+                normalizeExpiryInput(item.expiry_date),
               ],
             );
 
@@ -2538,7 +2539,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
             if (item.expiry_date !== undefined) {
               await client.query(
                 `UPDATE batches SET expiry_date = $1, updated_at = NOW() WHERE id = $2`,
-                [asNullableDateString(item.expiry_date), current.batch_id],
+                [normalizeExpiryInput(item.expiry_date), current.batch_id],
               );
             }
             // 3) Номер на партида → преименуване (с проверка за колизия по
@@ -2601,7 +2602,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
           }
           if (item.expiry_date !== undefined) {
             updates.push(`expiry_date = $${idx++}`);
-            vals.push(item.expiry_date);
+            vals.push(normalizeExpiryInput(item.expiry_date));
           }
           if (updates.length > 0) {
             // total_price следва количество/цена (новите стойности, при
@@ -2710,7 +2711,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
             totalPrice,
             body.selling_price ?? null,
             (body.batch_number ?? "").trim() || null,
-            (body.expiry_date ?? "").trim() || null,
+            normalizeExpiryInput(body.expiry_date),
           ],
         );
 
