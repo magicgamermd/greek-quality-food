@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/dialog";
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
 
-type Tab = "available" | "all" | "zero" | "low-stock" | "negative";
+type Tab = "available" | "all" | "zero" | "low-stock" | "negative" | "expired";
 
 interface AdjustStockData {
   productId: number;
@@ -397,6 +397,7 @@ export function Inventory() {
         if (tab === "available") params.set("has_stock", "true");
         else if (tab === "zero") params.set("has_stock", "zero");
         else if (tab === "negative") params.set("has_stock", "negative");
+        else if (tab === "expired") params.set("has_stock", "expired");
       }
 
       return api.get(`${base}?${params}`).then((r) => {
@@ -423,7 +424,9 @@ export function Inventory() {
           ? "Нисък запас"
           : tab === "negative"
             ? "Продукти на минус"
-            : "Всички артикули";
+            : tab === "expired"
+              ? "С изтекъл срок"
+              : "Всички артикули";
 
   const tabs: {
     key: Tab;
@@ -435,6 +438,7 @@ export function Inventory() {
     { key: "zero", label: "Нулеви", icon: PackageX },
     { key: "low-stock", label: "Нисък запас", icon: AlertTriangle },
     { key: "negative", label: "На минус", icon: AlertTriangle },
+    { key: "expired", label: "Изтекли", icon: AlertTriangle },
   ];
 
   const openAdjust = (item: StockLevel) => {
@@ -535,6 +539,7 @@ export function Inventory() {
                   <TableHead>Категория</TableHead>
                   <TableHead>Мерна ед.</TableHead>
                   <TableHead>Наличност</TableHead>
+                  <TableHead>Годност</TableHead>
                   <TableHead>Статус</TableHead>
                   {canAdjustStock && <TableHead className="w-10"></TableHead>}
                 </TableRow>
@@ -543,7 +548,7 @@ export function Inventory() {
                 {allStock.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={canAdjustStock ? 7 : 6}
+                      colSpan={canAdjustStock ? 8 : 7}
                       className="text-center text-gray-400 py-8"
                     >
                       Няма намерени записи
@@ -603,9 +608,38 @@ export function Inventory() {
                           </span>
                         </TableCell>
                         <TableCell>
+                          {/* Най-ранният срок сред лотовете с наличност —
+                              червено = има изтекъл лот, кехлибарено = до
+                              30 дни. Кликът върху продукта разгъва
+                              лотовете за корекция. */}
+                          {(item as any).earliest_expiry ? (
+                            <span
+                              className={`text-sm ${
+                                (item as any).has_expired
+                                  ? "text-red-600 font-semibold"
+                                  : isBatchExpiringSoon(
+                                        (item as any).earliest_expiry,
+                                      )
+                                    ? "text-amber-600"
+                                    : "text-gray-700"
+                              }`}
+                            >
+                              {String((item as any).earliest_expiry).slice(
+                                0,
+                                10,
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
                           <div className="flex gap-1 flex-wrap">
                             {item.total_quantity < 0 && (
                               <Badge variant="destructive">На минус</Badge>
+                            )}
+                            {(item as any).has_expired && (
+                              <Badge variant="destructive">ИЗТЕКЛА</Badge>
                             )}
                             {isLow && (
                               <Badge variant="destructive">Нисък запас</Badge>
@@ -636,7 +670,7 @@ export function Inventory() {
                       </TableRow>
                       {expanded && (
                         <TableRow className="bg-gray-50/60 hover:bg-gray-50/60">
-                          <TableCell colSpan={canAdjustStock ? 7 : 6}>
+                          <TableCell colSpan={canAdjustStock ? 8 : 7}>
                             <ProductBatchesPanel
                               productId={item.product_id}
                               canEdit={canAdjustStock}

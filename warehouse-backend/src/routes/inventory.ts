@@ -71,6 +71,12 @@ export default async function inventoryRoutes(app: FastifyInstance) {
       havingConds.push("COALESCE(SUM(inv.quantity), 0) > 0");
     } else if (has_stock === "zero") {
       havingConds.push("COALESCE(SUM(inv.quantity), 0) = 0");
+    } else if (has_stock === "expired") {
+      // Таб „Изтекли" — продукти с наличност в лот с минал срок. Точно
+      // тях складът търси, за да коригира грешен срок или да бракува.
+      havingConds.push(
+        "BOOL_OR(inv.quantity > 0 AND b.expiry_date IS NOT NULL AND b.expiry_date < CURRENT_DATE)",
+      );
     } else if (has_stock === "negative") {
       // "На минус" tab in the warehouse view — products that have been
       // sold past zero (paid_not_taken or admin-confirmed oversell).
@@ -111,9 +117,17 @@ export default async function inventoryRoutes(app: FastifyInstance) {
       SELECT p.id AS product_id, p.name_bg, p.name_en, p.sku, p.unit,
              p.low_stock_threshold, p.selling_price, p.purchase_price,
              COALESCE(SUM(inv.quantity), 0)::numeric AS total_quantity,
+             -- Най-ранният срок сред лотовете С наличност (FEFO изгледът
+             -- на касиера) + флаг има ли изтекъл лот с наличност.
+             MIN(b.expiry_date) FILTER (WHERE inv.quantity > 0) AS earliest_expiry,
+             BOOL_OR(
+               inv.quantity > 0 AND b.expiry_date IS NOT NULL
+               AND b.expiry_date < CURRENT_DATE
+             ) AS has_expired,
              c.name_bg AS category_name_bg, c.name_en AS category_name_en
       FROM products p
       LEFT JOIN inventory inv ON inv.product_id = p.id
+      LEFT JOIN batches b ON b.id = inv.batch_id
       LEFT JOIN categories c ON c.id = p.category_id
       ${where}
       GROUP BY p.id, c.name_bg, c.name_en
@@ -131,6 +145,7 @@ export default async function inventoryRoutes(app: FastifyInstance) {
         SELECT p.id
         FROM products p
         LEFT JOIN inventory inv ON inv.product_id = p.id
+        LEFT JOIN batches b ON b.id = inv.batch_id
         ${where}
         GROUP BY p.id
         ${having}
