@@ -311,14 +311,16 @@ function assertNoExpiredBatches(rows: OrderItemRow[]) {
 async function openInvoicePdf(
   invoiceId: number,
   variant: "original" | "copy" | "both" = "original",
+  lang: "bg" | "en" = "bg",
 ) {
   try {
     // Append a timestamp so the browser never serves a stale cached
     // PDF after "Регенерирай" rewrites the file on disk.
     // variant: original = 1 стр. „Оригинал"; copy = 1 стр. без надпис
     // (само махнат „Оригинал"); both = стр.1 „Оригинал" + стр.2 без надпис.
+    // lang=en → износ вариант на английски (генерира се свежо).
     const res = await api.get(
-      `/invoices/${invoiceId}/pdf?variant=${variant}&t=${Date.now()}`,
+      `/invoices/${invoiceId}/pdf?variant=${variant}&t=${Date.now()}${lang === "en" ? "&lang=en" : ""}`,
       {
         responseType: "blob",
       },
@@ -1531,7 +1533,11 @@ function OrderDetailModal({
   const handleDocDownload = async (
     orderId: number,
     docType: "stock-dispatch" | "commercial-doc" | "warranty" | "offer",
-    options?: { pricingMode?: "net" | "gross"; buyerName?: string },
+    options?: {
+      pricingMode?: "net" | "gross";
+      buyerName?: string;
+      lang?: "bg" | "en";
+    },
   ) => {
     try {
       // For invoiced orders, backend reads VAT from invoice; for fulfilled, use toggle
@@ -1539,6 +1545,7 @@ function OrderDetailModal({
       const invoiced = detail?.invoice_id ?? generatedInvoiceId;
       if (!invoiced && !includeVat) params.set("include_vat", "false");
       if (options?.pricingMode === "gross") params.set("pricing_mode", "gross");
+      if (options?.lang === "en") params.set("lang", "en");
       if (docType === "warranty") {
         if (warrantyItemIds.size === 0) {
           toast.error(
@@ -2675,6 +2682,21 @@ function OrderDetailModal({
                           <Button
                             type="button"
                             variant="outline"
+                            className="px-2"
+                            onClick={() =>
+                              void openInvoicePdf(
+                                detail.proforma_invoice_id!,
+                                "original",
+                                "en",
+                              )
+                            }
+                            title="Проформа на английски (Proforma Invoice, EN)"
+                          >
+                            🇬🇧 EN
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
                             onClick={() =>
                               regenerateInvoiceMutation.mutate(
                                 {
@@ -2845,6 +2867,17 @@ function OrderDetailModal({
                           >
                             📄📄 2 копия (оригинал + копие)
                           </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() =>
+                              void openInvoicePdf(
+                                effectiveInvoiceId!,
+                                "original",
+                                "en",
+                              )
+                            }
+                          >
+                            🇬🇧 Invoice (английски)
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -3007,6 +3040,19 @@ function OrderDetailModal({
                 >
                   <ClipboardList className="h-4 w-4" />
                   Стокова разписка
+                </Button>
+                <Button
+                  variant="outline"
+                  className="px-2 text-emerald-700 border-emerald-400 hover:bg-emerald-50"
+                  onClick={() =>
+                    handleDocDownload(detail.id, "stock-dispatch", {
+                      pricingMode: "gross",
+                      lang: "en",
+                    })
+                  }
+                  title="Стокова разписка на английски (Goods Dispatch Note, EN)"
+                >
+                  🇬🇧 EN
                 </Button>
                 <Button
                   variant="outline"

@@ -265,6 +265,8 @@ const pdfQuerySchema = z.object({
     .optional()
     .transform((v) => (v ? (Number(v) as 1 | 2) : 1)),
   variant: z.enum(["original", "copy", "both"]).optional(),
+  // Език на документа — en=износ вариант (винаги свежо генериран, не кеш).
+  lang: z.enum(["bg", "en"]).optional(),
   // Cache-busting param used by the frontend (ignored for caching purposes)
   t: z.string().optional(),
 });
@@ -1245,11 +1247,14 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       const copies = parsedQuery.data.copies; // 1 | 2
       const variant: "original" | "copy" | "both" =
         parsedQuery.data.variant ?? (copies === 2 ? "both" : "original");
+      const lang: "bg" | "en" = parsedQuery.data.lang ?? "bg";
 
-      // ── non-original path: generate to temp file, stream buffer, keep cache ──
-      if (variant !== "original") {
+      // ── non-original / EN path: generate to temp file, stream, keep cache ──
+      // EN вариантът винаги се генерира свежо — кешираният pdf_path е БГ.
+      if (variant !== "original" || lang === "en") {
         try {
           const isCreditNote = invoice.document_type === "credit_note";
+          const isProforma = invoice.document_type === "proforma";
           const orderLookupInvoiceId = isCreditNote
             ? invoice.related_invoice_id
             : invoice.id;
@@ -1260,11 +1265,15 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             });
           }
 
+          // Проформата се връзва през orders.proforma_invoice_id.
           const {
             rows: [order],
-          } = await query("SELECT * FROM orders WHERE invoice_id = $1", [
-            orderLookupInvoiceId,
-          ]);
+          } = await query(
+            isProforma
+              ? "SELECT * FROM orders WHERE proforma_invoice_id = $1"
+              : "SELECT * FROM orders WHERE invoice_id = $1",
+            [orderLookupInvoiceId],
+          );
           if (!order) {
             return reply
               .status(404)
@@ -1332,11 +1341,16 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               items,
               vatRate: includeVat ? 20 : 0,
               includeVat,
-              documentType: isCreditNote ? "credit_note" : "invoice",
+              documentType: isCreditNote
+                ? "credit_note"
+                : isProforma
+                  ? "proforma"
+                  : "invoice",
               relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
               sourceCurrency: (invoice as any).currency ?? null,
               outputPath: tmpPath,
               variant,
+              lang,
               showBgn: company.show_bgn_on_invoice === true,
             });
             const buf = await fs.promises.readFile(tmpPath);
