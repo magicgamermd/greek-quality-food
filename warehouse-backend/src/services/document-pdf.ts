@@ -1,7 +1,7 @@
 import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
-import { mapUnit } from "./units.js";
+import { mapUnit, mapUnitEn } from "./units.js";
 import { formatUnitPricePlain } from "../utils/currency.js";
 import { displayBatchNumber } from "../utils/batch-display.js";
 
@@ -89,6 +89,49 @@ function formatDiscount(num: number): string {
 
 function normalizeAddress(addr: string): string {
   return addr?.replace(/([a-zA-Zа-яА-ЯёЁ])(\d)/g, "$1 $2") || "";
+}
+
+// English number-to-words (EUR) — за "In words" на документи на английски.
+function numberToWordsENShared(n: number): string {
+  const ones = [
+    "", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen",
+  ];
+  const tens = [
+    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+    "eighty", "ninety",
+  ];
+  if (n === 0) return "Zero euros";
+  if (n < 0) return "Minus " + numberToWordsENShared(-n).toLowerCase();
+  const integer = Math.floor(n);
+  const decimals = Math.round((n - integer) * 100);
+  const below1000 = (num: number): string => {
+    let w = "";
+    if (num >= 100) {
+      w += ones[Math.floor(num / 100)] + " hundred";
+      if (num % 100 > 0) w += " ";
+      num = num % 100;
+    }
+    if (num >= 20) {
+      w += tens[Math.floor(num / 10)];
+      if (num % 10 > 0) w += "-" + ones[num % 10];
+    } else if (num > 0) {
+      w += ones[num];
+    }
+    return w.trim();
+  };
+  let words = "";
+  if (integer >= 1_000_000)
+    words += below1000(Math.floor(integer / 1_000_000)) + " million ";
+  const th = Math.floor((integer % 1_000_000) / 1000);
+  if (th > 0) words += below1000(th) + " thousand ";
+  if (integer % 1000 > 0) words += below1000(integer % 1000);
+  words = words.replace(/\s+/g, " ").trim() || "zero";
+  words = words.charAt(0).toUpperCase() + words.slice(1);
+  words += integer === 1 ? " euro" : " euros";
+  if (decimals > 0) words += ` and ${String(decimals).padStart(2, "0")} cents`;
+  return words;
 }
 
 // Bulgarian number-to-words (simplified)
@@ -268,6 +311,8 @@ interface StockDispatchData {
   // block prints a "BGN | EUR" two-column layout matching the Microinvest
   // sample МЕРТ-М shared. Default false → EUR-only, unchanged from before.
   show_bgn?: boolean;
+  /** Език на документа — "en" за износ клиенти. */
+  lang?: "bg" | "en";
 }
 
 interface CommercialDocData {
@@ -1145,6 +1190,7 @@ export async function generateIncomingStockReceiptPdf(
 // СТОКОВА РАЗПИСКА (Stock Dispatch Note)
 // ====================================================================
 function drawStockDispatchHeading(
+  en: boolean,
   doc: PDFKit.PDFDocument,
   leftCol: number,
   pageWidth: number,
@@ -1158,26 +1204,26 @@ function drawStockDispatchHeading(
   const centerX = leftCol;
 
   doc.font("StockSerifBold").fontSize(14);
-  doc.text("Стокова разписка", centerX, titleY, {
+  doc.text(en ? "Goods Dispatch Note" : "Стокова разписка", centerX, titleY, {
     width: titleWidth,
     align: "center",
     underline: true,
   });
   doc.font("StockSerif").fontSize(10.5);
-  doc.text("за продажба на стоки", centerX, titleY + 18, {
+  doc.text(en ? "for sale of goods" : "за продажба на стоки", centerX, titleY + 18, {
     width: titleWidth,
     align: "center",
   });
 
   doc.font("StockSerifBold").fontSize(9);
-  doc.text("Номер:", infoX, titleY + 2, { width: 48, lineBreak: false });
+  doc.text(en ? "Number:" : "Номер:", infoX, titleY + 2, { width: 48, lineBreak: false });
   doc.font("StockSerif").fontSize(9);
   doc.text(docNumber, infoX + 48, titleY + 2, {
     width: infoWidth - 48,
     align: "left",
   });
   doc.font("StockSerifBold").fontSize(9);
-  doc.text("Дата:", infoX, titleY + 18, { width: 48, lineBreak: false });
+  doc.text(en ? "Date:" : "Дата:", infoX, titleY + 18, { width: 48, lineBreak: false });
   doc.font("StockSerif").fontSize(9);
   doc.text(formatDate(docDate), infoX + 48, titleY + 18, {
     width: infoWidth - 48,
@@ -1188,6 +1234,7 @@ function drawStockDispatchHeading(
 }
 
 function drawStockDispatchPartyBoxes(
+  en: boolean,
   doc: PDFKit.PDFDocument,
   leftCol: number,
   pageWidth: number,
@@ -1207,26 +1254,26 @@ function drawStockDispatchPartyBoxes(
   const rowGap = 2;
 
   // Phone line intentionally dropped from both party blocks per cashier
-  // preference. "Град" was dropped too — the city is already part of the
+  // preference. en ? "City" : "Град" was dropped too — the city is already part of the
   // address line and the redundant row was eating vertical space.
   // Получателят показва СЪЩИТЕ основни полета като доставчика — винаги, дори
   // празни (по желание на magic): симетричен бланкет. ЕИК / ДДС № / Адрес /
   // Email / МОЛ се рендерират безусловно от двете страни.
   const rowsForPartner = (party: PartnerInfo) => [
     { label: "", value: party.name || "—", bold: true },
-    { label: "ЕИК", value: party.eik || "" },
-    { label: "ДДС №", value: party.vat_number || "" },
-    { label: "Адрес", value: normalizeAddress(party.address || "") },
+    { label: en ? "Company ID" : "ЕИК", value: party.eik || "" },
+    { label: en ? "VAT No" : "ДДС №", value: party.vat_number || "" },
+    { label: en ? "Address" : "Адрес", value: normalizeAddress(party.address || "") },
     { label: "Email", value: party.email || "" },
-    { label: "МОЛ", value: party.mol || "" },
+    { label: en ? "Contact" : "МОЛ", value: party.mol || "" },
   ];
   const rowsForCompany = (party: CompanyInfo) => [
     { label: "", value: party.company_name || "—", bold: true },
-    { label: "ЕИК", value: party.eik || "" },
-    { label: "ДДС №", value: party.vat_number || "" },
-    { label: "Адрес", value: normalizeAddress(party.address || "") },
+    { label: en ? "Company ID" : "ЕИК", value: party.eik || "" },
+    { label: en ? "VAT No" : "ДДС №", value: party.vat_number || "" },
+    { label: en ? "Address" : "Адрес", value: normalizeAddress(party.address || "") },
     { label: "Email", value: party.email || "" },
-    { label: "МОЛ", value: party.mol || "" },
+    { label: en ? "Contact" : "МОЛ", value: party.mol || "" },
   ];
 
   const measureBoxHeight = (
@@ -1252,8 +1299,8 @@ function drawStockDispatchPartyBoxes(
   const recipientRows = rowsForPartner(recipient);
   const supplierRows = rowsForCompany(supplier);
   const boxHeight = Math.max(
-    measureBoxHeight("Получател", recipientRows),
-    measureBoxHeight("Доставчик", supplierRows),
+    measureBoxHeight(en ? "Customer" : "Получател", recipientRows),
+    measureBoxHeight(en ? "Supplier" : "Доставчик", supplierRows),
   );
 
   const drawBox = (
@@ -1296,8 +1343,8 @@ function drawStockDispatchPartyBoxes(
     }
   };
 
-  drawBox(leftX, "Получател", recipientRows);
-  drawBox(rightX, "Доставчик", supplierRows);
+  drawBox(leftX, en ? "Customer" : "Получател", recipientRows);
+  drawBox(rightX, en ? "Supplier" : "Доставчик", supplierRows);
 
   doc.font("StockSerif").fontSize(8.6);
   doc.text(`Обект: ${warehouseName || ""}`, leftCol, startY + boxHeight + 6, {
@@ -1329,6 +1376,7 @@ function formatBgnLeva(amountEur: number): string {
 }
 
 function drawStockDispatchTotalsBlock(
+  en: boolean,
   doc: PDFKit.PDFDocument,
   leftCol: number,
   pageWidth: number,
@@ -1341,7 +1389,7 @@ function drawStockDispatchTotalsBlock(
   // Two-column "BGN | EUR" layout when the toggle is on, single EUR
   // column otherwise. Matches the sample template the cashier
   // shared — small BGN/EUR header row above the figures, both
-  // columns right-aligned, "Общо" row in bold.
+  // columns right-aligned, en ? "Total" : "Общо" row in bold.
   const labelWidth = 60;
   const eurColW = 70;
   const bgnColW = showBgn ? 80 : 0;
@@ -1379,22 +1427,23 @@ function drawStockDispatchTotalsBlock(
   };
 
   if (pricingMode === "gross") {
-    drawRow("Общо", totalEur, true);
+    drawRow(en ? "Total" : "Общо", totalEur, true);
   } else {
-    drawRow("Сума", subtotalEur);
-    drawRow("ДДС", vatEur);
+    drawRow(en ? "Subtotal" : "Сума", subtotalEur);
+    drawRow(en ? "VAT" : "ДДС", vatEur);
     doc
       .moveTo(x, y - 1)
       .lineTo(x + blockWidth, y - 1)
       .lineWidth(0.35)
       .strokeColor("#000")
       .stroke();
-    drawRow("Общо", totalEur, true);
+    drawRow(en ? "Total" : "Общо", totalEur, true);
   }
   doc.y = y + 2;
 }
 
 function drawStockDispatchSignatures(
+  en: boolean,
   doc: PDFKit.PDFDocument,
   leftCol: number,
   pageWidth: number,
@@ -1404,7 +1453,7 @@ function drawStockDispatchSignatures(
   const lineWidth = 112;
 
   doc.font("StockSerif").fontSize(8.5);
-  doc.text("Получил:", leftCol, startY, { width: 46, lineBreak: false });
+  doc.text(en ? "Received by:" : "Получил:", leftCol, startY, { width: 46, lineBreak: false });
   doc
     .moveTo(leftCol + 44, startY + 9)
     .lineTo(leftCol + 44 + lineWidth, startY + 9)
@@ -1413,7 +1462,9 @@ function drawStockDispatchSignatures(
     .stroke();
 
   doc.font("StockSerif").fontSize(8.4);
-  doc.text("Съставил: Служебен потребител, Шифър:", rightX, startY, {
+  doc.text(en
+      ? "Issued by: System user, Code:"
+      : "Съставил: Служебен потребител, Шифър:", rightX, startY, {
     width: 210,
     align: "left",
   });
@@ -1424,7 +1475,7 @@ function drawStockDispatchSignatures(
     .strokeColor("#000")
     .stroke();
 
-  doc.text("Предал:", rightX + 118, startY + 26, {
+  doc.text(en ? "Handed over by:" : "Предал:", rightX + 118, startY + 26, {
     width: 40,
     lineBreak: false,
   });
@@ -1458,9 +1509,12 @@ export async function generateStockDispatchPdf(
     const pageWidth = doc.page.width - 80;
     const leftCol = 40;
     const reservedFooterSpace = 132;
+    // Документ на английски (?lang=en) — етикети/имена/суми с думи EN.
+    const en = data.lang === "en";
 
     const drawContinuationHeading = () => {
       drawStockDispatchHeading(
+        en,
         doc,
         leftCol,
         pageWidth,
@@ -1468,7 +1522,7 @@ export async function generateStockDispatchPdf(
         data.doc_date,
       );
       doc.font("StockSerif").fontSize(8.2);
-      doc.text("Продължение", leftCol, doc.y + 2, {
+      doc.text(en ? "Continued" : "Продължение", leftCol, doc.y + 2, {
         width: pageWidth,
         align: "center",
       });
@@ -1476,6 +1530,7 @@ export async function generateStockDispatchPdf(
     };
 
     drawStockDispatchHeading(
+      en,
       doc,
       leftCol,
       pageWidth,
@@ -1483,6 +1538,7 @@ export async function generateStockDispatchPdf(
       data.doc_date,
     );
     drawStockDispatchPartyBoxes(
+      en,
       doc,
       leftCol,
       pageWidth,
@@ -1516,8 +1572,9 @@ export async function generateStockDispatchPdf(
       rows.push([
         String(idx + 1),
         item.sku || "",
-        item.name_bg || item.name_en || "—",
-        mapUnit(item.unit || "бр"),
+        (en ? item.name_en || item.name_bg : item.name_bg || item.name_en) ||
+          "—",
+        en ? mapUnitEn(item.unit || "pcs") : mapUnit(item.unit || "бр"),
         formatQty(qty),
         formatUnitPricePlain(displayPrice),
         (item.currency || "EUR").toUpperCase(),
@@ -1528,19 +1585,19 @@ export async function generateStockDispatchPdf(
     // Per-line "Отстъпка" колона е премахната — клиентът вижда само
     // финалната цена. Освободеният pt range (44pt) отива към Стока.
     const columns: TableColumn[] = [
-      { header: "№", width: 22, align: "right" },
-      { header: "Код", width: 60, align: "left" },
+      { header: en ? "No" : "№", width: 22, align: "right" },
+      { header: en ? "Code" : "Код", width: 60, align: "left" },
       {
-        header: "Стока",
+        header: en ? "Description" : "Стока",
         width: pageWidth - (22 + 60 + 38 + 42 + 50 + 36 + 48),
         align: "left",
         wrap: true,
       },
-      { header: "Мярка", width: 38, align: "center" },
-      { header: "Кол.", width: 42, align: "right" },
-      { header: "Цена", width: 50, align: "right" },
-      { header: "Валута", width: 36, align: "center" },
-      { header: "Ст-ст", width: 48, align: "right" },
+      { header: en ? "Unit" : "Мярка", width: 38, align: "center" },
+      { header: en ? "Qty" : "Кол.", width: 42, align: "right" },
+      { header: en ? "Price" : "Цена", width: 50, align: "right" },
+      { header: en ? "Curr." : "Валута", width: 36, align: "center" },
+      { header: en ? "Amount" : "Ст-ст", width: 48, align: "right" },
     ];
 
     drawGridTable(doc, leftCol, doc.y, columns, rows, {
@@ -1576,6 +1633,7 @@ export async function generateStockDispatchPdf(
 
     ensurePageSpace(doc, 110, drawContinuationHeading);
     drawStockDispatchTotalsBlock(
+      en,
       doc,
       leftCol,
       pageWidth,
@@ -1591,7 +1649,11 @@ export async function generateStockDispatchPdf(
 
     doc.font("StockSerif").fontSize(8.5);
     doc.text(
-      `Словом: ${numberToWordsBG(totalGrossEur, "EUR")}`,
+      `${en ? "In words:" : "Словом:"} ${
+        en
+          ? numberToWordsENShared(totalGrossEur)
+          : numberToWordsBG(totalGrossEur, "EUR")
+      }`,
       leftCol,
       doc.y,
       {
@@ -1602,7 +1664,7 @@ export async function generateStockDispatchPdf(
     doc.moveDown(1.2);
 
     ensurePageSpace(doc, 55, drawContinuationHeading);
-    drawStockDispatchSignatures(doc, leftCol, pageWidth);
+    drawStockDispatchSignatures(en, doc, leftCol, pageWidth);
 
     doc.end();
     stream.on("finish", resolve);

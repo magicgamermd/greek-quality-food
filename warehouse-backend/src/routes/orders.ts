@@ -3684,7 +3684,7 @@ export default async function orderRoutes(app: FastifyInstance) {
   // ════════════════════════════════════════════════════════════════════
   app.get<{
     Params: { id: string };
-    Querystring: { include_vat?: string; pricing_mode?: string };
+    Querystring: { include_vat?: string; pricing_mode?: string; lang?: string };
   }>(
     "/:id/stock-dispatch-pdf",
     { preHandler: ordersManagePreHandler },
@@ -3799,6 +3799,9 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const pricingMode: "net" | "gross" =
         (request.query as any).pricing_mode === "gross" ? "gross" : "net";
+      // Език на документа — en=износ вариант (в отделен файл, не бута БГ).
+      const docLang: "bg" | "en" =
+        (request.query as any).lang === "en" ? "en" : "bg";
 
       const company = await getCompanySettings();
       const docNumber = `SR-${String(order.order_number || order.id).padStart(7, "0")}`;
@@ -3808,7 +3811,7 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
       const outputPath = path.join(
         pdfDir,
-        `stock-dispatch-${id}-${pricingMode}.pdf`,
+        `stock-dispatch-${id}-${pricingMode}${docLang === "en" ? "-en" : ""}.pdf`,
       );
 
       await generateStockDispatchPdf({
@@ -3834,13 +3837,17 @@ export default async function orderRoutes(app: FastifyInstance) {
         })),
         vat_rate: includeVat ? 20 : 0,
         pricing_mode: pricingMode,
+        lang: docLang,
         outputPath,
         show_bgn: company.show_bgn_on_invoice === true,
       });
 
       const stream = fs.createReadStream(outputPath);
       const suffix = pricingMode === "gross" ? "_с_ДДС" : "";
-      const filename = `Стокова_разписка_${docNumber}${suffix}.pdf`;
+      const filename =
+        docLang === "en"
+          ? `Goods_Dispatch_Note_${docNumber}.pdf`
+          : `Стокова_разписка_${docNumber}${suffix}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
 
       return (

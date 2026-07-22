@@ -6,7 +6,7 @@ import {
   formatEurUnitPrice,
   toEurAmount,
 } from "../utils/currency.js";
-import { mapUnit } from "./units.js";
+import { mapUnit, mapUnitEn } from "./units.js";
 
 // Resolve font paths — works in both src/ and dist/
 function getFontPath(filename: string): string {
@@ -31,6 +31,61 @@ function formatVatRate(rate: number): string {
   if (!Number.isFinite(rate)) return "0";
   const rounded = Math.round(rate * 100) / 100;
   return rounded.toFixed(2).replace(/\.?0+$/, "");
+}
+
+// English number-to-words за "In words" реда на документи на английски.
+function numberToWordsEN(n: number): string {
+  const ones = [
+    "", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen",
+  ];
+  const tens = [
+    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+    "eighty", "ninety",
+  ];
+
+  if (n === 0) return "Zero euros";
+  if (n < 0) return "Minus " + numberToWordsEN(-n).toLowerCase();
+
+  const integer = Math.floor(n);
+  const decimals = Math.round((n - integer) * 100);
+
+  function below1000(num: number): string {
+    let w = "";
+    if (num >= 100) {
+      w += ones[Math.floor(num / 100)] + " hundred";
+      const rem = num % 100;
+      if (rem > 0) w += " ";
+      num = rem;
+    }
+    if (num >= 20) {
+      w += tens[Math.floor(num / 10)];
+      if (num % 10 > 0) w += "-" + ones[num % 10];
+    } else if (num > 0) {
+      w += ones[num];
+    }
+    return w.trim();
+  }
+
+  let words = "";
+  if (integer >= 1_000_000) {
+    words += below1000(Math.floor(integer / 1_000_000)) + " million ";
+  }
+  const thousandsPart = Math.floor((integer % 1_000_000) / 1000);
+  if (thousandsPart > 0) {
+    words += below1000(thousandsPart) + " thousand ";
+  }
+  const rest = integer % 1000;
+  if (rest > 0) words += " " + below1000(rest);
+  words = words.replace(/\s+/g, " ").trim() || "zero";
+  words = words.charAt(0).toUpperCase() + words.slice(1);
+
+  words += integer === 1 ? " euro" : " euros";
+  if (decimals > 0) {
+    words += ` and ${String(decimals).padStart(2, "0")} cents`;
+  }
+  return words;
 }
 
 interface InvoiceItem {
@@ -124,6 +179,8 @@ interface InvoiceData {
    * both=page1 „Оригинал"+page2 no caption. Takes precedence over `copies`.
    */
   variant?: "original" | "copy" | "both";
+  /** Език на документа — "en" за износ клиенти (Bulstock и др.). */
+  lang?: "bg" | "en";
   /**
    * Settings → Документи toggle. When true, the totals block prints the
    * BGN equivalent in parentheses next to the EUR figure (fixed BNB
@@ -536,6 +593,7 @@ function drawPartyBox(
 }
 
 function buildInvoicePartyFields(
+  en: boolean,
   party: InvoiceData["partner"],
   company: InvoiceData["company"],
   clientDisplayName?: string | null,
@@ -559,8 +617,15 @@ function buildInvoicePartyFields(
   const buyerName =
     (clientDisplayName && clientDisplayName.trim().length > 0
       ? clientDisplayName.trim()
-      : party.name) || "Физическо лице — краен потребител";
-  const buyerLabel = isIndividualBuyer ? "Клиент:" : "МП:";
+      : party.name) ||
+    (en ? "Individual — end customer" : "Физическо лице — краен потребител");
+  const buyerLabel = isIndividualBuyer
+    ? en
+      ? "Client:"
+      : "Клиент:"
+    : en
+      ? "Resp.:"
+      : "МП:";
   const overrideEgn = (clientDisplayEgn ?? "").trim();
 
   const buyerFields: InvoicePartyField[] = [
@@ -568,20 +633,22 @@ function buildInvoicePartyFields(
     // Получателят показва СЪЩИТЕ полета като доставчика — винаги, дори
     // празни (по желание на magic): симетричен бланкет. "МП" етикетът
     // на името е премахнат (само получер шрифт, както при доставчика).
-    { label: "ЕИК:", value: party.eik || "" },
+    { label: en ? "Company ID:" : "ЕИК:", value: party.eik || "" },
     ...(isIndividualBuyer && overrideEgn.length > 0
-      ? [{ label: "ЕГН:", value: overrideEgn }]
+      ? [{ label: en ? "Personal ID:" : "ЕГН:", value: overrideEgn }]
       : []),
-    { label: "ДДС номер:", value: party.vat_number || "" },
-    { label: "Адрес:", value: buyerAddressParts.join("\n") },
+    { label: en ? "VAT No:" : "ДДС номер:", value: party.vat_number || "" },
+    { label: en ? "Address:" : "Адрес:", value: buyerAddressParts.join("\n") },
     { label: "Email:", value: party.email || "" },
-    { label: "МОЛ:", value: party.contact_person || "" },
-    ...(party.phone ? [{ label: "Тел:", value: party.phone }] : []),
+    { label: en ? "Contact:" : "МОЛ:", value: party.contact_person || "" },
+    ...(party.phone
+      ? [{ label: en ? "Phone:" : "Тел:", value: party.phone }]
+      : []),
     ...(!isIndividualBuyer && party.card_number
-      ? [{ label: "Кл.номер:", value: party.card_number }]
+      ? [{ label: en ? "Client No:" : "Кл.номер:", value: party.card_number }]
       : []),
     ...(!isIndividualBuyer && party.bank_name
-      ? [{ label: "Банка:", value: party.bank_name }]
+      ? [{ label: en ? "Bank:" : "Банка:", value: party.bank_name }]
       : []),
     ...(!isIndividualBuyer && party.bic
       ? [{ label: "BIC:", value: party.bic }]
@@ -596,16 +663,20 @@ function buildInvoicePartyFields(
   // payment section at the bottom of the invoice to avoid duplication.
   const supplierFields: InvoicePartyField[] = [
     { label: "", value: company.company_name, bold: true },
-    { label: "ЕИК:", value: company.eik },
+    { label: en ? "Company ID:" : "ЕИК:", value: company.eik },
     ...(company.vat_number
-      ? [{ label: "ДДС номер:", value: company.vat_number }]
+      ? [{ label: en ? "VAT No:" : "ДДС номер:", value: company.vat_number }]
       : []),
-    ...(supplierAddress ? [{ label: "Адрес:", value: supplierAddress }] : []),
+    ...(supplierAddress
+      ? [{ label: en ? "Address:" : "Адрес:", value: supplierAddress }]
+      : []),
     // Телефон intentionally omitted from supplier block — МЕРТ-М prefers a
     // cleaner header without a public phone line. Email + МОЛ stay
     // conditional and only render when populated.
     ...(company.email ? [{ label: "Email:", value: company.email }] : []),
-    ...(company.mol ? [{ label: "МОЛ:", value: company.mol }] : []),
+    ...(company.mol
+      ? [{ label: en ? "Contact:" : "МОЛ:", value: company.mol }]
+      : []),
   ];
 
   return { buyerFields, supplierFields };
@@ -665,6 +736,9 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
 
     const isCreditNote = data.documentType === "credit_note";
     const isProforma = data.documentType === "proforma";
+    // Документ на английски (?lang=en) — етикети/суми с думи/имена EN.
+    const en = data.lang === "en";
+    const tr = (bg: string, enStr: string) => (en ? enStr : bg);
     const showVat = data.includeVat !== false;
     const sourceCurrency = data.invoice.currency ?? data.sourceCurrency ?? null;
     const co = data.company;
@@ -691,44 +765,44 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     // pt range.
     const colDefs: InvoiceTableColumn[] = showVat
       ? [
-          { header: "№", w: 18, align: "center", wrap: false },
-          { header: "Код", w: 56, align: "left", wrap: false },
+          { header: tr("№", "No"), w: 18, align: "center", wrap: false },
+          { header: tr("Код", "Code"), w: 56, align: "left", wrap: false },
           {
-            header: "Стока",
+            header: tr("Стока", "Description"),
             w: pageW - 18 - 56 - 42 - 34 - 46 - 42 - 48,
             align: "left",
             wrap: true,
           },
-          { header: "Мярка", w: 42, align: "left", wrap: false },
-          { header: "Кол.", w: 34, align: "right", wrap: false },
-          { header: "Цена", w: 46, align: "right", wrap: false },
+          { header: tr("Мярка", "Unit"), w: 42, align: "left", wrap: false },
+          { header: tr("Кол.", "Qty"), w: 34, align: "right", wrap: false },
+          { header: tr("Цена", "Price"), w: 46, align: "right", wrap: false },
           {
-            header: `ДДС ${vatRateLabel}%`,
+            header: `${tr("ДДС", "VAT")} ${vatRateLabel}%`,
             w: 42,
             align: "center",
             wrap: false,
           },
           {
-            header: "Стойност",
+            header: tr("Стойност", "Amount"),
             w: 48,
             align: "right",
             wrap: false,
           },
         ]
       : [
-          { header: "№", w: 18, align: "center", wrap: false },
-          { header: "Код", w: 60, align: "left", wrap: false },
+          { header: tr("№", "No"), w: 18, align: "center", wrap: false },
+          { header: tr("Код", "Code"), w: 60, align: "left", wrap: false },
           {
-            header: "Стока",
+            header: tr("Стока", "Description"),
             w: pageW - 18 - 60 - 44 - 36 - 50 - 52,
             align: "left",
             wrap: true,
           },
-          { header: "Мярка", w: 44, align: "left", wrap: false },
-          { header: "Кол.", w: 36, align: "right", wrap: false },
-          { header: "Цена", w: 50, align: "right", wrap: false },
+          { header: tr("Мярка", "Unit"), w: 44, align: "left", wrap: false },
+          { header: tr("Кол.", "Qty"), w: 36, align: "right", wrap: false },
+          { header: tr("Цена", "Price"), w: 50, align: "right", wrap: false },
           {
-            header: "Стойност",
+            header: tr("Стойност", "Amount"),
             w: 52,
             align: "right",
             wrap: false,
@@ -737,9 +811,12 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     const wrapColIndex = colDefs.findIndex((col) => col.wrap);
     const rowPaddingY = 3;
     const minRowH = 14;
-    const footerText =
-      "Документът е валиден без печат и подпис при електронно издаване.";
+    const footerText = tr(
+      "Документът е валиден без печат и подпис при електронно издаване.",
+      "This document is valid without stamp or signature when issued electronically.",
+    );
     const { buyerFields, supplierFields } = buildInvoicePartyFields(
+      en,
       partner,
       co,
       data.invoice.client_display_name ?? null,
@@ -753,10 +830,10 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     ): { tableStartY: number; rightColX: number; rValW: number } => {
       let y = 35;
       const title = isCreditNote
-        ? "Кредитно Известие"
+        ? tr("Кредитно Известие", "Credit Note")
         : isProforma
-          ? "Проформа Фактура"
-          : "Фактура";
+          ? tr("Проформа Фактура", "Proforma Invoice")
+          : tr("Фактура", "Invoice");
       const colW = pageW / 2 - 10;
       const leftColX = L;
       const rightColX = midX + 10;
@@ -771,12 +848,12 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
 
       // Right side: Номер + Дата, aligned with title top
       doc.fontSize(9).font("MainBold");
-      doc.text(`Номер ${data.invoice.invoice_number}`, R - 180, y, {
+      doc.text(`${tr("Номер", "No")} ${data.invoice.invoice_number}`, R - 180, y, {
         width: 180,
         align: "right",
       });
       doc.text(
-        `Дата ${formatDate(data.invoice.invoice_date)}`,
+        `${tr("Дата", "Date")} ${formatDate(data.invoice.invoice_date)}`,
         R - 180,
         y + 18,
         {
@@ -797,7 +874,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
 
       if (isCreditNote && data.relatedInvoiceNumber) {
         doc.fontSize(8).font("Main");
-        doc.text(`Към фактура: ${data.relatedInvoiceNumber}`, R - 180, y + 36, {
+        doc.text(`${tr("Към фактура:", "To invoice:")} ${data.relatedInvoiceNumber}`, R - 180, y + 36, {
           width: 180,
           align: "right",
         });
@@ -808,7 +885,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
 
       if (continuation) {
         doc.fontSize(7.5).font("Main");
-        doc.text("Продължение", L, y, { width: pageW, align: "center" });
+        doc.text(tr("Продължение", "Continued"), L, y, { width: pageW, align: "center" });
         y += 14;
         return { tableStartY: y, rightColX, rValW };
       }
@@ -816,14 +893,14 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       // Boxed party blocks — same style as stokova razpiska
       const leftBoxH = measurePartyBox(
         doc,
-        "Получател",
+        tr("Получател", "Customer"),
         buyerFields,
         colW,
         labelW,
       );
       const rightBoxH = measurePartyBox(
         doc,
-        "Доставчик",
+        tr("Доставчик", "Supplier"),
         supplierFields,
         colW,
         rLabelW,
@@ -836,7 +913,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         y,
         colW,
         boxH,
-        "Получател",
+        tr("Получател", "Customer"),
         buyerFields,
         labelW,
       );
@@ -846,7 +923,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         y,
         colW,
         boxH,
-        "Доставчик",
+        tr("Доставчик", "Supplier"),
         supplierFields,
         rLabelW,
       );
@@ -858,9 +935,15 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         data.invoice.transaction_basis ||
         (data.includeVat === false
           ? data.invoice.vat_exemption_reason ||
-            "Освободена доставка по чл. 28 ЗДДС"
-          : "Продажба на стоки съгласно сключения договор");
-      doc.text("Основание за сделката: ", L, y, {
+            tr(
+              "Освободена доставка по чл. 28 ЗДДС",
+              "Zero-rated supply — Art. 28 of the Bulgarian VAT Act",
+            )
+          : tr(
+              "Продажба на стоки съгласно сключения договор",
+              "Sale of goods under the concluded contract",
+            ));
+      doc.text(tr("Основание за сделката: ", "Transaction basis: "), L, y, {
         width: pageW,
         continued: true,
       });
@@ -872,8 +955,8 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         data.invoice.transaction_place ||
         co.city ||
         (co.address ? co.address.split(",").pop()?.trim() : null) ||
-        "София, България";
-      doc.text("Място на сделката: ", L, y, {
+        tr("София, България", "Sofia, Bulgaria");
+      doc.text(tr("Място на сделката: ", "Place of transaction: "), L, y, {
         width: pageW,
         continued: true,
       });
@@ -886,7 +969,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         data.invoice.credit_note_reason
       ) {
         doc.font("Main");
-        doc.text("Основание за издаване (КИ): ", L, y, {
+        doc.text(tr("Основание за издаване (КИ): ", "Grounds for issue (CN): "), L, y, {
           width: pageW,
           continued: true,
         });
@@ -952,8 +1035,10 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
           qty > 0 ? netTotal / qty : toNum(item.unit_price);
         const price = effectiveNetPrice;
         const total = netTotal;
-        const description = item.name_bg || item.name_en;
-        const unit = mapUnit(item.unit);
+        const description = en
+          ? item.name_en || item.name_bg
+          : item.name_bg || item.name_en;
+        const unit = en ? mapUnitEn(item.unit) : mapUnit(item.unit);
         // Per-line discount колоната беше премахната — на печатния
         // документ се показват само финалните цени (post-discount). Виж
         // colDefs горе за обяснението.
@@ -1143,10 +1228,12 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       };
 
       if (showVat) {
-        drawTotalsRow("Данъчна основа:", totalNet);
-        drawTotalsRow(`ДДС ${vatRateLabel}%:`, totalVat);
+        drawTotalsRow(tr("Данъчна основа:", "Tax base:"), totalNet);
+        drawTotalsRow(`${tr("ДДС", "VAT")} ${vatRateLabel}%:`, totalVat);
       }
-      drawTotalsRow("Сума за получаване:", totalGross, { bigger: true });
+      drawTotalsRow(tr("Сума за получаване:", "Total due:"), totalGross, {
+        bigger: true,
+      });
       y += 4;
 
       // Free-text invoice note (e.g. "по проект Алфа"). Rendered below
@@ -1154,7 +1241,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       const noteText = data.invoice.invoice_note?.trim();
       if (noteText) {
         doc.fontSize(7.5).font("Main");
-        doc.text("Забележка: ", L, y, { width: 70, continued: true });
+        doc.text(tr("Забележка: ", "Note: "), L, y, { width: 70, continued: true });
         doc.font("MainBold").text(noteText, { width: pageW - 70 });
         y += 14;
       }
@@ -1163,34 +1250,48 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       y += 8;
 
       doc.fontSize(8).font("Main");
-      doc.text("Начин на плащане:", L, y, { width: 90 });
-      const paymentLabel =
-        data.invoice.payment_method_label ||
-        (data.invoice.payment_method === "cash"
-          ? "В брой"
+      doc.text(tr("Начин на плащане:", "Payment method:"), L, y, { width: 90 });
+      const paymentLabel = en
+        ? data.invoice.payment_method === "cash"
+          ? "Cash"
           : data.invoice.payment_method === "cod"
-            ? "Наложен платеж"
+            ? "Cash on delivery"
             : data.invoice.payment_method === "pos"
-              ? "ПОС"
-              : "Банков превод");
+              ? "Card (POS)"
+              : "Bank transfer"
+        : data.invoice.payment_method_label ||
+          (data.invoice.payment_method === "cash"
+            ? "В брой"
+            : data.invoice.payment_method === "cod"
+              ? "Наложен платеж"
+              : data.invoice.payment_method === "pos"
+                ? "ПОС"
+                : "Банков превод");
       doc.font("MainBold").text(paymentLabel, L + 90, y, { width: 200 });
       y += 13;
 
-      doc.font("Main").text("С сума:", L, y, { width: 40 });
+      doc.font("Main").text(tr("С сума:", "In words:"), L, y, { width: 40 });
       doc
         .font("MainBold")
-        .text(numberToWordsBG(totalGross), L + 40, y, { width: pageW - 40 });
+        .text(
+          en ? numberToWordsEN(totalGross) : numberToWordsBG(totalGross),
+          L + 40,
+          y,
+          { width: pageW - 40 },
+        );
       y += 15;
 
       doc.font("Main").fontSize(7.5);
       doc.text(
-        `Дата на данъчно събитие: ${formatDate(data.invoice.invoice_date)}`,
+        `${tr("Дата на данъчно събитие:", "Date of tax event:")} ${formatDate(data.invoice.invoice_date)}`,
         L,
         y,
         { width: pageW },
       );
       y += 11;
-      doc.text("Основание за издаване:", L, y, { width: pageW });
+      doc.text(tr("Основание за издаване:", "Grounds for issue:"), L, y, {
+        width: pageW,
+      });
       y += 15;
 
       drawLine(doc, L, y, pageW, 0.5);
@@ -1216,27 +1317,34 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       const innerW = sboxW - pad * 2;
       // Кутия 1 — Получил
       doc.fontSize(7.5).font("Main");
-      doc.text("Получил:", sb1 + pad, ty, { width: innerW, lineBreak: false });
+      doc.text(tr("Получил:", "Received by:"), sb1 + pad, ty, {
+        width: innerW,
+        lineBreak: false,
+      });
       doc
         .font("MainBold")
         .text(partner.contact_person || "", sb1 + pad + 44, ty, {
           width: innerW - 44,
           lineBreak: false,
         });
-      doc.font("Main").text("ЕГН/Л.К.:", sb1 + pad, ty + 12, {
+      doc.font("Main").text(tr("ЕГН/Л.К.:", "ID No:"), sb1 + pad, ty + 12, {
         width: innerW,
         lineBreak: false,
       });
       doc
         .fontSize(6.2)
         .fillColor("#666")
-        .text("Отговарящ за операцията", sb1 + pad, y + boxH - 10, {
+        .text(
+          tr("Отговарящ за операцията", "Responsible for the operation"),
+          sb1 + pad,
+          y + boxH - 10,
+          {
           width: innerW,
         });
       doc.fillColor("#000");
       // Кутия 2 — Банка
       doc.fontSize(7.5).font("Main");
-      doc.text("Банка:", sb2 + pad, ty, { width: 38, lineBreak: false });
+      doc.text(tr("Банка:", "Bank:"), sb2 + pad, ty, { width: 38, lineBreak: false });
       doc.font("MainBold").text(co.bank_name || "", sb2 + pad + 38, ty, {
         width: innerW - 38,
         lineBreak: false,
@@ -1257,26 +1365,41 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       });
       // Кутия 3 — Съставил (ЗДДС чл. 114, ал. 6)
       doc.fontSize(7.5).font("Main");
-      doc.text("Съставил:", sb3 + pad, ty, { width: innerW, lineBreak: false });
+      doc.text(tr("Съставил:", "Issued by:"), sb3 + pad, ty, {
+        width: innerW,
+        lineBreak: false,
+      });
       doc.font("MainBold").text(co.mol || "", sb3 + pad + 48, ty, {
         width: innerW - 48,
         lineBreak: false,
       });
-      doc.font("Main").text("Шифър:", sb3 + pad, ty + 12, {
+      doc.font("Main").text(tr("Шифър:", "Code:"), sb3 + pad, ty + 12, {
         width: innerW,
         lineBreak: false,
       });
       doc
         .fontSize(6.2)
         .fillColor("#666")
-        .text("Отговарящ за операцията", sb3 + pad, y + boxH - 10, {
+        .text(
+          tr("Отговарящ за операцията", "Responsible for the operation"),
+          sb3 + pad,
+          y + boxH - 10,
+          {
           width: innerW,
         });
       doc.fillColor("#000");
       y += boxH + 8;
 
       doc.fontSize(7).font("Main");
-      doc.text("Фактурата не подлежи на подпис.", L, y, { width: pageW });
+      doc.text(
+        tr(
+          "Фактурата не подлежи на подпис.",
+          "This invoice is not subject to signature.",
+        ),
+        L,
+        y,
+        { width: pageW },
+      );
       y += 15;
 
       drawFooter();
@@ -1286,7 +1409,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     if (variant === "copy") {
       renderCopy(null);
     } else {
-      renderCopy("Оригинал");
+      renderCopy(tr("Оригинал", "Original"));
       if (variant === "both") {
         doc.addPage({ size: "A4", margins: pageMargins });
         renderCopy(null);
