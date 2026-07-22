@@ -2251,6 +2251,25 @@ export default async function incomingRoutes(app: FastifyInstance) {
           [id],
         );
 
+        // OCR-сканирана доставка може да носи редове без свързан продукт
+        // (product_id NULL). Без guard опитът за партида гърмеше с NOT
+        // NULL violation → 500 без обяснение. Казваме ясно кой ред е.
+        const unmatched = items.filter((item: any) => !item.product_id);
+        if (unmatched.length > 0) {
+          const names = unmatched
+            .map(
+              (item: any) =>
+                item.product_name_raw || item.product_name || `ред #${item.id}`,
+            )
+            .join("; ");
+          throw Object.assign(
+            new Error(
+              `Доставката има ${unmatched.length} ред(а) без свързан продукт: „${names}". Отвори доставката и свържи продукта(ите) преди потвърждение.`,
+            ),
+            { statusCode: 400 },
+          );
+        }
+
         // Add each item to inventory
         const defaultWarehouseId = 1; // Default warehouse
         for (const item of items) {
