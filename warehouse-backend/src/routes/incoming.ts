@@ -339,16 +339,26 @@ function asNullableString(value: unknown): string | null {
 // полунощ), а от заявка идва като string. Форматираме Date по ЛОКАЛНИ
 // компоненти (същия часови пояс, в който драйверът я е разпарсил), за да
 // няма отместване на деня при повторно записване в DATE колона.
+// OCR понякога вади 2-цифрена година („27-03-31") → записва се като
+// година 0027, а при повторно подаване Postgres я отказва („date/time
+// field value out of range"). Коригираме века: година < 100 → +2000.
 function asNullableDateString(value: unknown): string | null {
   if (value == null) return null;
   if (value instanceof Date) {
-    const year = value.getFullYear();
+    let year = value.getFullYear();
+    if (year >= 0 && year < 100) year += 2000;
     const month = String(value.getMonth() + 1).padStart(2, "0");
     const day = String(value.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    return `${String(year).padStart(4, "0")}-${month}-${day}`;
   }
   const str = String(value).trim();
-  return str.length > 0 ? str : null;
+  if (!str) return null;
+  // Низ с 2-цифрена водеща година (YY-MM-DD от OCR) → 20YY-MM-DD.
+  const shortYear = str.match(/^(\d{1,2})-(\d{2})-(\d{2})$/);
+  if (shortYear) {
+    return `20${shortYear[1].padStart(2, "0")}-${shortYear[2]}-${shortYear[3]}`;
+  }
+  return str;
 }
 
 // Минимален клиентски интерфейс (pg PoolClient в транзакция).

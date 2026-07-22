@@ -430,6 +430,65 @@ describe("incoming confirm inventory propagation", () => {
     }
   });
 
+  it("2-цифрена година от OCR (година 0027) се коригира до 2027 при confirm", async () => {
+    // Прод (I20869): OCR извади срок „27-03-31" → записан като година 0027.
+    // Confirm-ът го подаваше обратно като „27-03-31" → Postgres:
+    // date/time field value out of range. Нормализаторът вече коригира
+    // века: година < 100 → +2000.
+    const ocrDate = new Date(2000, 2, 31); // 31 март
+    ocrDate.setFullYear(27); // година 0027 — както pg връща DATE 0027-03-31
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        resultRows([{ id: 92, status: "pending", invoice_number: "I20869" }]),
+      )
+      .mockResolvedValueOnce(
+        resultRows([
+          {
+            id: 60,
+            product_id: 700,
+            batch_id: null,
+            batch_number: null,
+            expiry_date: ocrDate,
+            quantity: 10,
+            unit_price: 2.5,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(resultRows([])) // SELECT batches (АВТО) → няма
+      .mockResolvedValueOnce(resultRows([{ id: 9900 }])) // INSERT batches
+      .mockResolvedValueOnce(resultRows([])) // INSERT inventory
+      .mockResolvedValueOnce(resultRows([])) // UPDATE incoming_items batch_id
+      .mockResolvedValueOnce(resultRows([])) // UPDATE purchase_price
+      .mockResolvedValueOnce(resultRows([])) // SELECT pendingLines
+      .mockResolvedValueOnce(resultRows([])); // INSERT notifications
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildAppWithRole("admin");
+    try {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/incoming/92/confirm",
+      });
+
+      expect(res.statusCode).toBe(200);
+      // Партидата се създава с коригиран век: 2027-03-31, не 27-03-31.
+      expect(clientQuery.mock.calls[3][1]).toEqual([
+        700,
+        "АВТО-92-60",
+        "2027-03-31",
+        10,
+        2.5,
+        "92",
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("ред без свързан продукт → чист 400 с името на реда (не 500 NOT NULL)", async () => {
     // OCR-сканирана доставка може да носи ред, който не е свързан към
     // продукт (product_id NULL). Confirm-ът опитваше да създаде партида с
