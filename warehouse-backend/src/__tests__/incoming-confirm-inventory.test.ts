@@ -430,6 +430,49 @@ describe("incoming confirm inventory propagation", () => {
     }
   });
 
+  it("ред без свързан продукт → чист 400 с името на реда (не 500 NOT NULL)", async () => {
+    // OCR-сканирана доставка може да носи ред, който не е свързан към
+    // продукт (product_id NULL). Confirm-ът опитваше да създаде партида с
+    // NULL продукт → NOT NULL violation → 500 без обяснение. Сега: 400 с
+    // ясно съобщение кой ред да се свърже.
+    const clientQuery = vi
+      .fn()
+      .mockResolvedValueOnce(
+        resultRows([{ id: 91, status: "pending", invoice_number: "I20869" }]),
+      )
+      .mockResolvedValueOnce(
+        resultRows([
+          {
+            id: 50,
+            product_id: null,
+            product_name_raw: "ΠΑΣΤΑ ΦΥΛΛΟ ΧΩΡΙΑΤΙΚΟ",
+            quantity: 10,
+            unit_price: 2.5,
+            batch_number: null,
+            expiry_date: null,
+          },
+        ]),
+      );
+
+    mockTransaction.mockImplementation(async (callback: any) =>
+      callback({ query: clientQuery }),
+    );
+
+    const app = await buildAppWithRole("admin");
+    try {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/incoming/91/confirm",
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("без свързан продукт");
+      expect(res.json().message).toContain("ΠΑΣΤΑ ΦΥΛΛΟ ΧΩΡΙΑΤΙΚΟ");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects a second confirm attempt once the delivery is already confirmed", async () => {
     // Route uses an atomic UPDATE WHERE status='pending' RETURNING * first.
     // An already-confirmed row fails the WHERE → 0 rows returned. The

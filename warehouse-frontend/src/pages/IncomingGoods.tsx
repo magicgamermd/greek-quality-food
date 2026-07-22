@@ -99,15 +99,17 @@ async function fetchManualProductOptions(
       : [];
   return rows
     .filter((row: any) => Number.isFinite(Number(row?.id)))
-    .map((row: any): ManualRowProductOption => ({
-      id: Number(row.id),
-      name_bg: row.name_bg ?? null,
-      name_en: row.name_en ?? null,
-      sku: row.sku ?? null,
-      unit: row.unit ?? null,
-      purchase_price: toOptionalNumber(row.purchase_price),
-      selling_price: toOptionalNumber(row.selling_price),
-    }));
+    .map(
+      (row: any): ManualRowProductOption => ({
+        id: Number(row.id),
+        name_bg: row.name_bg ?? null,
+        name_en: row.name_en ?? null,
+        sku: row.sku ?? null,
+        unit: row.unit ?? null,
+        purchase_price: toOptionalNumber(row.purchase_price),
+        selling_price: toOptionalNumber(row.selling_price),
+      }),
+    );
 }
 
 function isMatchedForAutoLink(item: ScannedInvoiceItem): boolean {
@@ -1193,7 +1195,8 @@ export function IncomingGoods() {
           },
         );
         const invoiceNumber = quickRes.data?.invoice_number as
-          string | undefined;
+          | string
+          | undefined;
         if (invoiceNumber) {
           const dupCheck = await api.get(
             `/incoming/check-duplicate?invoice_number=${encodeURIComponent(invoiceNumber)}`,
@@ -1658,7 +1661,14 @@ export function IncomingGoods() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["incoming"] });
       qc.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Доставката е потвърдена и заприходена");
     },
+    // Без onError „Потвърди" от списъка гълташе грешката безследно —
+    // изглеждаше като „цъкам и нищо не става". Показваме причината.
+    onError: (err: any) =>
+      toast.error(
+        getApiErrorMessage(err, "Неуспешно потвърждаване на доставката."),
+      ),
   });
 
   const handlePrintReceipt = async (id: number) => {
@@ -2140,7 +2150,10 @@ export function IncomingGoods() {
                                       setEditItems((current) =>
                                         current.map((entry, i) =>
                                           i === index
-                                            ? { ...entry, changingProduct: false }
+                                            ? {
+                                                ...entry,
+                                                changingProduct: false,
+                                              }
                                             : entry,
                                         ),
                                       )
