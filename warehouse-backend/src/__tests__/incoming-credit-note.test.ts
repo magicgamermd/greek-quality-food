@@ -119,6 +119,14 @@ describe("входящо кредитно известие от доставчи
         expect.arrayContaining([21, "KI-501", "2026-07-27", 7, -10]),
       );
 
+      // Редът на КИ спазва DB ограниченията: количество > 0 и цена >= 0
+      // (chk_incoming_items_qty_pos / _price_nonneg). Кредитът е в
+      // total_price. Тук: 10 бр × разлика 1.00 = −10.00.
+      const cnItem = callWith(clientQuery, "INSERT INTO incoming_items");
+      expect(cnItem[1][2]).toBe(10); // количество > 0
+      expect(cnItem[1][3]).toBe(1); // разликата, положителна
+      expect(cnItem[1][4]).toBeCloseTo(-10, 2); // стойност — отрицателна
+
       // Партидата и продуктът получават НОВАТА покупна цена.
       const batchUpd = callWith(
         clientQuery,
@@ -193,6 +201,14 @@ describe("входящо кредитно известие от доставчи
 
       expect(r.statusCode).toBe(201);
       expect(r.json().total_amount).toBeCloseTo(-20, 2);
+
+      // Редът пази ПОЛОЖИТЕЛНО количество (4) и цената на доставката;
+      // кредитът е в стойността (−20). Отрицателно количество тук
+      // чупеше chk_incoming_items_qty_pos в прод.
+      const cnItem = callWith(clientQuery, "INSERT INTO incoming_items");
+      expect(cnItem[1][2]).toBe(4);
+      expect(cnItem[1][3]).toBeCloseTo(5, 2);
+      expect(cnItem[1][4]).toBeCloseTo(-20, 2);
 
       // Наличността намалява с върнатото количество.
       const batchQty = callWith(clientQuery, "UPDATE batches SET quantity");

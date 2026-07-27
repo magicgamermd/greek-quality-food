@@ -710,10 +710,13 @@ export function Partners() {
           ].map((tab) => (
             <button
               key={tab.value}
-              onClick={() => {
-                setCategory(tab.value);
-                setPage(1);
-              }}
+              // setCategory вече връща page на 1. Допълнителен setPage(1)
+              // тук се състезава с него: и двете пишат в URL-а през
+              // setSearchParams в един tick, вторият тръгва от СТАРИТЕ
+              // параметри и презаписва категорията → URL оставаше само
+              // „?page=1" и филтърът никога не стигаше до заявката.
+              // (Същият капан е описан и при полето за търсене по-долу.)
+              onClick={() => setCategory(tab.value)}
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 category === tab.value
                   ? "bg-white text-gray-900 shadow-sm"
