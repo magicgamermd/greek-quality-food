@@ -179,3 +179,23 @@ export function displayBatchNumber(value?: string | null): string | null {
   if (!v || v.startsWith("АВТО-") || v === "НАЧАЛНО") return null;
   return v;
 }
+
+// Цена на продукт за поръчков ред: първата ПОЛОЖИТЕЛНА от веригата
+// ценова листа на партньора → ценова група на партньора → продажна цена.
+//
+// Нулата НЕ е цена. Досега веригата беше `a ?? b ?? c`, а `??` прескача
+// само null/undefined — при 0 спираше на нея. В прод почти всички
+// партньори са в „Ценова група 1", където всички продукти имат 0.00 →
+// цената излизаше празна, макар продуктът да има продажна цена, и
+// касиерът я пишеше на ръка.
+export function firstPositivePrice(
+  ...candidates: Array<number | string | null | undefined>
+): number | null {
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === "") continue;
+    const n =
+      typeof candidate === "number" ? candidate : parseFloat(String(candidate));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}

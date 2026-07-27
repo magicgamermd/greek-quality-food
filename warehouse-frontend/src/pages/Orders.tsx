@@ -62,6 +62,7 @@ import {
   formatCurrency,
   formatUnitPrice,
   displayBatchNumber,
+  firstPositivePrice,
   formatOrderTotal,
   isoDateToday,
   getApiErrorMessage,
@@ -551,8 +552,9 @@ const ProductSearch = forwardRef<
           return <span className="text-sm">{option?.label ?? "—"}</span>;
         }
         const p = option.product;
-        const rawPrice = p.partner_price ?? p.group_price ?? p.selling_price;
-        const price = rawPrice != null ? parseFloat(String(rawPrice)) : 0;
+        const price =
+          firstPositivePrice(p.partner_price, p.group_price, p.selling_price) ??
+          0;
         const stock = parseFloat(String(p.total_stock || 0));
         return (
           <div>
@@ -4263,9 +4265,11 @@ function EditOrderItemsModal({
 
   const handleProductSelect = useCallback(
     (idx: number, product: OrderProduct) => {
-      const rawPrice =
-        product.partner_price ?? product.group_price ?? product.selling_price;
-      const price = rawPrice != null ? parseFloat(String(rawPrice)) : null;
+      const price = firstPositivePrice(
+        product.partner_price,
+        product.group_price,
+        product.selling_price,
+      );
       const stock = parseFloat(String(product.total_stock || 0));
       const wRaw =
         product.weight_kg != null ? parseFloat(String(product.weight_kg)) : NaN;
@@ -5516,9 +5520,11 @@ function CreateOrderModal({
 
   const handleProductSelect = useCallback(
     (idx: number, product: OrderProduct) => {
-      const rawPrice =
-        product.partner_price ?? product.group_price ?? product.selling_price;
-      const price = rawPrice != null ? parseFloat(String(rawPrice)) : null;
+      const price = firstPositivePrice(
+        product.partner_price,
+        product.group_price,
+        product.selling_price,
+      );
       const stock = parseFloat(String(product.total_stock || 0));
       // Snapshot cost — used to warn later if unit_price drops below it.
       const cost =
