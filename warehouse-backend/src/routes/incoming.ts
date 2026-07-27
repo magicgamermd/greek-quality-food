@@ -2380,6 +2380,250 @@ export default async function incomingRoutes(app: FastifyInstance) {
     },
   );
 
+  // ════════════════════════════════════════════════════════════════════
+  // POST /incoming/:id/credit-note — Кредитно известие ОТ доставчика
+  // ════════════════════════════════════════════════════════════════════
+  // Доставчикът е сгрешил цената по фактурата (или приема връщане на
+  // стока) и издава КИ. Завеждаме го като ОТДЕЛЕН входящ документ
+  // (document_type='credit_note', мигр. 103) със собствен номер и дата,
+  // вързан към оригиналната доставка, с ОТРИЦАТЕЛНА стойност.
+  //
+  // Оригиналната доставка НЕ се пипа — тя остава каквато доставчикът я е
+  // издал; корекцията живее в КИ-то. Така документалната следа е пълна:
+  // фактурата и известието стоят едно до друго.
+  //
+  // Ефект върху склада:
+  //   • ценова корекция (new_unit_price) → партидата и продуктът получават
+  //     новата покупна цена; количествата НЕ се пипат
+  //   • върната стока (returned_quantity) → количеството слиза от
+  //     партидата и наличността; цената не се пипа
+  //
+  // Дължимото към доставчиците и дневните покупки се смятат като сума по
+  // incoming_goods.total_amount → отрицателният документ ги намалява сам.
+  const creditNoteSchema = z.object({
+    credit_note_number: z.string().trim().min(1).max(100),
+    credit_note_date: z.string().trim().optional(),
+    reason: z.string().trim().max(500).optional(),
+    items: z
+      .array(
+        z.object({
+          incoming_item_id: z.number().int().positive(),
+          // Ценова корекция: новата (по-ниска) цена по този ред.
+          new_unit_price: z.number().min(0).optional(),
+          // Връщане на стока: колко от реда се връща на доставчика.
+          returned_quantity: z.number().positive().optional(),
+        }),
+      )
+      .min(1),
+  });
+
+  app.post(
+    "/:id/credit-note",
+    { preHandler: incomingManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const body = creditNoteSchema.parse(request.body);
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
+      return await transaction(async (client) => {
+        const {
+          rows: [original],
+        } = await client.query(
+          "SELECT * FROM incoming_goods WHERE id = $1 FOR UPDATE",
+          [id],
+        );
+        if (!original) {
+          return reply.status(404).send({ error: "Not found" });
+        }
+        if (original.document_type === "credit_note") {
+          throw Object.assign(
+            new Error("Не може да се издаде КИ върху друго кредитно известие."),
+            { statusCode: 400 },
+          );
+        }
+        if (original.status !== "confirmed") {
+          throw Object.assign(
+            new Error(
+              "Кредитно известие се завежда само за потвърдена доставка. Ако доставката още е чакаща, просто коригирай цената в нея.",
+            ),
+            { statusCode: 400 },
+          );
+        }
+
+        // Един и същ номер на КИ от същия доставчик не се завежда два пъти.
+        const { rows: dup } = await client.query(
+          `SELECT id, invoice_number FROM incoming_goods
+            WHERE document_type = 'credit_note'
+              AND supplier_id IS NOT DISTINCT FROM $1
+              AND UPPER(TRIM(COALESCE(invoice_number, ''))) = UPPER(TRIM($2))
+            LIMIT 1`,
+          [original.supplier_id, body.credit_note_number],
+        );
+        if (dup[0]) {
+          throw Object.assign(
+            new Error(
+              `Кредитно известие с номер "${body.credit_note_number}" вече е заведено за този доставчик.`,
+            ),
+            { statusCode: 409 },
+          );
+        }
+
+        const { rows: originalItems } = await client.query(
+          `SELECT id, product_id, batch_id, quantity, unit_price
+             FROM incoming_items
+            WHERE incoming_goods_id = $1 AND id = ANY($2)
+            FOR UPDATE`,
+          [id, body.items.map((i) => i.incoming_item_id)],
+        );
+        const itemMap = new Map<number, any>(
+          originalItems.map((row: any) => [row.id, row]),
+        );
+
+        // Първо смятаме всичко (за да знаем сумата преди INSERT-а на
+        // header-а), после записваме.
+        type CreditLine = {
+          kind: "price" | "return";
+          orig: any;
+          quantity: number;
+          unitPrice: number;
+          lineTotal: number;
+          newPrice?: number;
+        };
+        const lines: CreditLine[] = [];
+        let creditTotal = 0;
+
+        for (const item of body.items) {
+          const orig = itemMap.get(item.incoming_item_id);
+          if (!orig) {
+            throw Object.assign(
+              new Error(
+                `Ред #${item.incoming_item_id} не е част от тази доставка.`,
+              ),
+              { statusCode: 400 },
+            );
+          }
+          const origQty = Number(orig.quantity);
+          const origPrice = Number(orig.unit_price);
+
+          if (item.new_unit_price !== undefined) {
+            if (item.new_unit_price > origPrice) {
+              throw Object.assign(
+                new Error(
+                  "Кредитното известие намалява стойността — новата цена трябва да е по-ниска от фактурираната.",
+                ),
+                { statusCode: 400 },
+              );
+            }
+            const delta = round3(origPrice - item.new_unit_price);
+            const amount = round2(delta * origQty);
+            creditTotal += amount;
+            lines.push({
+              kind: "price",
+              orig,
+              quantity: origQty,
+              unitPrice: -delta,
+              lineTotal: -amount,
+              newPrice: item.new_unit_price,
+            });
+          } else if (item.returned_quantity !== undefined) {
+            if (item.returned_quantity > origQty) {
+              throw Object.assign(
+                new Error(
+                  `Връщаното количество (${item.returned_quantity}) надвишава доставеното (${origQty}).`,
+                ),
+                { statusCode: 400 },
+              );
+            }
+            const amount = round2(origPrice * item.returned_quantity);
+            creditTotal += amount;
+            lines.push({
+              kind: "return",
+              orig,
+              quantity: -item.returned_quantity,
+              unitPrice: origPrice,
+              lineTotal: -amount,
+            });
+          } else {
+            throw Object.assign(
+              new Error(
+                "Всеки ред трябва да носи корекция: нова цена или върнато количество.",
+              ),
+              { statusCode: 400 },
+            );
+          }
+        }
+
+        const totalAmount = -round2(creditTotal);
+
+        const {
+          rows: [creditNote],
+        } = await client.query(
+          `INSERT INTO incoming_goods
+             (supplier_id, invoice_number, invoice_date, related_incoming_id,
+              total_amount, credit_note_reason, document_type, status)
+           VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), $4, $5, $6,
+                   'credit_note', 'confirmed')
+           RETURNING *`,
+          [
+            original.supplier_id,
+            body.credit_note_number,
+            body.credit_note_date ?? null,
+            Number(id),
+            totalAmount,
+            body.reason ?? null,
+          ],
+        );
+
+        for (const line of lines) {
+          await client.query(
+            `INSERT INTO incoming_items
+               (incoming_goods_id, product_id, quantity, unit_price,
+                total_price, batch_id)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id`,
+            [
+              creditNote.id,
+              line.orig.product_id,
+              line.quantity,
+              line.unitPrice,
+              line.lineTotal,
+              line.orig.batch_id ?? null,
+            ],
+          );
+
+          if (line.kind === "price") {
+            // Складовата стойност следва коригираната цена.
+            if (line.orig.batch_id) {
+              await client.query(
+                `UPDATE batches SET purchase_price = $1, updated_at = NOW() WHERE id = $2`,
+                [line.newPrice, line.orig.batch_id],
+              );
+            }
+            await client.query(
+              "UPDATE products SET purchase_price = $1, updated_at = NOW() WHERE id = $2",
+              [line.newPrice, line.orig.product_id],
+            );
+          } else if (line.orig.batch_id) {
+            // Върнатата стока излиза от склада.
+            await adjustBatchStock(
+              client,
+              line.orig.product_id,
+              line.orig.batch_id,
+              line.quantity, // вече отрицателно
+            );
+          }
+        }
+
+        return reply.status(201).send({
+          ...creditNote,
+          total_amount: totalAmount,
+          items_count: lines.length,
+        });
+      });
+    },
+  );
+
   // MERT-M: PATCH /incoming/:id/batches removed — no batch/expiry
   // tracking for durable goods. Any frontend that still calls this
   // endpoint gets a 404, which matches the (now intentional) absence
