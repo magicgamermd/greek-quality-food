@@ -2482,12 +2482,17 @@ export default async function incomingRoutes(app: FastifyInstance) {
 
         // Първо смятаме всичко (за да знаем сумата преди INSERT-а на
         // header-а), после записваме.
+        // incoming_items пази ПОЛОЖИТЕЛНИ количество и единична цена
+        // (chk_incoming_items_qty_pos / _price_nonneg). Кредитът се
+        // изразява в total_price (отрицателен) и в сумата на документа —
+        // затова редът носи и отделна складова делта.
         type CreditLine = {
           kind: "price" | "return";
           orig: any;
-          quantity: number;
-          unitPrice: number;
-          lineTotal: number;
+          quantity: number; // > 0 — какво се кредитира
+          unitPrice: number; // >= 0 — при ценова корекция това е РАЗЛИКАТА
+          lineTotal: number; // отрицателен
+          stockDelta: number; // < 0 при връщане на стока, иначе 0
           newPrice?: number;
         };
         const lines: CreditLine[] = [];
@@ -2522,8 +2527,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
               kind: "price",
               orig,
               quantity: origQty,
-              unitPrice: -delta,
+              unitPrice: delta,
               lineTotal: -amount,
+              stockDelta: 0,
               newPrice: item.new_unit_price,
             });
           } else if (item.returned_quantity !== undefined) {
@@ -2540,9 +2546,10 @@ export default async function incomingRoutes(app: FastifyInstance) {
             lines.push({
               kind: "return",
               orig,
-              quantity: -item.returned_quantity,
+              quantity: item.returned_quantity,
               unitPrice: origPrice,
               lineTotal: -amount,
+              stockDelta: -item.returned_quantity,
             });
           } else {
             throw Object.assign(
@@ -2604,13 +2611,13 @@ export default async function incomingRoutes(app: FastifyInstance) {
               "UPDATE products SET purchase_price = $1, updated_at = NOW() WHERE id = $2",
               [line.newPrice, line.orig.product_id],
             );
-          } else if (line.orig.batch_id) {
+          } else if (line.orig.batch_id && line.stockDelta !== 0) {
             // Върнатата стока излиза от склада.
             await adjustBatchStock(
               client,
               line.orig.product_id,
               line.orig.batch_id,
-              line.quantity, // вече отрицателно
+              line.stockDelta,
             );
           }
         }
