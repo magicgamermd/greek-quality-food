@@ -84,16 +84,23 @@ function buildDuplicateStub(storedInvoices: StoredInvoice[]) {
       return resultRows(hit ? [hit] : []);
     }
 
-    // Tier 2: levenshtein fuzzy, scoped to supplier
-    if (sql.includes("levenshtein") && sql.includes("FROM incoming_goods")) {
+    // Tier 2: OCR-collapsed key equality, scoped to supplier
+    if (sql.includes("180 days") && sql.includes("FROM incoming_goods")) {
       calls.tier2 += 1;
       const newKey = params[0] as string;
       const supplierId = params[1] as number;
-      const hit = storedInvoices.find(
-        (inv) =>
-          inv.supplier_id === supplierId &&
-          levenshtein(ocrKey(inv.invoice_number), newKey) <= 2,
-      );
+      // Огледало на SQL-а: идентични ключове ИЛИ (различна дължина И
+      // Levenshtein ≤ 2). При еднаква дължина разликата е замяна на
+      // цифра = различна фактура (виж findDuplicateInvoice).
+      const hit = storedInvoices.find((inv) => {
+        if (inv.supplier_id !== supplierId) return false;
+        const storedKey = ocrKey(inv.invoice_number);
+        if (storedKey === newKey) return true;
+        return (
+          storedKey.length !== newKey.length &&
+          levenshtein(storedKey, newKey) <= 2
+        );
+      });
       return resultRows(
         hit
           ? [
@@ -364,6 +371,137 @@ describe("OCR-tolerant duplicate detection (tier-1 + tier-2)", () => {
       // Tier-1 checked (global), tier-2 checked (scoped to supplier 17 — no hit)
       expect(stub.calls.tier1).toBe(1);
       expect(stub.calls.tier2).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("последователни номера от СЪЩИЯ доставчик НЕ се блокират (I20869 → I20870)", async () => {
+    // Прод (IOANNOY CONFECTIONARY): I20869 е заведена, следващата фактура
+    // I20870 се блокираше като „вече вкарана". Collapsed keys 120869 vs
+    // 120870 са на Levenshtein 2 → старият толеранс ≤2 ги сливаше.
+    // Гръцките доставчици фактурират последователно, така че ВСЯКА
+    // следваща фактура се блокираше. След collapse-а всяка разлика в
+    // цифрите значи РАЗЛИЧНА фактура — lookalike грешките вече са
+    // нормализирани.
+    const IOANNOY: StoredInvoice = {
+      id: 13,
+      supplier_id: 21,
+      invoice_number: "I20869",
+      status: "confirmed",
+      created_at: "2026-07-21T14:33:21Z",
+    };
+    const stub = buildDuplicateStub([IOANNOY]);
+    mockQuery.mockImplementation(async (sql: string, params: any[] = []) => {
+      if (sql.includes("SELECT id FROM products WHERE id = $1")) {
+        return resultRows([{ id: params[0] }]);
+      }
+      return stub.handler(sql, params);
+    });
+    mockTransaction.mockImplementation(async (fn: any) =>
+      fn({
+        query: vi.fn(async (sql: string, params: any[] = []) => {
+          if (sql.includes("INSERT INTO incoming_goods"))
+            return resultRows([
+              {
+                id: 1000,
+                supplier_id: params[0] ?? null,
+                invoice_number: params[1] ?? null,
+                status: "pending",
+              },
+            ]);
+          if (sql.includes("UPDATE incoming_goods"))
+            return resultRows([{ id: 1000, supplier_id: 21 }]);
+          if (sql.includes("INSERT INTO incoming_items"))
+            return resultRows([{ id: 1001 }]);
+          if (sql.includes("SELECT id FROM products WHERE id = $1"))
+            return resultRows([{ id: params[0] }]);
+          return resultRows([]);
+        }),
+      }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/incoming",
+        payload: {
+          supplier_id: 21, // СЪЩИЯТ доставчик
+          supplier_name: "IOANNOY CONFECTIONARY S.M.P.C.",
+          invoice_number: "I20870", // следващата поредна фактура
+          invoice_date: "2026-07-22",
+          document_type: "invoice",
+          visible_row_count: 1,
+          extracted_row_count: 1,
+          warnings: [],
+          completeness_status: "complete",
+          items: [
+            {
+              row_number: 1,
+              page_number: 1,
+              product_name_raw: "x",
+              product_name: "x",
+              product_id: 321,
+              quantity: 1,
+              unit_price: 1,
+              unit: "бр",
+            },
+          ],
+        },
+      });
+
+      expect(res.statusCode).not.toBe(409);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("OCR lookalike вариант на СЪЩАТА фактура пак се хваща (I2O869 → I20869)", async () => {
+    // Обратната страна: буквата O вместо нулата е класическа OCR грешка →
+    // collapse-ът я изравнява → дубликат. Точно за това служи tier-2.
+    const IOANNOY: StoredInvoice = {
+      id: 13,
+      supplier_id: 21,
+      invoice_number: "I20869",
+      status: "confirmed",
+      created_at: "2026-07-21T14:33:21Z",
+    };
+    const stub = buildDuplicateStub([IOANNOY]);
+    mockQuery.mockImplementation(stub.handler as any);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/incoming",
+        payload: {
+          supplier_id: 21,
+          supplier_name: "IOANNOY CONFECTIONARY S.M.P.C.",
+          invoice_number: "I2O869", // буква O вместо нула
+          invoice_date: "2026-07-21",
+          document_type: "invoice",
+          visible_row_count: 1,
+          extracted_row_count: 1,
+          warnings: [],
+          completeness_status: "complete",
+          items: [
+            {
+              row_number: 1,
+              page_number: 1,
+              product_name_raw: "x",
+              product_name: "x",
+              product_id: 321,
+              quantity: 1,
+              unit_price: 1,
+              unit: "бр",
+            },
+          ],
+        },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().existing_id).toBe(13);
     } finally {
       await app.close();
     }

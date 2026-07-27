@@ -272,15 +272,21 @@ async function findDuplicateInvoice(
   );
   if (exact.rows[0]) return exact.rows[0];
 
-  // ── Tier 2: OCR-collapsed fuzzy match scoped to supplier ──────────────
-  //    Applies the digit↔letter lookalike collapse (0↔O, 1↔I, J↔I, …)
-  //    then accepts Levenshtein ≤ 2 against any invoice from the same
-  //    supplier within the last 180 days. Same-supplier scope keeps
-  //    false positives low (invoice "A-1" of supplier A won't match
-  //    invoice "A-I" of supplier B).
+  // ── Tier 2: OCR-collapsed match scoped to supplier ────────────────────
+  //    Applies the digit↔letter lookalike collapse (0↔O, 1↔I, J↔I, …) and
+  //    then requires the collapsed keys to be IDENTICAL, against invoices
+  //    from the same supplier within the last 180 days.
   //
-  //    Needs `fuzzystrmatch` extension for levenshtein(). If the extension
-  //    isn't available the query falls back to similarity ≥ 0.80.
+  //    Толерансът важи САМО при различна дължина на ключовете.
+  //    Разсъждението: collapse-ът вече изравнява lookalike грешките
+  //    (буква O ↔ нула, I ↔ 1, …), затова при ЕДНАКВА дължина всяка
+  //    останала разлика е замяна на цифра с друга цифра = РАЗЛИЧНА
+  //    фактура. Различната дължина обаче значи изпуснат/добавен символ —
+  //    типичен OCR шум от снимка с телефон — там Levenshtein ≤ 2 пази.
+  //
+  //    Старият безусловен Levenshtein ≤ 2 сливаше ПОСЛЕДОВАТЕЛНИ номера
+  //    (прод: I20869 ↔ I20870 = разлика 2) и блокираше всяка следваща
+  //    фактура от доставчик, който номерира последователно.
   if (!supplierId || !ocrKey || ocrKey.length < 4) return null;
 
   const fuzzyInner = SQL_OCR_COLLAPSE_EXPR(SQL_NORMALIZE_INVOICE_NUMBER_EXPR);
@@ -291,7 +297,13 @@ async function findDuplicateInvoice(
      WHERE supplier_id = $2
        AND created_at >= NOW() - INTERVAL '180 days'
        AND ${fuzzyInner} <> ''
-       AND levenshtein(${fuzzyInner}, $1) <= 2
+       AND (
+         ${fuzzyInner} = $1
+         OR (
+           LENGTH(${fuzzyInner}) <> LENGTH($1)
+           AND levenshtein(${fuzzyInner}, $1) <= 2
+         )
+       )
      ORDER BY edit_distance ASC, created_at DESC
      LIMIT 1`,
     [ocrKey, supplierId],
