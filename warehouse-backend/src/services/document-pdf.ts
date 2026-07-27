@@ -408,6 +408,10 @@ interface IncomingStockReceiptData {
   doc_number: string;
   doc_date: string;
   reference_number?: string | null;
+  /** "credit_note" рендва Кредитно известие вместо Стокова разписка. */
+  document_kind?: "delivery" | "credit_note";
+  /** Основание от доставчика (само за кредитно известие). */
+  reason?: string | null;
   buyer: PartnerInfo;
   supplier: PartnerInfo;
   warehouse_name?: string;
@@ -1048,14 +1052,18 @@ export async function generateIncomingStockReceiptPdf(
     const pageWidth = doc.page.width - 80;
     const leftCol = 40;
 
+    // Кредитното известие от доставчика ползва същия бланкет — сменя се
+    // само заглавието и основанието (към коя фактура се отнася).
+    const isCreditNote = data.document_kind === "credit_note";
+
     drawDocumentHeading(
       doc,
       leftCol,
       pageWidth,
-      "Стокова разписка",
+      isCreditNote ? "Кредитно известие" : "Стокова разписка",
       data.doc_number,
       data.doc_date,
-      "за доставка на стоки",
+      isCreditNote ? "към доставка на стоки" : "за доставка на стоки",
     );
 
     if (data.reference_number) {
@@ -1069,6 +1077,15 @@ export async function generateIncomingStockReceiptPdf(
           align: "right",
         },
       );
+      doc.moveDown(0.2);
+    }
+
+    if (isCreditNote && data.reason) {
+      doc.font("Main").fontSize(7.5);
+      doc.text(`Причина: ${data.reason}`, leftCol, doc.y + 2, {
+        width: pageWidth,
+        align: "right",
+      });
       doc.moveDown(0.2);
     }
 

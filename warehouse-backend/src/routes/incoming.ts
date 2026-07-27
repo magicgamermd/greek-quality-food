@@ -3115,7 +3115,20 @@ export default async function incomingRoutes(app: FastifyInstance) {
         ? [warehouse.name, warehouse.address].filter(Boolean).join(", ")
         : "Основен склад";
 
-      const docNumber = `СР-${String(incoming.id).padStart(7, "0")}`;
+      // Кредитното известие се печата със СВОЯ номер (този на
+      // доставчика), а основанието сочи фактурата, която коригира.
+      const isCreditNote = incoming.document_type === "credit_note";
+      let creditNoteReference: string | null = null;
+      if (isCreditNote && incoming.related_incoming_id) {
+        const { rows: relatedRows } = await query(
+          "SELECT invoice_number FROM incoming_goods WHERE id = $1",
+          [incoming.related_incoming_id],
+        );
+        creditNoteReference = relatedRows[0]?.invoice_number ?? null;
+      }
+      const docNumber = isCreditNote
+        ? incoming.invoice_number || `КИ-${String(incoming.id).padStart(7, "0")}`
+        : `СР-${String(incoming.id).padStart(7, "0")}`;
       const pdfDir = path.resolve(process.cwd(), "data", "documents");
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
       const outputPath = path.join(
@@ -3126,7 +3139,11 @@ export default async function incomingRoutes(app: FastifyInstance) {
       await generateIncomingStockReceiptPdf({
         doc_number: docNumber,
         doc_date: String(incoming.invoice_date || incoming.created_at),
-        reference_number: incoming.invoice_number || null,
+        reference_number: isCreditNote
+          ? creditNoteReference
+          : incoming.invoice_number || null,
+        document_kind: isCreditNote ? "credit_note" : "delivery",
+        reason: isCreditNote ? (incoming.credit_note_reason ?? null) : null,
         buyer: {
           name: settings.company_name || "BAKALIA GREEK DELI FOOD",
           eik: settings.eik || undefined,
@@ -3162,7 +3179,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
       });
 
       const stream = fs.createReadStream(outputPath);
-      const filename = `Стокова_разписка_${docNumber}.pdf`;
+      const filename = isCreditNote
+        ? `Кредитно_известие_${docNumber}.pdf`
+        : `Стокова_разписка_${docNumber}.pdf`;
       const encodedFilename = encodeURIComponent(filename);
 
       return reply
