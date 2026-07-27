@@ -11,6 +11,7 @@ import {
   CheckCircle,
   AlertCircle,
   Eye,
+  FileText,
   PackagePlus,
   Printer,
   Plus,
@@ -516,6 +517,13 @@ export function IncomingGoods() {
   // (isPending / error). See saveEditChangesMutation below.
   const [cancelReason, setCancelReason] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  // Кредитно известие от доставчика (мигр. 103): отделен входящ документ
+  // с отрицателна стойност, вързан към тази доставка.
+  const [creditNoteOpen, setCreditNoteOpen] = useState(false);
+  const [cnNumber, setCnNumber] = useState("");
+  const [cnDate, setCnDate] = useState("");
+  const [cnReason, setCnReason] = useState("");
+  const [cnLines, setCnLines] = useState<any[]>([]);
   const [rowSearchInput, setRowSearchInput] = useState<Record<number, string>>(
     {},
   );
@@ -1671,6 +1679,74 @@ export function IncomingGoods() {
       ),
   });
 
+  const openCreditNote = () => {
+    if (!selectedDoc) return;
+    setCnNumber("");
+    setCnDate(new Date().toISOString().slice(0, 10));
+    setCnReason("");
+    setCnLines(
+      editItems
+        .filter((i) => i.id && !i.toDelete)
+        .map((i) => ({
+          incoming_item_id: i.id,
+          product_name: i.product_name,
+          quantity: Number(i.quantity) || 0,
+          unit_price: Number(i.unit_price) || 0,
+          new_unit_price: "",
+          returned_quantity: "",
+        })),
+    );
+    creditNoteMutation.reset();
+    setCreditNoteOpen(true);
+  };
+
+  const creditNoteMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedDoc) throw new Error("No doc selected");
+      const items = cnLines
+        .map((l) => {
+          const newPrice = String(l.new_unit_price ?? "").trim();
+          const retQty = String(l.returned_quantity ?? "").trim();
+          if (newPrice !== "")
+            return {
+              incoming_item_id: l.incoming_item_id,
+              new_unit_price: Number(newPrice),
+            };
+          if (retQty !== "")
+            return {
+              incoming_item_id: l.incoming_item_id,
+              returned_quantity: Number(retQty),
+            };
+          return null;
+        })
+        .filter(Boolean);
+      if (items.length === 0) {
+        throw new Error(
+          "Въведи нова цена или върнато количество поне на един ред.",
+        );
+      }
+      if (!cnNumber.trim()) {
+        throw new Error("Въведи номера на кредитното известие.");
+      }
+      return api.post(`/incoming/${selectedDoc.id}/credit-note`, {
+        credit_note_number: cnNumber.trim(),
+        credit_note_date: cnDate || undefined,
+        reason: cnReason.trim() || undefined,
+        items,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["incoming"] });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      setCreditNoteOpen(false);
+      toast.success("Кредитното известие е заведено");
+    },
+    onError: (err: any) =>
+      toast.error(
+        getApiErrorMessage(err, "Неуспешно завеждане на кредитно известие."),
+      ),
+  });
+
   const handlePrintReceipt = async (id: number) => {
     try {
       const res = await api.get(`/incoming/${id}/receipt`, {
@@ -1836,7 +1912,15 @@ export function IncomingGoods() {
                             : "—")}
                       </TableCell>
                       <TableCell>{formatDate(doc.invoice_date)}</TableCell>
-                      <TableCell>{doc.document_type}</TableCell>
+                      <TableCell>
+                        {doc.document_type === "credit_note" ? (
+                          <span className="text-amber-700 font-medium">
+                            Кредитно известие
+                          </span>
+                        ) : (
+                          "Фактура"
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Badge
                           variant={statusVariants[doc.status] ?? "secondary"}
@@ -2462,6 +2546,17 @@ export function IncomingGoods() {
                 Принтирай
               </Button>
             )}
+            {selectedDoc?.status === "confirmed" && (
+              <Button
+                variant="outline"
+                className="text-amber-700 border-amber-400 hover:bg-amber-50"
+                onClick={openCreditNote}
+                title="Заведи кредитно известие от доставчика (сгрешена цена или върната стока)"
+              >
+                <FileText className="h-4 w-4" />
+                Кредитно известие
+              </Button>
+            )}
             {selectedDoc?.status === "pending" && !showCancelConfirm && (
               <Button
                 variant="outline"
@@ -2505,6 +2600,166 @@ export function IncomingGoods() {
                 Потвърди доставката
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Кредитно известие от доставчика ───────────────────────────
+          Отделен входящ документ с отрицателна стойност, вързан към тази
+          доставка. Оригиналната фактура остава непроменена. */}
+      <Dialog open={creditNoteOpen} onOpenChange={setCreditNoteOpen}>
+        <DialogContent className="sm:max-w-[95vw] lg:max-w-[1100px] max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader className="shrink-0">
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-amber-600" />
+              Кредитно известие от доставчика
+            </DialogTitle>
+            <DialogDescription>
+              Доставчикът е сгрешил цената или приема връщане на стока.
+              Известието се завежда като отделен документ — оригиналната
+              фактура остава непроменена.
+            </DialogDescription>
+          </DialogHeader>
+
+          {creditNoteMutation.error && (
+            <ErrorMessage
+              message={getApiErrorMessage(
+                creditNoteMutation.error,
+                "Неуспешно завеждане.",
+              )}
+            />
+          )}
+
+          <div className="flex-1 overflow-y-auto min-h-0 space-y-4 pr-1">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-1.5">
+                <Label>Номер на известието *</Label>
+                <Input
+                  value={cnNumber}
+                  onChange={(e) => setCnNumber(e.target.value)}
+                  placeholder="напр. KI-501"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Дата</Label>
+                <Input
+                  type="date"
+                  value={cnDate}
+                  onChange={(e) => setCnDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Основание</Label>
+                <Input
+                  value={cnReason}
+                  onChange={(e) => setCnReason(e.target.value)}
+                  placeholder="напр. Сгрешена цена по фактурата"
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-gray-500">
+              На всеки ред попълни ЛИБО нова цена (ценова корекция — стоката
+              остава), ЛИБО върнато количество (стоката се връща на
+              доставчика). Празните редове не влизат в известието.
+            </div>
+
+            <div className="space-y-2">
+              {cnLines.map((line, index) => {
+                const priceFilled =
+                  String(line.new_unit_price ?? "").trim() !== "";
+                const qtyFilled =
+                  String(line.returned_quantity ?? "").trim() !== "";
+                const credited = priceFilled
+                  ? (line.unit_price - Number(line.new_unit_price || 0)) *
+                    line.quantity
+                  : qtyFilled
+                    ? line.unit_price * Number(line.returned_quantity || 0)
+                    : 0;
+                return (
+                  <div
+                    key={line.incoming_item_id}
+                    className="grid grid-cols-12 gap-3 items-end border rounded-lg p-3"
+                  >
+                    <div className="col-span-12 md:col-span-4">
+                      <div className="text-sm font-medium truncate">
+                        {line.product_name}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {line.quantity} × {fmtPrice3(line.unit_price)}€
+                      </div>
+                    </div>
+                    <div className="col-span-6 md:col-span-3 space-y-1.5">
+                      <Label className="text-xs">Нова цена</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        value={line.new_unit_price}
+                        disabled={qtyFilled}
+                        placeholder={String(line.unit_price)}
+                        onChange={(e) =>
+                          setCnLines((current) =>
+                            current.map((l, i) =>
+                              i === index
+                                ? { ...l, new_unit_price: e.target.value }
+                                : l,
+                            ),
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="col-span-6 md:col-span-3 space-y-1.5">
+                      <Label className="text-xs">Върнато к-во</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        value={line.returned_quantity}
+                        disabled={priceFilled}
+                        placeholder="0"
+                        onChange={(e) =>
+                          setCnLines((current) =>
+                            current.map((l, i) =>
+                              i === index
+                                ? { ...l, returned_quantity: e.target.value }
+                                : l,
+                            ),
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="col-span-12 md:col-span-2 text-right text-sm">
+                      {credited > 0 ? (
+                        <span className="text-amber-700 font-medium">
+                          −{fmtPrice3(credited)}€
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <DialogFooter className="shrink-0 mt-4 gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setCreditNoteOpen(false)}
+              disabled={creditNoteMutation.isPending}
+            >
+              Отказ
+            </Button>
+            <Button
+              onClick={() => creditNoteMutation.mutate()}
+              disabled={creditNoteMutation.isPending}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              {creditNoteMutation.isPending ? <Spinner size="sm" /> : null}
+              Заведи известието
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
