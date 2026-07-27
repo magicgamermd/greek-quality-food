@@ -443,7 +443,13 @@ export default async function orderRoutes(app: FastifyInstance) {
       ${in_stock_only === "true" ? "HAVING COALESCE(SUM(inv.quantity), 0) > 0" : ""}
       ORDER BY
         CASE
-          WHEN COALESCE(${priceListId ? "pli.price, " : ""}p.${groupPriceCol}, p.selling_price, 0) <= 0 THEN 2
+          -- NULLIF-ите прескачат НУЛЕВИТЕ цени по същата верига, която
+          -- ползва и UI-то (ценова листа → ценова група → продажна).
+          -- Без тях продукт с 0.00 в ценовата група на партньора се
+          -- броеше за „без цена" и падаше най-долу — а в прод почти
+          -- всички партньори са в група, чиито стойности са нули, т.е.
+          -- цялата подредба „наличните първи" се обезсмисляше.
+          WHEN COALESCE(${priceListId ? "NULLIF(pli.price, 0), " : ""}NULLIF(p.${groupPriceCol}, 0), NULLIF(p.selling_price, 0), 0) <= 0 THEN 2
           WHEN COALESCE(SUM(inv.quantity), 0) > 0 THEN 0
           ELSE 1
         END,
