@@ -100,17 +100,15 @@ async function fetchManualProductOptions(
       : [];
   return rows
     .filter((row: any) => Number.isFinite(Number(row?.id)))
-    .map(
-      (row: any): ManualRowProductOption => ({
-        id: Number(row.id),
-        name_bg: row.name_bg ?? null,
-        name_en: row.name_en ?? null,
-        sku: row.sku ?? null,
-        unit: row.unit ?? null,
-        purchase_price: toOptionalNumber(row.purchase_price),
-        selling_price: toOptionalNumber(row.selling_price),
-      }),
-    );
+    .map((row: any): ManualRowProductOption => ({
+      id: Number(row.id),
+      name_bg: row.name_bg ?? null,
+      name_en: row.name_en ?? null,
+      sku: row.sku ?? null,
+      unit: row.unit ?? null,
+      purchase_price: toOptionalNumber(row.purchase_price),
+      selling_price: toOptionalNumber(row.selling_price),
+    }));
 }
 
 function isMatchedForAutoLink(item: ScannedInvoiceItem): boolean {
@@ -886,9 +884,26 @@ export function IncomingGoods() {
     });
     try {
       const res = await api.get(`/incoming/${doc.id}`);
+      const fresh = res.data?.data ?? res.data;
       const items = res.data?.items ?? res.data?.data?.items ?? [];
       const arr = Array.isArray(items) ? items : [];
       setDocDetails(arr);
+      // Header-ът се пълни от СВЕЖИЯ отговор, не от подадения `doc`.
+      // След „Запази промените" презареждаме модала със същия (вече
+      // остарял) обект от списъка, затова номерът/датата се връщаха към
+      // старите стойности до затваряне и отваряне наново.
+      if (fresh?.id) {
+        setSelectedDoc((prev) =>
+          prev && prev.id === fresh.id ? { ...prev, ...fresh } : prev,
+        );
+        setEditHeader({
+          supplier_id: String(fresh.supplier_id ?? ""),
+          invoice_number: fresh.invoice_number ?? "",
+          invoice_date: fresh.invoice_date
+            ? String(fresh.invoice_date).split("T")[0]
+            : "",
+        });
+      }
       setEditItems(
         arr.map((item: any) => {
           // Prefer the selling_price saved WITH this delivery (what was set
@@ -1122,7 +1137,8 @@ export function IncomingGoods() {
       Number(editHeader.supplier_id) !== Number(selectedDoc.supplier_id ?? 0);
     return (
       supplierChanged ||
-      (editHeader.invoice_number || "") !== (selectedDoc.invoice_number ?? "") ||
+      (editHeader.invoice_number || "") !==
+        (selectedDoc.invoice_number ?? "") ||
       (editHeader.invoice_date || "") !== storedDate
     );
   })();
@@ -1224,8 +1240,7 @@ export function IncomingGoods() {
           },
         );
         const invoiceNumber = quickRes.data?.invoice_number as
-          | string
-          | undefined;
+          string | undefined;
         if (invoiceNumber) {
           const dupCheck = await api.get(
             `/incoming/check-duplicate?invoice_number=${encodeURIComponent(invoiceNumber)}`,
@@ -2637,8 +2652,8 @@ export function IncomingGoods() {
             </DialogTitle>
             <DialogDescription>
               Доставчикът е сгрешил цената или приема връщане на стока.
-              Известието се завежда като отделен документ — оригиналната
-              фактура остава непроменена.
+              Известието се завежда като отделен документ — оригиналната фактура
+              остава непроменена.
             </DialogDescription>
           </DialogHeader>
 
@@ -2681,8 +2696,8 @@ export function IncomingGoods() {
 
             <div className="text-xs text-gray-500">
               На всеки ред попълни ЛИБО нова цена (ценова корекция — стоката
-              остава), ЛИБО върнато количество (стоката се връща на
-              доставчика). Празните редове не влизат в известието.
+              остава), ЛИБО върнато количество (стоката се връща на доставчика).
+              Празните редове не влизат в известието.
             </div>
 
             <div className="space-y-2">
