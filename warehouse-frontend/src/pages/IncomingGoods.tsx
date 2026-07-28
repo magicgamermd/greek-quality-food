@@ -1107,6 +1107,26 @@ export function IncomingGoods() {
   const docEditable =
     selectedDoc?.status === "pending" || selectedDoc?.status === "confirmed";
 
+  // Промяна в header-а (доставчик / номер / дата на фактурата) също прави
+  // доставката „мръсна". Досега „Запази промените" гледаше САМО редовете,
+  // затова редакция на номера или датата не активираше бутона, макар
+  // saveEditChanges да ги изпраща. Условието е огледало на header diff-а
+  // в saveEditChanges — активира се точно това, което ще се запише.
+  const headerDirty = (() => {
+    if (!selectedDoc) return false;
+    const storedDate = selectedDoc.invoice_date
+      ? String(selectedDoc.invoice_date).split("T")[0]
+      : "";
+    const supplierChanged =
+      !!editHeader.supplier_id &&
+      Number(editHeader.supplier_id) !== Number(selectedDoc.supplier_id ?? 0);
+    return (
+      supplierChanged ||
+      (editHeader.invoice_number || "") !== (selectedDoc.invoice_number ?? "") ||
+      (editHeader.invoice_date || "") !== storedDate
+    );
+  })();
+
   // Thin wrapper so callers keep the old `Promise<boolean>` contract while
   // the actual work lives in the mutation above.
   const saveEditChanges = async (): Promise<boolean> => {
@@ -1149,7 +1169,8 @@ export function IncomingGoods() {
     if (!selectedDoc) return;
     saveEditChangesMutation.reset();
     cancelIncomingDelivery.reset();
-    const hasPendingChanges = editItems.some((i) => i.dirty || i.toDelete);
+    const hasPendingChanges =
+      headerDirty || editItems.some((i) => i.dirty || i.toDelete);
     if (hasPendingChanges) {
       const ok = await saveEditChanges();
       if (!ok) return;
@@ -2580,7 +2601,7 @@ export function IncomingGoods() {
                 disabled={
                   editSaving ||
                   confirmIncomingMutation.isPending ||
-                  !editItems.some((i) => i.dirty || i.toDelete)
+                  !(headerDirty || editItems.some((i) => i.dirty || i.toDelete))
                 }
               >
                 {editSaving ? <Spinner size="sm" /> : null}
