@@ -10,6 +10,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // Регистрацията е ръчна в src/pwa.ts (там презареждаме при нова
+      // версия). Без това плъгинът инжектира втора регистрация в index.html.
+      injectRegister: null,
       // Enable service worker + manifest serving in `npm run dev` too —
       // without this the manifest.webmanifest returns the SPA fallback HTML
       // and iOS can't recognize the page as a PWA when adding to home screen.
@@ -117,6 +120,11 @@ export default defineConfig({
       },
     }),
   ],
+  // Печат на версията в конзолата — за да се вижда за секунда коя версия
+  // върти браузърът, вместо да се гадае „качено ли е при мен".
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
