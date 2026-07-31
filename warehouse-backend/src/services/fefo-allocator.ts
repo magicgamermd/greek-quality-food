@@ -39,13 +39,18 @@ export class InsufficientStockError extends Error {
     // а е с изтекъл срок (прод: „налични 0" при 12 изтекли бр. мляко).
     public expiredQuantity = 0,
     public latestExpiredDate: string | null = null,
+    // Име на продукта — „за продукт 59" не значи нищо на склададжията.
+    public productName: string | null = null,
   ) {
     super(
-      `Недостатъчна неизтекла наличност за продукт ${productId}: искани ${requested}, налични ${available}` +
+      `Недостатъчна неизтекла наличност за ${
+        productName ? `„${productName}"` : `продукт ${productId}`
+      }: искани ${requested}, налични ${available}` +
         (expiredQuantity > 0
           ? ` (${expiredQuantity} бр. са с изтекъл срок${
               latestExpiredDate ? `, последен ${latestExpiredDate}` : ""
-            })`
+            }). Ако стоката е налична физически — провери Склад → Изтекли ` +
+            `(може срокът да е сгрешен) или коригирай последната доставка.`
           : ""),
     );
     this.name = "InsufficientStockError";
@@ -154,12 +159,25 @@ export async function allocateFefo(
     if (opts.allowShortfall) {
       return { allocations, warnings, shortfall: remaining };
     }
+    // Името на продукта — само по пътя на грешката (един SELECT повече не
+    // тежи тук). Провал на lookup-а не бива да скрие истинската грешка.
+    let productName: string | null = null;
+    try {
+      const { rows: prod } = await client.query(
+        `SELECT name_bg FROM products WHERE id = $1`,
+        [productId],
+      );
+      productName = prod[0]?.name_bg ?? null;
+    } catch {
+      // пада се обратно на „продукт {id}"
+    }
     throw new InsufficientStockError(
       productId,
       quantity,
       availableNonExpired,
       expiredQuantity,
       latestExpiredDate,
+      productName,
     );
   }
   return { allocations, warnings, shortfall: 0 };
