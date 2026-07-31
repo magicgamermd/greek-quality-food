@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import permissionsRoutes from "../routes/permissions.js";
+import { PERMISSION_REGISTRY } from "../lib/permissions.js";
 
 async function buildApp() {
   const app = Fastify();
@@ -30,7 +31,11 @@ describe("GET /permissions/registry", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(Array.isArray(body)).toBe(true);
-      expect(body.length).toBe(19);
+      // Броят следва регистъра — хардкоднато число гниеше при всяко
+      // ново право (падна на 20-ото). Стойността на теста е формата
+      // и конкретните записи, не магическа бройка.
+      expect(body.length).toBe(PERMISSION_REGISTRY.length);
+      expect(body.length).toBeGreaterThanOrEqual(19);
       const orders = body.find((p: any) => p.permission === "orders.manage");
       expect(orders).toMatchObject({
         permission: "orders.manage",

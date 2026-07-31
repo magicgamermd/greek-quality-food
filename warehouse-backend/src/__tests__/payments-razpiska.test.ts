@@ -54,11 +54,12 @@ describe("razpiska payments", () => {
         payload: { order_id: 42, amount: 200, payment_method: "bank" },
       });
       expect(res.statusCode).toBe(201);
+      // GQF: total_amount е НЕТО → брутото за събиране е 500 × 1.2 = 600.
       expect(res.json()).toMatchObject({
         order_id: 42,
-        order_total: 500,
+        order_total: 600,
         total_paid: 200,
-        remaining: 300,
+        remaining: 400,
       });
     } finally {
       await app.close();
@@ -130,11 +131,12 @@ describe("razpiska payments", () => {
       const res = await app.inject({
         method: "POST",
         url: "/payments",
-        payload: { order_id: 42, amount: 150 },
+        // Бруто таван: 500 нето × 1.2 = 600; платени 400 → 250 прелива.
+        payload: { order_id: 42, amount: 250 },
       });
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({
-        order_total: 500,
+        order_total: 600,
         already_paid: 400,
       });
     } finally {

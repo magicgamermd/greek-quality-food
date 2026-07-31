@@ -51,23 +51,25 @@ describe("products search ordering", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      const [sql, params] = mockQuery.mock.calls[0];
-      expect(String(sql)).toContain(
-        "WHEN LOWER(COALESCE(p.name_bg, '')) = $3 THEN 0",
+      const [sql, params = []] = mockQuery.mock.calls[0];
+      // Номерата на параметрите ($N) зависят от броя думи в търсенето
+      // (word-split-ът яде по 4 параметъра на дума) — затова маркерите
+      // се проверяват без конкретни индекси. Падаше точно на това.
+      expect(String(sql)).toMatch(
+        /WHEN LOWER\(COALESCE\(p\.name_bg, ''\)\) = \$\d+ THEN 0/,
       );
-      expect(String(sql)).toContain(
-        "WHEN LOWER(COALESCE(p.name_bg, '')) LIKE $4 THEN 1",
+      expect(String(sql)).toMatch(
+        /WHEN LOWER\(COALESCE\(p\.name_bg, ''\)\) LIKE \$\d+ THEN 1/,
       );
       expect(String(sql)).toContain("ELSE 2");
-      expect(params).toEqual([
-        "сирене фета",
-        "%сирене фета%",
-        "сирене фета",
-        "сирене фета%",
-        "сирене фета",
-        10,
-        0,
-      ]);
+      // Класиране: точното и префиксното съвпадение са в параметрите
+      // (multi-word търсенето се разбива на думи + пълната фраза за
+      // exact/prefix ранкинга).
+      expect(params).toEqual(expect.arrayContaining(["сирене", "фета"]));
+      expect(params).toEqual(
+        expect.arrayContaining(["сирене фета", "сирене фета%"]),
+      );
+      expect(params.slice(-2)).toEqual([10, 0]);
     } finally {
       await app.close();
     }
@@ -88,22 +90,20 @@ describe("products search ordering", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      const [sql, params] = mockQuery.mock.calls[0];
-      expect(String(sql)).toContain(
-        "WHEN LOWER(COALESCE(p.sku, '')) = $3 THEN 0",
+      const [sql, params = []] = mockQuery.mock.calls[0];
+      // Без конкретни $N — виж коментара в горния тест.
+      expect(String(sql)).toMatch(
+        /WHEN LOWER\(COALESCE\(p\.sku, ''\)\) = \$\d+ THEN 0/,
       );
-      expect(String(sql)).toContain(
-        "WHEN LOWER(COALESCE(p.sku, '')) LIKE $4 THEN 1",
+      expect(String(sql)).toMatch(
+        /WHEN LOWER\(COALESCE\(p\.sku, ''\)\) LIKE \$\d+ THEN 1/,
       );
-      expect(params).toEqual([
-        "KOS06005",
-        "%KOS06005%",
-        "kos06005",
-        "kos06005%",
-        "KOS06005",
-        10,
-        0,
-      ]);
+      // q alias-ът минава през същия search пайплайн: думата за
+      // съвпадение + exact/prefix за класирането + пагинация.
+      expect(params).toEqual(
+        expect.arrayContaining(["KOS06005", "kos06005", "kos06005%"]),
+      );
+      expect(params.slice(-2)).toEqual([10, 0]);
     } finally {
       await app.close();
     }

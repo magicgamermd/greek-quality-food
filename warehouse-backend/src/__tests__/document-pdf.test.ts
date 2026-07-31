@@ -267,7 +267,7 @@ describe("document pdf layout regression", () => {
     expect(renderedStrings).toContain(
       "Декларирам, че горепосочените продукти са предназначени за човешка консумация и са произведени съгласно регламентите на ЕС, касаещи безопасността на храните.",
     );
-    expect(renderedStrings).toContain("Словом: Двадесет евро");
+    expect(renderedStrings).toContain("Словом: Двадесет и четири евро");
     expect(renderedStrings).not.toContain(
       "Словом: Четиридесет и шест лева и 94 ст.",
     );
