@@ -114,6 +114,57 @@ describe("allocateFefo", () => {
     );
   });
 
+  it("грешката носи ИМЕТО на продукта, когато е известно", async () => {
+    // Прод: „за продукт 59" не значи нищо на склададжията. Когато клиентът
+    // може да даде името (products lookup), то влиза в съобщението, а ID-то
+    // остава за диагностика.
+    const rows = [
+      {
+        batch_id: 4,
+        batch_number: "АВТО-2-59",
+        expiry_date: "2026-06-14",
+        purchase_price: "1.00",
+        available: "12",
+      },
+    ];
+    // Първото query е партидите; второто (lookup на името) връща продукта.
+    let call = 0;
+    const client = {
+      query: async () => ({
+        rows: call++ === 0 ? rows : [{ name_bg: 'Мляко с какао "CHOCOFULL"' }],
+      }),
+    } as any;
+
+    await expect(
+      allocateFefo(client, 59, 1, 24, { today: TODAY }),
+    ).rejects.toThrow(
+      'Недостатъчна неизтекла наличност за „Мляко с какао "CHOCOFULL"": искани 24, налични 0 (12 бр. са с изтекъл срок, последен 2026-06-14). Ако стоката е налична физически — провери Склад → Изтекли (може срокът да е сгрешен) или коригирай последната доставка.',
+    );
+  });
+
+  it("името се пропуска тихо, ако lookup-ът се провали", async () => {
+    const rows = [
+      {
+        batch_id: 4,
+        batch_number: "АВТО-2-59",
+        expiry_date: "2026-06-14",
+        purchase_price: "1.00",
+        available: "12",
+      },
+    ];
+    let call = 0;
+    const client = {
+      query: async () => {
+        if (call++ === 0) return { rows };
+        throw new Error("db down");
+      },
+    } as any;
+
+    await expect(
+      allocateFefo(client, 59, 1, 24, { today: TODAY }),
+    ).rejects.toThrow(/за продукт 59: искани 24/);
+  });
+
   it("разделя линия по няколко партиди", async () => {
     const client = mkClient([
       {
