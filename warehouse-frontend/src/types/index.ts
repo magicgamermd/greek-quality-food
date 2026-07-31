@@ -305,7 +305,10 @@ export interface Invoice {
   total_gross: number;
   include_vat?: boolean;
   payment_method?: "cash" | "bank" | "cod";
-  document_type?: "invoice" | "credit_note";
+  // Проформите живеят в същата таблица (виж documentTypeLabels в
+  // Invoices.tsx) — типът ги пропускаше и сравненията с "proforma"
+  // гърмяха при `tsc -b`.
+  document_type?: "invoice" | "credit_note" | "proforma";
   related_invoice_id?: number;
   related_invoice_number?: string | null;
   credit_note_id?: number | null;
