@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
 import { SwapInvoiceNumbersModal } from "@/components/invoices/SwapInvoiceNumbersModal";
+import { CreditNoteHubDialog } from "@/components/invoices/CreditNoteHubDialog";
 
 const paymentVariants: Record<string, "success" | "destructive" | "warning"> = {
   paid: "success",
@@ -82,9 +83,10 @@ export function Invoices() {
   const [statusFilter, setStatusFilter] = useState(statusFromUrl);
   const [highlightedRowId, setHighlightedRowId] = useState<number | null>(null);
   const highlightRowRef = useRef<HTMLTableRowElement | null>(null);
-  const [creditNoteModal, setCreditNoteModal] = useState<Invoice | null>(null);
-  const [creditNoteReason, setCreditNoteReason] = useState("");
-  const [creditNoteIncludeVat, setCreditNoteIncludeVat] = useState(true);
+  const [creditNoteHubOpen, setCreditNoteHubOpen] = useState(false);
+  // Ред фактура → диалогът се отваря с предизбрана фактура (частично КИ).
+  const [creditNoteHubInvoice, setCreditNoteHubInvoice] =
+    useState<Invoice | null>(null);
   const [cancelModal, setCancelModal] = useState<Invoice | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
@@ -311,27 +313,6 @@ export function Invoices() {
     },
   });
 
-  const creditNoteMutation = useMutation({
-    mutationFn: (data: {
-      related_invoice_id: number;
-      reason: string;
-      include_vat: boolean;
-    }) => api.post("/invoices/credit-note", data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["invoices"] });
-      setCreditNoteModal(null);
-      setCreditNoteReason("");
-      toast.success("Кредитното известие е издадено");
-    },
-    onError: (err: any) => {
-      toast.error(
-        err?.response?.data?.error ??
-          err?.response?.data?.message ??
-          "Грешка при издаване на кредитно известие",
-      );
-    },
-  });
-
   const cancelInvoiceMutation = useMutation({
     mutationFn: (data: { id: number; reason: string }) =>
       api.post(`/invoices/${data.id}/cancel`, { reason: data.reason }),
@@ -497,19 +478,11 @@ export function Invoices() {
     }
   };
 
+  // Ред фактура → новият диалог с предизбрана фактура (частично КИ с
+  // тикчета по продукти) вместо стария „само цялата фактура" модал.
   const openCreditNoteModal = (inv: Invoice) => {
-    setCreditNoteModal(inv);
-    setCreditNoteReason("");
-    setCreditNoteIncludeVat(inv.include_vat !== false);
-  };
-
-  const submitCreditNote = () => {
-    if (!creditNoteModal || !creditNoteReason.trim()) return;
-    creditNoteMutation.mutate({
-      related_invoice_id: creditNoteModal.id,
-      reason: creditNoteReason.trim(),
-      include_vat: creditNoteIncludeVat,
-    });
+    setCreditNoteHubInvoice(inv);
+    setCreditNoteHubOpen(true);
   };
 
   const openCancelModal = (inv: Invoice) => {
@@ -635,6 +608,20 @@ export function Invoices() {
             Стокови разписки
           </button>
         </div>
+        {/* Кредитно известие — единен вход за продажба (наша фактура) и
+            покупка (фактура на доставчик). Вляво при табовете, както
+            поиска складът. */}
+        {view === "invoices" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCreditNoteHubOpen(true)}
+            className="border-amber-300 text-amber-700 hover:bg-amber-50"
+          >
+            <FileText className="h-4 w-4" />
+            Кредитно известие
+          </Button>
+        )}
         {isAdmin && (
           <button
             type="button"
@@ -1124,83 +1111,6 @@ export function Invoices() {
       )}
 
       {/* Credit Note Modal */}
-      {creditNoteModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
-            <h2 className="text-lg font-bold mb-4">Издай кредитно известие</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Към фактура:{" "}
-              <span className="font-mono font-bold">
-                {creditNoteModal.invoice_number}
-              </span>
-              <br />
-              Сума:{" "}
-              <span className="font-bold">
-                {formatCurrency(creditNoteModal.total_gross)}
-              </span>
-            </p>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Основание
-                </label>
-                <textarea
-                  className="w-full border rounded-md p-2 text-sm"
-                  rows={3}
-                  maxLength={500}
-                  value={creditNoteReason}
-                  onChange={(e) => setCreditNoteReason(e.target.value)}
-                  placeholder="Опишете причината за кредитното известие..."
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="cn-include-vat"
-                  checked={creditNoteIncludeVat}
-                  onChange={(e) => setCreditNoteIncludeVat(e.target.checked)}
-                  className="rounded"
-                />
-                <label htmlFor="cn-include-vat" className="text-sm">
-                  Включи ДДС
-                </label>
-              </div>
-
-              {!creditNoteIncludeVat && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-md p-2 text-sm text-yellow-800">
-                  Документ без ДДС
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2 mt-6">
-              <Button
-                variant="outline"
-                onClick={() => setCreditNoteModal(null)}
-              >
-                Отказ
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={submitCreditNote}
-                disabled={
-                  !creditNoteReason.trim() || creditNoteMutation.isPending
-                }
-              >
-                {creditNoteMutation.isPending ? "Създаване..." : "Издай КИ"}
-              </Button>
-            </div>
-
-            {creditNoteMutation.isError && (
-              <p className="text-sm text-red-600 mt-2">
-                Грешка при създаване на кредитно известие
-              </p>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Invoice Cancel Modal */}
       {cancelModal && (
@@ -1379,6 +1289,16 @@ export function Invoices() {
         onSuccess={() => {
           qc.invalidateQueries({ queryKey: ["invoices"] });
         }}
+      />
+
+      <CreditNoteHubDialog
+        open={creditNoteHubOpen}
+        onOpenChange={(o) => {
+          setCreditNoteHubOpen(o);
+          if (!o) setCreditNoteHubInvoice(null);
+        }}
+        invoices={allInvoices}
+        initialInvoice={creditNoteHubInvoice}
       />
     </div>
   );

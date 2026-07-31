@@ -22,6 +22,11 @@ export interface Batch {
   batch_number: string | null;
   expiry_date: string | null;
   quantity: number | string;
+  // Произход — доставката, създала партидата (NULL за начална наличност)
+  source_invoice_number?: string | null;
+  source_invoice_date?: string | null;
+  source_received_date?: string | null;
+  source_supplier_name?: string | null;
 }
 
 interface BatchListResponse {

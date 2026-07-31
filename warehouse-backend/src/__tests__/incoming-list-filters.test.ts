@@ -66,4 +66,37 @@ describe("incoming list filters", () => {
       await app.close();
     }
   });
+
+  it("q търси едновременно по номер на фактура и име на доставчик", async () => {
+    // Складът помни или номера от документа, или от кого е дошло —
+    // едно поле покрива и двете.
+    mockQuery.mockResolvedValueOnce(resultRows([]));
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({ method: "GET", url: "/incoming?q=50TIE" });
+
+      expect(res.statusCode).toBe(200);
+      const [sql, params] = mockQuery.mock.calls[0];
+      expect(String(sql)).toContain("ig.invoice_number ILIKE");
+      expect(String(sql)).toContain("s.name ILIKE");
+      expect(params).toEqual(expect.arrayContaining(["%50TIE%"]));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("без q заявката няма ILIKE условия", async () => {
+    mockQuery.mockResolvedValueOnce(resultRows([]));
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({ method: "GET", url: "/incoming" });
+
+      expect(res.statusCode).toBe(200);
+      expect(String(mockQuery.mock.calls[0][0])).not.toContain("ILIKE");
+    } finally {
+      await app.close();
+    }
+  });
 });

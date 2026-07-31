@@ -17,6 +17,7 @@ import {
   Plus,
   Trash2,
   PenLine,
+  Search,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import {
@@ -499,6 +500,10 @@ export function IncomingGoods() {
   const [showHistory, setShowHistory] = useState(false);
   const [dateFrom, setDateFrom] = useState(thirtyDaysAgo);
   const [dateTo, setDateTo] = useState(today);
+  // Търсене в списъка: номер на фактура / доставчик + статус
+  const [listSearch, setListSearch] = useState("");
+  const [listStatus, setListStatus] = useState("");
+  const debouncedListSearch = useDebouncedValue(listSearch, 300);
   const [selectedDoc, setSelectedDoc] = useState<IncomingGoodsType | null>(
     null,
   );
@@ -842,14 +847,31 @@ export function IncomingGoods() {
     isLoading,
     error,
   } = useQuery<IncomingGoodsType[]>({
-    queryKey: ["incoming", activeDateFrom, activeDateTo],
-    queryFn: () =>
-      api
-        .get(`/incoming?date_from=${activeDateFrom}&date_to=${activeDateTo}`)
-        .then((r) => {
-          const d = r.data;
-          return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
-        }),
+    queryKey: [
+      "incoming",
+      activeDateFrom,
+      activeDateTo,
+      debouncedListSearch,
+      listStatus,
+      showHistory,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      // При активно търсене от „Днешни" не ограничаваме до днес — търси
+      // се в цялата история (иначе „няма я фактура 44" подвежда). В
+      // История датите остават валидни и при търсене.
+      const searching = !!debouncedListSearch.trim();
+      if (!searching || showHistory) {
+        params.set("date_from", activeDateFrom);
+        params.set("date_to", activeDateTo);
+      }
+      if (searching) params.set("q", debouncedListSearch.trim());
+      if (listStatus) params.set("status", listStatus);
+      return api.get(`/incoming?${params.toString()}`).then((r) => {
+        const d = r.data;
+        return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+      });
+    },
     // Auto-refresh policy — overrides global defaults (see App.tsx) so that
     // a new delivery created anywhere (Owner PWA, another browser tab, or
     // this tab) appears here without a manual reload:
@@ -1899,6 +1921,52 @@ export function IncomingGoods() {
                 {showHistory ? "← Днес" : "📋 История"}
               </Button>
             </div>
+          </div>
+          {/* Търсене + статус — складът търси по номер на фактура или
+              по доставчик, без да рови по дати. */}
+          <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Търси по № на фактура или доставчик..."
+                value={listSearch}
+                onChange={(e) => setListSearch(e.target.value)}
+                className="pl-9 pr-3 py-1.5 text-sm border rounded-lg w-72 focus:outline-none focus:ring-2 focus:ring-[#6c3dff]/30 focus:border-[#6c3dff]"
+              />
+            </div>
+            <div className="flex gap-1">
+              {[
+                { value: "", label: "Всички" },
+                { value: "pending", label: "Чакащи" },
+                { value: "confirmed", label: "Потвърдени" },
+              ].map((f) => (
+                <button
+                  key={f.value}
+                  type="button"
+                  onClick={() => setListStatus(f.value)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                    listStatus === f.value
+                      ? "bg-[#6c3dff] text-white"
+                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            {(listSearch || listStatus) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setListSearch("");
+                  setListStatus("");
+                }}
+                className="text-xs text-gray-500 underline"
+              >
+                Изчисти
+              </button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="p-0">
