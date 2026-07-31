@@ -84,6 +84,8 @@ export async function build() {
     "http://127.0.0.1:5174",
     // Greek Quality Food dev frontend
     "http://localhost:5175",
+    // Втора Claude сесия (5175 зает) — виж ~/.claude/launch.json gqf-frontend-alt
+    "http://localhost:5179",
     "http://127.0.0.1:5175",
     // Tauri desktop app. The bundled webview serves the built frontend
     // from `tauri://localhost` on macOS.
@@ -92,9 +94,9 @@ export async function build() {
   ];
   const devCorsPatterns = [
     // LAN access on port 5173/5174/5175
-    /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):517[345]$/,
+    /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):517[3459]$/,
     // Tailscale CGNAT range 100.64.0.0/10
-    /^http:\/\/100\.\d{1,3}\.\d{1,3}\.\d{1,3}:517[345]$/,
+    /^http:\/\/100\.\d{1,3}\.\d{1,3}\.\d{1,3}:517[3459]$/,
   ];
 
   await app.register(cors, {

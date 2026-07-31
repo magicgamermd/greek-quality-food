@@ -188,7 +188,7 @@ describe("POST /invoices/credit-note — partial", () => {
     }
   });
 
-  it("partial — single line full quantity → totals from selected (gross-based)", async () => {
+  it("partial — single line full quantity → totals from selected (net-based)", async () => {
     const clientQuery = buildClientQuery({
       invoice: baseInvoice,
       orderId: 50,
@@ -215,17 +215,17 @@ describe("POST /invoices/credit-note — partial", () => {
         String(c[0]).includes("INSERT INTO invoices"),
       );
       const params = insertCall![1] as any[];
-      // unit_price=100 е gross (с ДДС). totalGross = 1 × 100 = 100;
-      // totalNet = 100 / 1.2 = 83.33; totalVat = 100 - 83.33 = 16.67
-      expect(params[2]).toBeCloseTo(-83.33, 2);
-      expect(params[3]).toBeCloseTo(-16.67, 2);
-      expect(params[4]).toBeCloseTo(-100, 2);
+      // GQF: unit_price е НЕТО (без ДДС) — като при издаване на фактура.
+      // totalNet = 1 × 100 = 100; totalVat = 20; totalGross = 120.
+      expect(params[2]).toBeCloseTo(-100, 2);
+      expect(params[3]).toBeCloseTo(-20, 2);
+      expect(params[4]).toBeCloseTo(-120, 2);
     } finally {
       await app.close();
     }
   });
 
-  it("partial — multiple lines, fractional quantities (gross-based)", async () => {
+  it("partial — multiple lines, fractional quantities (net-based)", async () => {
     const clientQuery = buildClientQuery({
       invoice: baseInvoice,
       orderId: 50,
@@ -254,10 +254,75 @@ describe("POST /invoices/credit-note — partial", () => {
         String(c[0]).includes("INSERT INTO invoices"),
       );
       const params = insertCall![1] as any[];
-      // totalGross = 100; totalNet = 100/1.2 = 83.33; totalVat = 16.67
-      expect(params[2]).toBeCloseTo(-83.33, 2);
-      expect(params[3]).toBeCloseTo(-16.67, 2);
-      expect(params[4]).toBeCloseTo(-100, 2);
+      // НЕТО: 1×50 + 0.5×100 = 100; ДДС 20; бруто 120.
+      expect(params[2]).toBeCloseTo(-100, 2);
+      expect(params[3]).toBeCloseTo(-20, 2);
+      expect(params[4]).toBeCloseTo(-120, 2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("credit_note_date влиза в записа; без нея пада на CURRENT_DATE", async () => {
+    // Потребителят избира на коя дата се ИЗДАВА известието (не винаги е
+    // днес — счетоводството ги завежда със задна дата в същия период).
+    const clientQuery = buildClientQuery({
+      invoice: baseInvoice,
+      orderId: 50,
+      orderItems: baseOrderItems,
+    });
+    mockTransaction.mockImplementation(async (cb: any) =>
+      cb({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/invoices/credit-note",
+        payload: {
+          related_invoice_id: 100,
+          reason: "С избрана дата",
+          credit_note_date: "2026-07-15",
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      const insertCall = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("INSERT INTO invoices"),
+      );
+      // Датата е последният параметър (за да не мести индексите на totals);
+      // SQL-ът пада на CURRENT_DATE, когато е null.
+      expect(String(insertCall![0])).toContain(
+        "COALESCE($9::date, CURRENT_DATE)",
+      );
+      expect(insertCall![1][8]).toBe("2026-07-15");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("сгрешен формат на credit_note_date → 400", async () => {
+    const clientQuery = buildClientQuery({
+      invoice: baseInvoice,
+      orderId: 50,
+      orderItems: baseOrderItems,
+    });
+    mockTransaction.mockImplementation(async (cb: any) =>
+      cb({ query: clientQuery }),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/invoices/credit-note",
+        payload: {
+          related_invoice_id: 100,
+          reason: "Лоша дата",
+          credit_note_date: "15.07.2026",
+        },
+      });
+      expect(res.statusCode).toBe(400);
     } finally {
       await app.close();
     }

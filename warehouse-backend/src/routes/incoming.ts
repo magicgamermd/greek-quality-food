@@ -894,7 +894,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
     "/",
     { preHandler: incomingManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const { status, page, limit, date_from, date_to, supplier_id } =
+      const { status, page, limit, date_from, date_to, supplier_id, q } =
         request.query as any;
       const pageNum = Math.max(1, parseInt(page) || 1);
       const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
@@ -921,6 +921,16 @@ export default async function incomingRoutes(app: FastifyInstance) {
       if (supplier_id) {
         conditions.push(`ig.supplier_id = $${paramIdx++}`);
         params.push(parseInt(supplier_id));
+      }
+      // Търсене: номер на фактура ИЛИ име на доставчик — складът помни
+      // едното от двете, едно поле покрива и двата случая.
+      if (q && String(q).trim()) {
+        conditions.push(
+          `(ig.invoice_number ILIKE $${paramIdx} OR s.name ILIKE $${paramIdx + 1})`,
+        );
+        const like = `%${String(q).trim()}%`;
+        params.push(like, like);
+        paramIdx += 2;
       }
 
       const where =
@@ -3134,7 +3144,8 @@ export default async function incomingRoutes(app: FastifyInstance) {
         creditNoteReference = relatedRows[0]?.invoice_number ?? null;
       }
       const docNumber = isCreditNote
-        ? incoming.invoice_number || `КИ-${String(incoming.id).padStart(7, "0")}`
+        ? incoming.invoice_number ||
+          `КИ-${String(incoming.id).padStart(7, "0")}`
         : `СР-${String(incoming.id).padStart(7, "0")}`;
       const pdfDir = path.resolve(process.cwd(), "data", "documents");
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });

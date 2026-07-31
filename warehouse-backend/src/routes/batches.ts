@@ -47,10 +47,19 @@ export default async function batchRoutes(app: FastifyInstance) {
     const where =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
+    // Произход на партидата: доставката, която я е създала (Склад
+    // показва „От доставка № … / дата"). НАЧАЛНО партидите нямат
+    // delivery_id → source_* остават NULL („Начална наличност").
     const sql = `
-      SELECT b.*, p.name_bg, p.name_en, p.sku, p.unit
+      SELECT b.*, p.name_bg, p.name_en, p.sku, p.unit,
+             ig.invoice_number AS source_invoice_number,
+             ig.invoice_date AS source_invoice_date,
+             ig.created_at::date AS source_received_date,
+             s.name AS source_supplier_name
       FROM batches b
       JOIN products p ON p.id = b.product_id
+      LEFT JOIN incoming_goods ig ON ig.id = b.delivery_id
+      LEFT JOIN suppliers s ON s.id = ig.supplier_id
       ${where}
       ORDER BY b.expiry_date ASC NULLS LAST
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}

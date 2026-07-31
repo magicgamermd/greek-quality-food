@@ -21,7 +21,12 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import type { StockLevel } from "@/types";
-import { formatUnit, getApiErrorMessage, stockColorClass } from "@/lib/utils";
+import {
+  formatDate,
+  formatUnit,
+  getApiErrorMessage,
+  stockColorClass,
+} from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -193,6 +198,23 @@ function ProductBatchesPanel({
                 Изтича скоро
               </Badge>
             )}
+            {/* Произход: коя доставка е създала партидата. За начална
+                наличност (без доставка) го казваме изрично. */}
+            <span className="text-[11px] text-gray-400">
+              {batch.source_invoice_number || batch.source_received_date
+                ? [
+                    batch.source_invoice_number
+                      ? `От доставка № ${batch.source_invoice_number}`
+                      : "От доставка",
+                    batch.source_received_date
+                      ? `приета ${formatDate(batch.source_received_date)}`
+                      : null,
+                    batch.source_supplier_name ?? null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "Начална наличност"}
+            </span>
             <span className="ml-auto text-xs text-gray-600">
               Наличност: <b>{Number(batch.quantity)}</b>
             </span>
@@ -563,121 +585,121 @@ export function Inventory() {
                     const expanded = expandedProductId === item.product_id;
                     return (
                       <React.Fragment key={item.product_id}>
-                      <TableRow>
-                        <TableCell className="font-medium">
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 text-left hover:text-[#6c3dff]"
-                            title="Покажи партидите и сроковете на годност"
-                            onClick={() =>
-                              setExpandedProductId(
-                                expanded ? null : item.product_id,
-                              )
-                            }
-                          >
-                            {expanded ? (
-                              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                            ) : (
-                              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                            )}
-                            {item.product_name}
-                          </button>
-                        </TableCell>
-                        <TableCell className="font-mono text-sm">
-                          {item.sku}
-                        </TableCell>
-                        <TableCell className="text-sm text-gray-600">
-                          {item.category_name_bg ?? "—"}
-                        </TableCell>
-                        <TableCell>{formatUnit(item.unit)}</TableCell>
-                        <TableCell>
-                          <span
-                            className={
-                              item.total_quantity < 0
-                                ? "text-red-600 font-bold inline-flex items-center gap-1"
-                                : stockColorClass(
-                                    item.total_quantity,
-                                    item.low_stock_threshold,
-                                  )
-                            }
-                          >
-                            {item.total_quantity < 0 && (
-                              <AlertTriangle className="h-3.5 w-3.5" />
-                            )}
-                            {item.total_quantity}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {/* Най-ранният срок сред лотовете с наличност —
+                        <TableRow>
+                          <TableCell className="font-medium">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-left hover:text-[#6c3dff]"
+                              title="Покажи партидите и сроковете на годност"
+                              onClick={() =>
+                                setExpandedProductId(
+                                  expanded ? null : item.product_id,
+                                )
+                              }
+                            >
+                              {expanded ? (
+                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                              )}
+                              {item.product_name}
+                            </button>
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">
+                            {item.sku}
+                          </TableCell>
+                          <TableCell className="text-sm text-gray-600">
+                            {item.category_name_bg ?? "—"}
+                          </TableCell>
+                          <TableCell>{formatUnit(item.unit)}</TableCell>
+                          <TableCell>
+                            <span
+                              className={
+                                item.total_quantity < 0
+                                  ? "text-red-600 font-bold inline-flex items-center gap-1"
+                                  : stockColorClass(
+                                      item.total_quantity,
+                                      item.low_stock_threshold,
+                                    )
+                              }
+                            >
+                              {item.total_quantity < 0 && (
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                              )}
+                              {item.total_quantity}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            {/* Най-ранният срок сред лотовете с наличност —
                               червено = има изтекъл лот, кехлибарено = до
                               30 дни. Кликът върху продукта разгъва
                               лотовете за корекция. */}
-                          {(item as any).earliest_expiry ? (
-                            <span
-                              className={`text-sm ${
-                                (item as any).has_expired
-                                  ? "text-red-600 font-semibold"
-                                  : isBatchExpiringSoon(
-                                        (item as any).earliest_expiry,
-                                      )
-                                    ? "text-amber-600"
-                                    : "text-gray-700"
-                              }`}
-                            >
-                              {String((item as any).earliest_expiry).slice(
-                                0,
-                                10,
-                              )}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-400">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-1 flex-wrap">
-                            {item.total_quantity < 0 && (
-                              <Badge variant="destructive">На минус</Badge>
-                            )}
-                            {(item as any).has_expired && (
-                              <Badge variant="destructive">ИЗТЕКЛА</Badge>
-                            )}
-                            {isLow && (
-                              <Badge variant="destructive">Нисък запас</Badge>
-                            )}
-                            {item.total_quantity === 0 && (
-                              <Badge variant="outline">Каталог</Badge>
-                            )}
-                            {hasStock && !isLow && (
-                              <Badge variant="success">ОК</Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                        {canAdjustStock && (
-                          <TableCell>
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                aria-label="Корекция на наличност"
-                                title="Корекция на наличност"
-                                onClick={() => openAdjust(item)}
+                            {(item as any).earliest_expiry ? (
+                              <span
+                                className={`text-sm ${
+                                  (item as any).has_expired
+                                    ? "text-red-600 font-semibold"
+                                    : isBatchExpiringSoon(
+                                          (item as any).earliest_expiry,
+                                        )
+                                      ? "text-amber-600"
+                                      : "text-gray-700"
+                                }`}
                               >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
+                                {String((item as any).earliest_expiry).slice(
+                                  0,
+                                  10,
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-1 flex-wrap">
+                              {item.total_quantity < 0 && (
+                                <Badge variant="destructive">На минус</Badge>
+                              )}
+                              {(item as any).has_expired && (
+                                <Badge variant="destructive">ИЗТЕКЛА</Badge>
+                              )}
+                              {isLow && (
+                                <Badge variant="destructive">Нисък запас</Badge>
+                              )}
+                              {item.total_quantity === 0 && (
+                                <Badge variant="outline">Каталог</Badge>
+                              )}
+                              {hasStock && !isLow && (
+                                <Badge variant="success">ОК</Badge>
+                              )}
                             </div>
                           </TableCell>
-                        )}
-                      </TableRow>
-                      {expanded && (
-                        <TableRow className="bg-gray-50/60 hover:bg-gray-50/60">
-                          <TableCell colSpan={canAdjustStock ? 8 : 7}>
-                            <ProductBatchesPanel
-                              productId={item.product_id}
-                              canEdit={canAdjustStock}
-                            />
-                          </TableCell>
+                          {canAdjustStock && (
+                            <TableCell>
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  aria-label="Корекция на наличност"
+                                  title="Корекция на наличност"
+                                  onClick={() => openAdjust(item)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          )}
                         </TableRow>
-                      )}
+                        {expanded && (
+                          <TableRow className="bg-gray-50/60 hover:bg-gray-50/60">
+                            <TableCell colSpan={canAdjustStock ? 8 : 7}>
+                              <ProductBatchesPanel
+                                productId={item.product_id}
+                                canEdit={canAdjustStock}
+                              />
+                            </TableCell>
+                          </TableRow>
+                        )}
                       </React.Fragment>
                     );
                   })

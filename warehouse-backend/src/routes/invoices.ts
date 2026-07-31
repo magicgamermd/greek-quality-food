@@ -225,6 +225,12 @@ const createCreditNoteSchema = z.object({
   related_invoice_id: z.number().int(),
   reason: z.string().trim().min(1).max(500),
   include_vat: z.boolean().optional(),
+  // Дата на издаване на КИ (ISO). Счетоводството понякога завежда със
+  // задна дата в същия отчетен период; без нея пада на CURRENT_DATE.
+  credit_note_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   // Return goods to inventory? Typically true for full reversal (returned goods),
   // false for discount/price-correction credit notes.
   restore_stock: z.boolean().optional(),
@@ -504,6 +510,56 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "Invoice not found" });
       }
       return invoice;
+    },
+  );
+
+  // GET /invoices/:id/items — редовете на поръчката зад фактурата.
+  // Диалогът „Кредитно известие" ги ползва за частично КИ (избор на
+  // продукти/количества). Същият филтър като POST /credit-note:
+  // awaiting редовете (мигр. 072) не са доставени → не участват.
+  app.get(
+    "/:id/items",
+    { preHandler: invoiceManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+
+      const {
+        rows: [invoice],
+      } = await query(
+        `SELECT id, document_type, status FROM invoices WHERE id = $1`,
+        [id],
+      );
+      if (!invoice) {
+        return reply.status(404).send({ error: "Invoice not found" });
+      }
+
+      const { rows: orders } = await query(
+        `SELECT id FROM orders WHERE invoice_id = $1`,
+        [invoice.id],
+      );
+      if (orders.length === 0) {
+        return reply.send({ order_id: null, data: [] });
+      }
+      const orderId = orders[0].id;
+
+      const { rows: items } = await query(
+        `SELECT oi.id AS order_item_id,
+                oi.product_id,
+                oi.name_bg_snapshot AS name_bg,
+                oi.sku_snapshot     AS sku,
+                p.unit,
+                oi.quantity,
+                oi.unit_price,
+                oi.total_price
+           FROM order_items oi
+           LEFT JOIN products p ON p.id = oi.product_id
+          WHERE oi.order_id = $1
+            AND oi.line_status != 'awaiting'
+          ORDER BY oi.id`,
+        [orderId],
+      );
+
+      return reply.send({ order_id: orderId, data: items });
     },
   );
 
@@ -1671,7 +1727,16 @@ export default async function invoiceRoutes(app: FastifyInstance) {
     "/credit-note",
     { preHandler: invoiceCancelPreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const body = createCreditNoteSchema.parse(request.body);
+      // Невалиден вход е грешка на клиента (400), не срив на сървъра —
+      // ZodError няма statusCode и глобалният handler го прави 500.
+      const parsed = createCreditNoteSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Невалидни данни за кредитно известие",
+          details: parsed.error.issues,
+        });
+      }
+      const body = parsed.data;
 
       const result = await transaction(async (client) => {
         // Lock the target invoice row first to serialize concurrent
@@ -1836,11 +1901,12 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         const {
           rows: [creditNote],
         } = await client.query(
+          // Датата е $9 (последна), за да не мести индексите на totals.
           `INSERT INTO invoices (
             invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross,
             include_vat, document_type, related_invoice_id, credit_note_reason
-          ) VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, 'credit_note', $7, $8)
+          ) VALUES ($1, COALESCE($9::date, CURRENT_DATE), $2, $3, $4, $5, $6, 'credit_note', $7, $8)
           RETURNING *`,
           [
             cnNumber,
@@ -1851,6 +1917,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             includeVat,
             body.related_invoice_id,
             body.reason,
+            body.credit_note_date ?? null,
           ],
         );
 
