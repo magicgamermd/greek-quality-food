@@ -57,7 +57,7 @@ describe("/agent routes", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.ok).toBe(true);
-      expect(body.service).toBe("mertm-agent-api");
+      expect(body.service).toBe("gqf-agent-api");
       expect(body.actor).toEqual({ id: "ai-service", role: "admin" });
     } finally {
       await app.close();

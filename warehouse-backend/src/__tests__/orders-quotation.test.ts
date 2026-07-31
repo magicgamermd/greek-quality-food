@@ -132,12 +132,18 @@ describe("Quotation flow", () => {
     );
     expect(insertOrders).toBeDefined();
     const params = insertOrders![1] as any[];
-    // status sits in the params array; order_number is generated via
-    // nextval() inside the SQL, not passed as a parameter. After
-    // migration 077 the trailing slot belongs to is_replacement, so
-    // status is the next-to-last param.
-    expect(params).toContain("quoted");
-    expect(params[params.length - 2]).toBe("quoted");
+    // Позицията на status се чете от списъка колони в самия SQL —
+    // хардкоднат индекс („предпоследен") гниеше при всяка нова колона
+    // (падна при добавянето на econt_requested_at след is_replacement).
+    // Всички колони преди order_number (nextval) са 1:1 с params.
+    const sql = String(insertOrders![0]);
+    const cols = sql
+      .slice(sql.indexOf("(") + 1, sql.indexOf(")"))
+      .split(",")
+      .map((c: string) => c.trim());
+    const statusIdx = cols.indexOf("status");
+    expect(statusIdx).toBeGreaterThan(-1);
+    expect(params[statusIdx]).toBe("quoted");
   });
 
   it("POST /orders/:id/quote moves pending → quoted", async () => {
