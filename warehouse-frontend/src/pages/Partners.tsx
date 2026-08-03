@@ -11,6 +11,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import { toast } from "@/lib/toast";
 import type { Partner, PriceListItem, Product } from "@/types";
 import { formatCurrency } from "@/lib/utils";
@@ -639,7 +640,8 @@ export function Partners() {
     });
 
   const debouncedSearch = useDebouncedValue(search, 300);
-  const pageSize = 50;
+  // Без страници — целият списък се показва на екрана.
+  const pageSize = SHOW_ALL_LIMIT;
 
   const {
     data: result,
@@ -665,7 +667,6 @@ export function Partners() {
 
   const partners = result?.items ?? [];
   const totalItems = result?.total ?? 0;
-  const totalPages = Math.ceil(totalItems / pageSize);
 
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["products"],
@@ -912,34 +913,12 @@ export function Partners() {
         </CardContent>
       </Card>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
+      {/* Без страници: списъкът е цял на екрана, футърът само отчита броя. */}
+      {totalItems > 0 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-500">
-            Показани {(page - 1) * pageSize + 1}–
-            {Math.min(page * pageSize, totalItems)} от {totalItems}
+            Показани всички {totalItems}
           </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => p - 1)}
-            >
-              ← Назад
-            </Button>
-            <span className="flex items-center px-3 text-sm text-gray-600">
-              {page} / {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Напред →
-            </Button>
-          </div>
         </div>
       )}
 

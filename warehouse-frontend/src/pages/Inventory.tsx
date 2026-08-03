@@ -20,6 +20,7 @@ import {
 } from "@/components/BatchSelect";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import type { StockLevel } from "@/types";
 import {
   formatDate,
@@ -390,7 +391,8 @@ export function Inventory() {
   const [adjustData, setAdjustData] = useState<AdjustStockData | null>(null);
   const { user } = useAuth();
   const canAdjustStock = user?.role === "admin";
-  const pageSize = 50;
+  // Без страници — целият списък се показва на екрана.
+  const pageSize = SHOW_ALL_LIMIT;
 
   // Sync tab from URL when navigating from dashboard
   useEffect(() => {
@@ -435,7 +437,6 @@ export function Inventory() {
 
   const allStock = result?.items ?? [];
   const totalItems = result?.total ?? 0;
-  const totalPages = Math.ceil(totalItems / pageSize);
   const visibleItemsCount = allStock.length;
   const tabSummaryLabel =
     tab === "available"
@@ -535,7 +536,7 @@ export function Inventory() {
         <Card>
           <CardContent className="p-4">
             <p className="text-xs uppercase tracking-wide text-gray-500">
-              Показани на страницата
+              Показани на екрана
             </p>
             <p className="mt-1 text-2xl font-semibold text-gray-900">
               {visibleItemsCount}
@@ -710,34 +711,10 @@ export function Inventory() {
         </CardContent>
       </Card>
 
-      {/* Pagination */}
-      {totalPages > 1 && tab !== "negative" && (
+      {/* Без страници: списъкът е цял на екрана, футърът само отчита броя. */}
+      {totalItems > 0 && tab !== "negative" && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-gray-500">
-            Показани {(page - 1) * pageSize + 1}–
-            {Math.min(page * pageSize, totalItems)} от {totalItems}
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => p - 1)}
-            >
-              Назад
-            </Button>
-            <span className="flex items-center px-3 text-sm text-gray-600">
-              {page} / {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Напред
-            </Button>
-          </div>
+          <p className="text-sm text-gray-500">Показани всички {totalItems}</p>
         </div>
       )}
 

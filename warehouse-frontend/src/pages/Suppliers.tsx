@@ -12,6 +12,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import type { Supplier, IncomingGoods } from "@/types";
 import { formatDate, formatCurrency, getApiErrorMessage } from "@/lib/utils";
 import { matchesAnyField } from "@/lib/translit";
@@ -634,8 +635,6 @@ export function Suppliers() {
     null,
   );
   const [editSupplier, setEditSupplier] = useState<Supplier | null>(null);
-  const [page, setPage] = useState(1);
-  const pageSize = 25;
 
   const {
     data: suppliers = [],
@@ -661,11 +660,8 @@ export function Suppliers() {
   const filtered = suppliers.filter((s) =>
     matchesAnyField(searchQuery, [s.name, s.eik, s.microinvest_code]),
   );
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const paginatedSuppliers = filtered.slice(
-    (page - 1) * pageSize,
-    page * pageSize,
-  );
+  // Без страници — показваме целия филтриран списък.
+  const paginatedSuppliers = filtered;
 
   const handleViewDetails = (supplier: Supplier) => {
     setSelectedSupplier(supplier);
@@ -705,10 +701,7 @@ export function Suppliers() {
             <Input
               placeholder="Търси по код, име или ЕИК..."
               value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => setSearchQuery(e.target.value)}
               className="border-0 focus-visible:ring-0 text-sm"
             />
           </div>
@@ -820,35 +813,11 @@ export function Suppliers() {
             </div>
           )}
         </CardContent>
-        {filtered.length > pageSize && (
+        {filtered.length > 0 && (
           <div className="flex items-center justify-between border-t px-4 py-3">
             <p className="text-sm text-gray-500">
-              Показани {(page - 1) * pageSize + 1}–
-              {Math.min(page * pageSize, filtered.length)} от {filtered.length}
+              Показани всички {filtered.length}
             </p>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-              >
-                Назад
-              </Button>
-              <span className="text-sm text-gray-700">
-                {page} / {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages}
-                onClick={() =>
-                  setPage((current) => Math.min(totalPages, current + 1))
-                }
-              >
-                Напред
-              </Button>
-            </div>
           </div>
         )}
       </Card>
