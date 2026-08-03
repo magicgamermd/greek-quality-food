@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from "../lib/pagination.js";
 import { z } from "zod";
 import { query } from "../db.js";
 import {
@@ -236,8 +237,11 @@ export default async function productRoutes(app: FastifyInstance) {
     // AI match service) can fetch the full catalog in a single request.
     // Bumped to 25000 to cover the full Microinvest product catalog
     // (~15k entries today, headroom for growth).
-    const maxLimit = catalog === "true" ? 25000 : 100;
-    const pageSize = Math.min(maxLimit, Math.max(1, parseInt(limit) || 50));
+    // Списъците се показват изцяло — виж src/lib/pagination.ts.
+    const pageSize = Math.min(
+      MAX_PAGE_SIZE,
+      Math.max(1, parseInt(limit) || DEFAULT_PAGE_SIZE),
+    );
     const offset = (pageNum - 1) * pageSize;
     const rawSearch = typeof search === "string" && search.trim() ? search : q;
     const trimmedSearch = typeof rawSearch === "string" ? rawSearch.trim() : "";

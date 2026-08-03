@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from "../lib/pagination.js";
 import { z } from "zod";
 import { query } from "../db.js";
 import { partnerCreateSchema, partnerUpdateSchema } from "./partner-schemas.js";
@@ -194,8 +195,11 @@ export default async function partnerRoutes(app: FastifyInstance) {
     // (Orders, Invoices, Partners list) can fetch the full partner
     // directory in a single request. Bumped to 25000 to cover the full
     // Microinvest partner registry (~12.5k entries today).
-    const maxLimit = catalog === "true" ? 25000 : 100;
-    const pageSize = Math.min(maxLimit, Math.max(1, parseInt(limit) || 50));
+    // Списъците се показват изцяло — виж src/lib/pagination.ts.
+    const pageSize = Math.min(
+      MAX_PAGE_SIZE,
+      Math.max(1, parseInt(limit) || DEFAULT_PAGE_SIZE),
+    );
     const offset = (pageNum - 1) * pageSize;
 
     const conditions: string[] = [];

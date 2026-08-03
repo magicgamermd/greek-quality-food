@@ -10,6 +10,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
 import type { Product, Category } from "@/types";
@@ -611,7 +612,8 @@ export function Products() {
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
-  const pageSize = 50;
+  // Без страници — целият каталог се показва на екрана.
+  const pageSize = SHOW_ALL_LIMIT;
 
   const {
     data: productsData,
@@ -679,10 +681,6 @@ export function Products() {
     limit: pageSize,
     total: 0,
   };
-  const totalPages = Math.max(
-    1,
-    Math.ceil(pagination.total / pagination.limit),
-  );
   const activeCount = productsData?.active_count ?? 0;
   const catalogCount = productsData?.catalog_count ?? 0;
   const uncategorizedCount = products.filter(
@@ -1101,36 +1099,12 @@ export function Products() {
             </Table>
           )}
         </CardContent>
-        {totalPages > 1 && (
+        {/* Без страници: каталогът е цял на екрана, футърът отчита броя. */}
+        {pagination.total > 0 && (
           <div className="flex items-center justify-between px-4 py-3 border-t">
             <p className="text-sm text-gray-500">
-              Показани {(pagination.page - 1) * pagination.limit + 1}–
-              {Math.min(pagination.page * pagination.limit, pagination.total)}{" "}
-              от {pagination.total}
+              Показани всички {pagination.total}
             </p>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Назад
-              </Button>
-              <span className="text-sm text-gray-700">
-                {page} / {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Напред
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
           </div>
         )}
       </Card>
