@@ -161,11 +161,21 @@ export default async function stockMovementsRoutes(fastify: FastifyInstance) {
           // inventory редове (партидни + евент. non-batch). Ползва се за
           // audit snapshot-а и за error съобщението. FOR UPDATE заключва
           // всички редове на продукта в склада (same as FEFO allocator lock).
+          // Postgres не приема агрегат заедно с FOR UPDATE, затова е на
+          // две стъпки: първо заключваме редовете, после ги сумираме.
+          // Сумата е стабилна — редовете вече са заключени в тази
+          // транзакция. Сумирането остава в SQL (numeric), за да няма
+          // плаваща грешка в audit snapshot-а.
+          await client.query(
+            `SELECT id FROM inventory
+              WHERE product_id = $1 AND warehouse_id = 1
+              FOR UPDATE`,
+            [body.product_id],
+          );
           const { rows: invRows } = await client.query(
             `SELECT COALESCE(SUM(quantity), 0) AS total
                FROM inventory
-              WHERE product_id = $1 AND warehouse_id = 1
-              FOR UPDATE`,
+              WHERE product_id = $1 AND warehouse_id = 1`,
             [body.product_id],
           );
           const currentQty = parseFloat(invRows[0]?.total ?? "0");

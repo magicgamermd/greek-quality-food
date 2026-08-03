@@ -127,13 +127,24 @@ async function writeoffOneLine(
     }
   } else {
     // No batch — verify total inventory at this warehouse has enough.
-    const invRes = await client.query(
-      `SELECT COALESCE(SUM(quantity), 0)::numeric AS total
+    // Postgres не приема агрегат заедно с FOR UPDATE — първо заключваме
+    // редовете, после сумираме. Сумата е стабилна, защото редовете вече
+    // са заключени в тази транзакция.
+    await client.query(
+      `SELECT id
          FROM inventory
         WHERE product_id = $1
           AND batch_id IS NULL
           AND warehouse_id = $2
         FOR UPDATE`,
+      [line.product_id, ctx.warehouseId],
+    );
+    const invRes = await client.query(
+      `SELECT COALESCE(SUM(quantity), 0)::numeric AS total
+         FROM inventory
+        WHERE product_id = $1
+          AND batch_id IS NULL
+          AND warehouse_id = $2`,
       [line.product_id, ctx.warehouseId],
     );
     const available = Number(invRes.rows[0]?.total ?? 0);
