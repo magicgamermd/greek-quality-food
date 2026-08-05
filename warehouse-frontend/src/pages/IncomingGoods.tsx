@@ -527,7 +527,6 @@ export function IncomingGoods() {
   // доставката нямаше понятие за него — оттам разминаването в сумите.
   const [vatOpen, setVatOpen] = useState(false);
   const [vatRate, setVatRate] = useState("20");
-  const [vatMode, setVatMode] = useState<"totals" | "prices">("totals");
 
   const [creditNoteOpen, setCreditNoteOpen] = useState(false);
   const [cnNumber, setCnNumber] = useState("");
@@ -1170,12 +1169,12 @@ export function IncomingGoods() {
   });
 
   const vatMutation = useMutation({
-    mutationFn: async (payload: { mode: "totals" | "prices" | "none" }) => {
+    mutationFn: async (payload: { mode: "set" | "none" }) => {
       if (!selectedDoc) throw new Error("Няма избрана доставка");
       const body =
         payload.mode === "none"
           ? { mode: "none" }
-          : { mode: payload.mode, vat_rate: Number(vatRate) };
+          : { mode: "set", vat_rate: Number(vatRate) };
       const res = await api.post(`/incoming/${selectedDoc.id}/vat`, body);
       return res.data;
     },
@@ -1185,10 +1184,8 @@ export function IncomingGoods() {
       if (selectedDoc) void handleRowClick(selectedDoc);
       toast.success(
         data?.vat_rate == null
-          ? "ДДС-то е премахнато от доставката"
-          : data?.prices_include_vat
-            ? `ДДС ${data.vat_rate}% е добавено към цените`
-            : `ДДС ${data.vat_rate}% ще се начислява върху сумите`,
+          ? "Доставката е без ДДС"
+          : `ДДС ${data.vat_rate}% — общото вече се показва с ДДС`,
       );
     },
     onError: (err: any) => {
@@ -2267,12 +2264,34 @@ export function IncomingGoods() {
                           const p = Number(i.unit_price) || 0;
                           return sum + q * p;
                         }, 0);
+                      // Ставката е само справка — цените са без ДДС,
+                      // затова брутото се смята тук, при показване.
+                      const rate = Number((selectedDoc as any)?.vat_rate);
+                      const hasVat = Number.isFinite(rate) && rate > 0;
+                      const gross = hasVat ? total * (1 + rate / 100) : total;
                       return (
-                        <div className="text-sm text-gray-600">
-                          Обща стойност:{" "}
-                          <span className="font-bold text-gray-900">
-                            {formatCurrency(total)}
-                          </span>
+                        <div className="text-sm text-gray-600 text-right">
+                          <div>
+                            Обща стойност
+                            {hasVat ? " (без ДДС)" : ""}:{" "}
+                            <span
+                              className={
+                                hasVat
+                                  ? "text-gray-700"
+                                  : "font-bold text-gray-900"
+                              }
+                            >
+                              {formatCurrency(total)}
+                            </span>
+                          </div>
+                          {hasVat && (
+                            <div>
+                              С ДДС {rate}%:{" "}
+                              <span className="font-bold text-gray-900">
+                                {formatCurrency(gross)}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -2765,14 +2784,9 @@ export function IncomingGoods() {
                 onClick={() => {
                   const current = (selectedDoc as any)?.vat_rate;
                   setVatRate(current != null ? String(Number(current)) : "20");
-                  setVatMode(
-                    (selectedDoc as any)?.prices_include_vat
-                      ? "prices"
-                      : "totals",
-                  );
                   setVatOpen(true);
                 }}
-                title="Фактурата на доставчика е с ДДС — добави го тук, преди да потвърдиш"
+                title="Ставка за справка: общото се показва и с ДДС. Цените не се променят."
               >
                 ДДС
                 {(selectedDoc as any)?.vat_rate != null
@@ -2827,21 +2841,22 @@ export function IncomingGoods() {
         </DialogContent>
       </Dialog>
 
-      {/* ── ДДС по доставката ────────────────────────────────────────
-          Фактурата на доставчика е с ДДС, а доставката се въвежда по
-          единични цени. Тук се избира КЪДЕ да седи ДДС-то — само преди
-          потвърждаване, защото после цените вече са влезли в склада. */}
+      {/* ── ДДС ставка по доставката ─────────────────────────────────
+          Само справка: общото се показва и с ДДС, за да се връзва с
+          фактурата на доставчика. Цените по редовете НЕ се променят —
+          иначе ДДС-то влиза в себестойността. Гръцките доставчици (ВОП)
+          са без ДДС → ставката просто не се задава. */}
       <Dialog open={vatOpen} onOpenChange={setVatOpen}>
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent className="sm:max-w-[460px]">
           <DialogHeader>
             <DialogTitle>ДДС по доставката</DialogTitle>
             <DialogDescription>
-              Фактурата на доставчика е с ДДС, а редовете тук са по единични
-              цени. Избери как да се отрази.
+              Ставката служи само за да се вижда общото с ДДС — както е на
+              фактурата на доставчика. Единичните цени остават непроменени.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div className="space-y-1.5">
               <Label>Ставка (%)</Label>
               <Input
@@ -2854,53 +2869,10 @@ export function IncomingGoods() {
                 className="w-32"
               />
               <p className="text-xs text-gray-500">
-                20% е обичайната. При гръцки доставчик (ВОП) фактурата често
-                е с 0% — тогава сложи 0.
+                Български доставчик — 20. Гръцки (ВОП) — фактурата е без
+                ДДС, затова махни ставката.
               </p>
             </div>
-
-            <div className="space-y-2">
-              <Label>Какво да направи</Label>
-              <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer hover:bg-gray-50">
-                <input
-                  type="radio"
-                  className="mt-1"
-                  checked={vatMode === "totals"}
-                  onChange={() => setVatMode("totals")}
-                />
-                <span className="text-sm">
-                  <span className="font-medium">Начисли ДДС върху сумите</span>
-                  <span className="block text-xs text-gray-500">
-                    Цените по редовете остават без ДДС. На разписката се
-                    появява ДДС ред и „Общо с ДДС“. Себестойността остава
-                    чиста — препоръчително.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer hover:bg-gray-50">
-                <input
-                  type="radio"
-                  className="mt-1"
-                  checked={vatMode === "prices"}
-                  onChange={() => setVatMode("prices")}
-                />
-                <span className="text-sm">
-                  <span className="font-medium">Добави ДДС към цените</span>
-                  <span className="block text-xs text-gray-500">
-                    Умножава единичните цени по {(1 + (Number(vatRate) || 0) / 100).toFixed(2)}.
-                    Тази цена става покупна за продукта — себестойността ще е
-                    с ДДС.
-                  </span>
-                </span>
-              </label>
-            </div>
-
-            {(selectedDoc as any)?.prices_include_vat && (
-              <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
-                ДДС вече е добавено към цените на тази доставка. За да смениш
-                ставката, първо го премахни.
-              </div>
-            )}
           </div>
 
           <DialogFooter className="gap-2">
@@ -2911,22 +2883,18 @@ export function IncomingGoods() {
                 disabled={vatMutation.isPending}
                 onClick={() => vatMutation.mutate({ mode: "none" })}
               >
-                Премахни ДДС
+                Без ДДС
               </Button>
             )}
             <Button variant="outline" onClick={() => setVatOpen(false)}>
               Отказ
             </Button>
             <Button
-              disabled={
-                vatMutation.isPending ||
-                (vatMode === "prices" &&
-                  (selectedDoc as any)?.prices_include_vat === true)
-              }
-              onClick={() => vatMutation.mutate({ mode: vatMode })}
+              disabled={vatMutation.isPending}
+              onClick={() => vatMutation.mutate({ mode: "set" })}
             >
               {vatMutation.isPending ? <Spinner size="sm" /> : null}
-              Приложи
+              Запази
             </Button>
           </DialogFooter>
         </DialogContent>
