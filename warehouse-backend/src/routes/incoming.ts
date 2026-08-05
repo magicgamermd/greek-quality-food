@@ -3370,4 +3370,215 @@ export default async function incomingRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  // POST /incoming/:id/unconfirm — връща потвърдена доставка в „чакаща".
+  //
+  // Потвърждаването е добавило партиди и наличност; връщането трябва да
+  // ги свали обратно, иначе складът остава с количества, които ги няма.
+  //
+  // Отказва, ако стоката вече е тръгнала — по-добре ясен отказ, отколкото
+  // тихо разсипана наличност:
+  //   • издадено кредитно известие по доставката;
+  //   • партида от доставката е изписана по поръчка;
+  //   • по партидата/наличността не е останало толкова, колкото е дошло.
+  //
+  // Покупната цена на продукта НЕ се връща — старата стойност не се пази
+  // никъде. Следващото потвърждаване я презаписва така или иначе.
+  app.post(
+    "/:id/unconfirm",
+    { preHandler: incomingManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as any;
+
+      try {
+        const result = await transaction(async (client) => {
+          const {
+            rows: [doc],
+          } = await client.query(
+            `SELECT id, status, invoice_number
+               FROM incoming_goods WHERE id = $1 FOR UPDATE`,
+            [id],
+          );
+          if (!doc) {
+            throw Object.assign(new Error("Доставката не е намерена."), {
+              statusCode: 404,
+            });
+          }
+          if (doc.status !== "confirmed") {
+            throw Object.assign(
+              new Error(
+                `Само потвърдена доставка може да се върне в чакаща. Тази е „${doc.status}".`,
+              ),
+              { statusCode: 400 },
+            );
+          }
+
+          // 1) Кредитно известие по тази доставка — документът вече е
+          //    коригиран навън, връщането би разсинхронизирало двата.
+          const { rows: creditNotes } = await client.query(
+            `SELECT invoice_number FROM incoming_goods
+              WHERE related_incoming_id = $1 LIMIT 1`,
+            [id],
+          );
+          if (creditNotes.length > 0) {
+            throw Object.assign(
+              new Error(
+                `По тази доставка има издадено кредитно известие ${creditNotes[0].invoice_number}. ` +
+                  "Първо анулирай него.",
+              ),
+              { statusCode: 409 },
+            );
+          }
+
+          // Редовете заедно със състоянието на партидата и наличността.
+          // Без FOR UPDATE — LEFT JOIN не го позволява по nullable
+          // страната; заключването на header-а горе сериализира
+          // потвърждаване/връщане по тази доставка.
+          const { rows: items } = await client.query(
+            `SELECT ii.id,
+                    ii.product_id,
+                    ii.batch_id,
+                    ii.quantity,
+                    COALESCE(p.name_bg, p.name_en, 'продукт #' || ii.product_id)
+                      AS product_name,
+                    b.quantity    AS batch_quantity,
+                    b.delivery_id AS batch_delivery_id,
+                    COALESCE(inv.quantity, 0) AS inv_quantity
+               FROM incoming_items ii
+               LEFT JOIN products p  ON p.id = ii.product_id
+               LEFT JOIN batches  b  ON b.id = ii.batch_id
+               LEFT JOIN inventory inv
+                      ON inv.batch_id = ii.batch_id
+                     AND inv.product_id = ii.product_id
+                     AND inv.warehouse_id = 1
+              WHERE ii.incoming_goods_id = $1
+              ORDER BY ii.id ASC`,
+            [id],
+          );
+
+          const applied = items.filter((it: any) => it.batch_id != null);
+
+          // 2) Изписване по поръчка от партидите на тази доставка.
+          if (applied.length > 0) {
+            const batchIds = applied.map((it: any) => Number(it.batch_id));
+            const { rows: shipped } = await client.query(
+              // order_item_batches няма order_id — стига се през
+              // order_items. (Мокнатите тестове не биха хванали това;
+              // хвана го пробата срещу истинска база.)
+              `SELECT oi.order_id,
+                      COALESCE(p.name_bg, p.name_en, 'продукт') AS product_name
+                 FROM order_item_batches oib
+                 JOIN order_items oi ON oi.id = oib.order_item_id
+                 LEFT JOIN batches  b ON b.id = oib.batch_id
+                 LEFT JOIN products p ON p.id = b.product_id
+                WHERE oib.batch_id = ANY($1::int[])
+                LIMIT 1`,
+              [batchIds],
+            );
+            if (shipped.length > 0) {
+              throw Object.assign(
+                new Error(
+                  `От тази доставка вече е изписано по поръчка #${shipped[0].order_id} ` +
+                    `(${shipped[0].product_name}). Доставката не може да се върне — ` +
+                    "коригирай през редакция или кредитно известие.",
+                ),
+                { statusCode: 409 },
+              );
+            }
+          }
+
+          // 3) Стигат ли количествата за пълно връщане.
+          for (const item of applied) {
+            const qty = Number(item.quantity) || 0;
+            const inBatch = Number(item.batch_quantity) || 0;
+            const inStock = Number(item.inv_quantity) || 0;
+            const available = Math.min(inBatch, inStock);
+            if (available + 1e-9 < qty) {
+              throw Object.assign(
+                new Error(
+                  `„${item.product_name}" — доставени са ${qty}, а в склада са останали ${available}. ` +
+                    "Част от стоката вече е излязла, затова доставката не може да се върне " +
+                    "в чакаща. Коригирай през редакция или кредитно известие.",
+                ),
+                { statusCode: 409 },
+              );
+            }
+          }
+
+          // Дотук нищо не е пипано — оттук нататък сваляме склада.
+          for (const item of applied) {
+            const qty = Number(item.quantity) || 0;
+            const batchId = Number(item.batch_id);
+            const productId = Number(item.product_id);
+
+            await client.query(
+              `UPDATE batches
+                  SET quantity = quantity - $1, updated_at = NOW()
+                WHERE id = $2`,
+              [qty, batchId],
+            );
+            await client.query(
+              `UPDATE inventory
+                  SET quantity = quantity - $1, updated_at = NOW()
+                WHERE product_id = $2 AND batch_id = $3 AND warehouse_id = 1`,
+              [qty, productId, batchId],
+            );
+
+            // Партида, създадена от ТАЗИ доставка и останала на нула, си
+            // отива — иначе складът се пълни с празни АВТО- партиди.
+            const remaining = (Number(item.batch_quantity) || 0) - qty;
+            const ownBatch = Number(item.batch_delivery_id) === Number(id);
+            if (ownBatch && remaining <= 1e-9) {
+              await client.query(
+                `DELETE FROM inventory
+                  WHERE batch_id = $1 AND product_id = $2 AND warehouse_id = 1`,
+                [batchId, productId],
+              );
+              await client.query(`DELETE FROM batches WHERE id = $1`, [
+                batchId,
+              ]);
+            }
+
+            await client.query(
+              `UPDATE incoming_items SET batch_id = NULL WHERE id = $1`,
+              [item.id],
+            );
+          }
+
+          const {
+            rows: [reverted],
+          } = await client.query(
+            `UPDATE incoming_goods
+                SET status = 'pending', updated_at = NOW()
+              WHERE id = $1
+              RETURNING *`,
+            [id],
+          );
+
+          await client.query(
+            `INSERT INTO notifications (type, message)
+             VALUES ('incoming_unconfirmed', $1)`,
+            [
+              `Доставка #${id}${doc.invoice_number ? ` (фактура ${doc.invoice_number})` : ""} ` +
+                "е върната в чакаща; наличността е свалена обратно.",
+            ],
+          );
+
+          return reverted;
+        });
+
+        return reply.send({
+          id: result?.id ?? Number(id),
+          status: result?.status ?? "pending",
+          message: "Доставката е върната в чакаща. Наличността е свалена.",
+        });
+      } catch (err: any) {
+        const status = err?.statusCode ?? 500;
+        return reply.status(status).send({
+          error: status === 500 ? "unconfirm_failed" : "unconfirm_rejected",
+          message: err?.message ?? "Неуспешно връщане на доставката.",
+        });
+      }
+    },
+  );
 }

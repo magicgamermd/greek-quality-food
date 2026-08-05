@@ -1144,6 +1144,31 @@ export function IncomingGoods() {
     },
   });
 
+  // Връщане на потвърдена доставка в „чакаща". Бекендът сваля обратно
+  // партидите и наличността и отказва, ако стоката вече е тръгнала.
+  const [unconfirmAsk, setUnconfirmAsk] = useState(false);
+  const unconfirmMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedDoc) throw new Error("Няма избрана доставка");
+      const res = await api.post(`/incoming/${selectedDoc.id}/unconfirm`);
+      return res.data;
+    },
+    onSuccess: () => {
+      setUnconfirmAsk(false);
+      qc.invalidateQueries({ queryKey: ["incoming"] });
+      qc.invalidateQueries({ queryKey: ["inventory"] });
+      if (selectedDoc) void handleRowClick(selectedDoc);
+      toast.success("Доставката е върната в чакаща. Наличността е свалена.");
+    },
+    onError: (err: any) => {
+      toast.error(
+        err?.response?.data?.message ??
+          err?.response?.data?.error ??
+          "Неуспешно връщане на доставката",
+      );
+    },
+  });
+
   const vatMutation = useMutation({
     mutationFn: async (payload: { mode: "totals" | "prices" | "none" }) => {
       if (!selectedDoc) throw new Error("Няма избрана доставка");
@@ -2688,6 +2713,40 @@ export function IncomingGoods() {
                 <Printer className="h-4 w-4" />
                 Принтирай
               </Button>
+            )}
+            {selectedDoc?.status === "confirmed" && !unconfirmAsk && (
+              <Button
+                variant="outline"
+                onClick={() => setUnconfirmAsk(true)}
+                disabled={unconfirmMutation.isPending}
+                title="Връща доставката в чакаща и сваля наличността обратно"
+              >
+                Върни в чакаща
+              </Button>
+            )}
+            {selectedDoc?.status === "confirmed" && unconfirmAsk && (
+              <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+                <span className="text-sm text-amber-900">
+                  Наличността от тази доставка ще се свали обратно. Сигурен ли
+                  си?
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUnconfirmAsk(false)}
+                  disabled={unconfirmMutation.isPending}
+                >
+                  Не
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => unconfirmMutation.mutate()}
+                  disabled={unconfirmMutation.isPending}
+                >
+                  {unconfirmMutation.isPending ? <Spinner size="sm" /> : null}
+                  Да, върни
+                </Button>
+              </div>
             )}
             {selectedDoc?.status === "confirmed" && (
               <Button
