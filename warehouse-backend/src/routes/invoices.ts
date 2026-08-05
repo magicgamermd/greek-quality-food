@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from "../lib/pagination.js";
 import { z } from "zod";
 import { query, transaction } from "../db.js";
 import {
@@ -368,7 +369,10 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         limit,
       } = request.query as any;
       const pageNum = Math.max(1, parseInt(page) || 1);
-      const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 50));
+      const pageSize = Math.min(
+      MAX_PAGE_SIZE,
+      Math.max(1, parseInt(limit) || DEFAULT_PAGE_SIZE),
+    );
       const offset = (pageNum - 1) * pageSize;
 
       const conditions: string[] = [];

@@ -16,6 +16,7 @@ import {
   Receipt,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import { toast } from "@/lib/toast";
 import type { Invoice, Order } from "@/types";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -124,7 +125,7 @@ export function Invoices() {
     ],
     queryFn: () => {
       const params = new URLSearchParams();
-      params.set("limit", "100");
+      params.set("limit", String(SHOW_ALL_LIMIT));
       if (statusFilter === "cancelled") {
         params.set("status", "cancelled");
       } else if (statusFilter && statusFilter !== "storno") {
@@ -167,7 +168,7 @@ export function Invoices() {
     ],
     queryFn: () => {
       const params = new URLSearchParams();
-      params.set("limit", "200");
+      params.set("limit", String(SHOW_ALL_LIMIT));
       if (debouncedSearch.trim()) params.set("q", debouncedSearch.trim());
       if (filters.date_from) params.set("date_from", filters.date_from);
       if (filters.date_to) params.set("date_to", filters.date_to);

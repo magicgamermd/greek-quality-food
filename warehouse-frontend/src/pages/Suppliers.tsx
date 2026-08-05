@@ -348,7 +348,7 @@ function SupplierDetailModal({
     queryKey: ["incoming", "supplier", supplier?.id],
     enabled: open && !!supplier?.id,
     queryFn: () =>
-      api.get(`/incoming?supplier_id=${supplier?.id}&limit=100`).then((r) => {
+      api.get(`/incoming?supplier_id=${supplier?.id}&limit=${SHOW_ALL_LIMIT}`).then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
       }),
