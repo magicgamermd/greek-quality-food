@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Printer, Pencil, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import type { Payment, Invoice } from "@/types";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -197,7 +198,7 @@ export function Payments() {
         filters.date_to &&
         filters.date_from === filters.date_to
       );
-      params.set("limit", isOneDay ? "500" : "100");
+      params.set("limit", String(SHOW_ALL_LIMIT));
       params.set("type", activeTab);
       if (filters.search.trim()) params.set("q", filters.search.trim());
       if (filters.payment_method !== "all") {
@@ -217,7 +218,7 @@ export function Payments() {
   const { data: unpaidInvoices = [] } = useQuery<Invoice[]>({
     queryKey: ["unpaid-invoices"],
     queryFn: () =>
-      api.get("/invoices/unpaid?limit=100").then((r) => {
+      api.get(`/invoices/unpaid?limit=${SHOW_ALL_LIMIT}`).then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
       }),

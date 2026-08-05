@@ -20,6 +20,7 @@ import {
   Search,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import {
   buildDuplicateInvoiceCancelledMessage,
   buildDuplicateInvoiceConfirmMessage,
@@ -867,6 +868,7 @@ export function IncomingGoods() {
       }
       if (searching) params.set("q", debouncedListSearch.trim());
       if (listStatus) params.set("status", listStatus);
+      params.set("limit", String(SHOW_ALL_LIMIT));
       return api.get(`/incoming?${params.toString()}`).then((r) => {
         const d = r.data;
         return Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];

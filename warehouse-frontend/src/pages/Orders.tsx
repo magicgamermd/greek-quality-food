@@ -45,6 +45,7 @@ import {
   Tag,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   BatchSelect,
@@ -7557,6 +7558,8 @@ export function Orders() {
         parts.push(`shipment_number=${encodeURIComponent(debouncedShipment)}`);
       if (debouncedRequest)
         parts.push(`request_number=${encodeURIComponent(debouncedRequest)}`);
+      // Без страници — целият списък наведнъж.
+      parts.push(`limit=${SHOW_ALL_LIMIT}`);
       const params = parts.length > 0 ? `?${parts.join("&")}` : "";
       return api.get(`/orders${params}`).then((r) => {
         const d = r.data;

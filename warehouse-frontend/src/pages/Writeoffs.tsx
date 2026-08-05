@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { Plus, FileDown, Trash2, Search } from "lucide-react";
 import { api } from "@/lib/api";
+import { SHOW_ALL_LIMIT } from "@/lib/pagination";
 import { toast } from "@/lib/toast";
 import {
   formatCurrency,
@@ -981,7 +982,7 @@ export function Writeoffs() {
   } = useQuery<WriteoffRow[]>({
     queryKey: ["writeoffs"],
     queryFn: () =>
-      api.get("/inventory/write-offs?limit=200").then((r) => {
+      api.get(`/inventory/write-offs?limit=${SHOW_ALL_LIMIT}`).then((r) => {
         const raw = r.data;
         return Array.isArray(raw)
           ? (raw as WriteoffRow[])
