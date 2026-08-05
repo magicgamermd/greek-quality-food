@@ -43,6 +43,130 @@ describe("document pdf layout regression", () => {
     }
   });
 
+
+  it("стоковата разписка показва ДДС ред, когато цените са БЕЗ ДДС", async () => {
+    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+    const outputPath = path.join(TEST_OUTPUT_DIR, "incoming-vat-added.pdf");
+    const textSpy = vi.spyOn(PDFDocument.prototype, "text");
+    let rendered: string[] = [];
+
+    try {
+      await generateIncomingStockReceiptPdf({
+        doc_number: "ISR-VAT-1",
+        doc_date: "2026-03-12",
+        buyer: partner,
+        supplier: partner,
+        // 10 × 5.00 = 50.00 без ДДС → ДДС 20% = 10.00 → общо 60.00
+        items: [
+          {
+            sku: "SKU-1",
+            name_bg: "Зехтин",
+            unit: "l",
+            quantity: 10,
+            unit_price: 5,
+            total_price: 50,
+            currency: "EUR",
+          },
+        ],
+        vat_rate: 20,
+        prices_include_vat: false,
+        outputPath,
+      });
+      rendered = textSpy.mock.calls
+        .map(([t]) => (typeof t === "string" ? t : String(t ?? "")))
+        .filter(Boolean);
+    } finally {
+      textSpy.mockRestore();
+    }
+
+    expect(rendered).toContain("Данъчна основа:");
+    expect(rendered).toContain("ДДС 20%:");
+    expect(rendered).toContain("Общо с ДДС:");
+    // Сумите: основа 50, ДДС 10, общо 60.
+    expect(rendered).toContain("50.00 EUR");
+    expect(rendered).toContain("10.00 EUR");
+    expect(rendered).toContain("60.00 EUR");
+  });
+
+  it("при вградено ДДС показва „в т.ч.“ и НЕ начислява втори път", async () => {
+    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+    const outputPath = path.join(TEST_OUTPUT_DIR, "incoming-vat-included.pdf");
+    const textSpy = vi.spyOn(PDFDocument.prototype, "text");
+    let rendered: string[] = [];
+
+    try {
+      await generateIncomingStockReceiptPdf({
+        doc_number: "ISR-VAT-2",
+        doc_date: "2026-03-12",
+        buyer: partner,
+        supplier: partner,
+        // 10 × 6.00 = 60.00 вече С ДДС → основа 50.00, в т.ч. ДДС 10.00
+        items: [
+          {
+            sku: "SKU-1",
+            name_bg: "Зехтин",
+            unit: "l",
+            quantity: 10,
+            unit_price: 6,
+            total_price: 60,
+            currency: "EUR",
+          },
+        ],
+        vat_rate: 20,
+        prices_include_vat: true,
+        outputPath,
+      });
+      rendered = textSpy.mock.calls
+        .map(([t]) => (typeof t === "string" ? t : String(t ?? "")))
+        .filter(Boolean);
+    } finally {
+      textSpy.mockRestore();
+    }
+
+    expect(rendered).toContain("в т.ч. ДДС 20%:");
+    expect(rendered).toContain("Общо (с ДДС):");
+    // Крайното е 60.00 — не 72.00. Точно това щеше да е двойното ДДС.
+    expect(rendered).toContain("60.00 EUR");
+    expect(rendered).not.toContain("72.00 EUR");
+  });
+
+  it("без ставка разписката изглежда както преди (без ДДС редове)", async () => {
+    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+    const outputPath = path.join(TEST_OUTPUT_DIR, "incoming-no-vat.pdf");
+    const textSpy = vi.spyOn(PDFDocument.prototype, "text");
+    let rendered: string[] = [];
+
+    try {
+      await generateIncomingStockReceiptPdf({
+        doc_number: "ISR-VAT-3",
+        doc_date: "2026-03-12",
+        buyer: partner,
+        supplier: partner,
+        items: [
+          {
+            sku: "SKU-1",
+            name_bg: "Зехтин",
+            unit: "l",
+            quantity: 10,
+            unit_price: 5,
+            total_price: 50,
+            currency: "EUR",
+          },
+        ],
+        outputPath,
+      });
+      rendered = textSpy.mock.calls
+        .map(([t]) => (typeof t === "string" ? t : String(t ?? "")))
+        .filter(Boolean);
+    } finally {
+      textSpy.mockRestore();
+    }
+
+    expect(rendered).toContain("Общо:");
+    expect(rendered.some((t) => t.startsWith("ДДС "))).toBe(false);
+    expect(rendered).not.toContain("Данъчна основа:");
+  });
+
   it("keeps incoming receipt buyer and supplier boxes stable with long text", async () => {
     fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
     const outputPath = path.join(TEST_OUTPUT_DIR, "incoming-party-boxes.pdf");

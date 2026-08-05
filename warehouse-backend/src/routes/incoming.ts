@@ -321,6 +321,20 @@ const jwtVerify = async (request: FastifyRequest) => {
   await request.jwtVerify();
 };
 
+// Заявка за ДДС по доставка. `vat_rate` е ПРОЦЕНТ (20, не 0.20) — в
+// режим "none" не се иска, защото ДДС-то се маха.
+const incomingVatSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("totals"),
+    vat_rate: z.number().min(0).max(100),
+  }),
+  z.object({
+    mode: z.literal("prices"),
+    vat_rate: z.number().min(0).max(100),
+  }),
+  z.object({ mode: z.literal("none") }),
+]);
+
 const incomingManagePreHandler = [
   jwtVerify,
   requirePermission(PERMISSIONS.INCOMING_MANAGE),
@@ -3166,6 +3180,10 @@ export default async function incomingRoutes(app: FastifyInstance) {
           : incoming.invoice_number || null,
         document_kind: isCreditNote ? "credit_note" : "delivery",
         reason: isCreditNote ? (incoming.credit_note_reason ?? null) : null,
+        // ДДС по доставката (мигр. 104). NULL = документът е без ДДС,
+        // както беше досега.
+        vat_rate: incoming.vat_rate != null ? Number(incoming.vat_rate) : null,
+        prices_include_vat: incoming.prices_include_vat === true,
         buyer: {
           name: settings.company_name || "BAKALIA GREEK DELI FOOD",
           eik: settings.eik || undefined,
@@ -3213,6 +3231,143 @@ export default async function incomingRoutes(app: FastifyInstance) {
           `inline; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
         )
         .send(stream);
+    },
+  );
+
+  // POST /incoming/:id/vat — ДДС по доставката, ПРЕДИ потвърждаване.
+  //
+  // Фактурата на доставчика е с ДДС, а доставката тук нямаше никакво
+  // понятие за него — затова сумите не се връзваха. Два режима, защото
+  // двата случая са различни счетоводно:
+  //
+  //   mode="totals" — цените по редовете остават БЕЗ ДДС; разписката
+  //     добавя ДДС ред отдолу. Себестойността остава чиста (ДДС-то по
+  //     покупки е възстановимо). Това е обичайният случай.
+  //
+  //   mode="prices" — ДДС-то се ВГРАЖДА в единичните цени (× (1+r/100)).
+  //     Ползва се, когато цената с ДДС трябва да е покупната. Прилага се
+  //     ВЕДНЪЖ — флагът prices_include_vat пази от второ умножение.
+  //
+  //   mode="none" — маха ДДС-то; ако е било вградено в цените, ги дели
+  //     обратно, за да не остане доставката с надути цени след грешка.
+  app.post(
+    "/:id/vat",
+    { preHandler: incomingManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as any;
+      const parsed = incomingVatSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_vat_request",
+          message:
+            "Невалидна заявка за ДДС. Ставката е процент между 0 и 100.",
+        });
+      }
+      const body = parsed.data;
+
+      try {
+        const result = await transaction(async (client) => {
+          const {
+            rows: [doc],
+          } = await client.query(
+            `SELECT id, status, vat_rate, prices_include_vat
+               FROM incoming_goods WHERE id = $1 FOR UPDATE`,
+            [id],
+          );
+          if (!doc) {
+            throw Object.assign(new Error("Доставката не е намерена."), {
+              statusCode: 404,
+            });
+          }
+          if (doc.status !== "pending") {
+            throw Object.assign(
+              new Error(
+                "ДДС се задава само преди доставката да е потвърдена. " +
+                  "Тази вече е потвърдена — коригирай през редакция или " +
+                  "кредитно известие.",
+              ),
+              { statusCode: 400 },
+            );
+          }
+
+          const alreadyInPrices = doc.prices_include_vat === true;
+
+          if (body.mode === "prices" && alreadyInPrices) {
+            throw Object.assign(
+              new Error(
+                "ДДС вече е добавено към цените на тази доставка. " +
+                  "Махни го първо, ако искаш друга ставка.",
+              ),
+              { statusCode: 409 },
+            );
+          }
+
+          // Коефициентът за вграждане/изваждане на ДДС в цените.
+          const factorFor = (rate: number) => 1 + rate / 100;
+
+          // Пренася цените по редовете с даден множител. Единичната цена
+          // е с 3 знака (мигр. 101), стойността на реда — с 2.
+          const rescaleLines = async (multiplier: number) => {
+            const { rows: items } = await client.query(
+              `SELECT id, quantity, unit_price, total_price
+                 FROM incoming_items
+                WHERE incoming_goods_id = $1
+                ORDER BY id ASC
+                FOR UPDATE`,
+              [id],
+            );
+            for (const item of items) {
+              const qty = Number(item.quantity) || 0;
+              const newUnit =
+                Math.round(Number(item.unit_price) * multiplier * 1000) / 1000;
+              const newTotal = Math.round(newUnit * qty * 100) / 100;
+              await client.query(
+                `UPDATE incoming_items
+                    SET unit_price = $1, total_price = $2
+                  WHERE id = $3`,
+                [newUnit, newTotal, item.id],
+              );
+            }
+          };
+
+          if (body.mode === "prices") {
+            await rescaleLines(factorFor(body.vat_rate));
+            await refreshIncomingTotalAmount(client, id);
+          } else if (body.mode === "none" && alreadyInPrices) {
+            const oldRate = Number(doc.vat_rate) || 0;
+            await rescaleLines(1 / factorFor(oldRate));
+            await refreshIncomingTotalAmount(client, id);
+          }
+
+          const nextRate = body.mode === "none" ? null : body.vat_rate;
+          const nextIncluded = body.mode === "prices";
+
+          const {
+            rows: [updated],
+          } = await client.query(
+            `UPDATE incoming_goods
+                SET vat_rate = $1, prices_include_vat = $2, updated_at = NOW()
+              WHERE id = $3
+              RETURNING id, vat_rate, prices_include_vat, total_amount`,
+            [nextRate, nextIncluded, id],
+          );
+          return updated;
+        });
+
+        return reply.send({
+          id: result?.id ?? Number(id),
+          vat_rate: result?.vat_rate != null ? Number(result.vat_rate) : null,
+          prices_include_vat: result?.prices_include_vat === true,
+          total_amount:
+            result?.total_amount != null ? Number(result.total_amount) : null,
+        });
+      } catch (err: any) {
+        const status = err?.statusCode ?? 500;
+        return reply.status(status).send({
+          error: status === 500 ? "vat_update_failed" : "vat_rejected",
+          message: err?.message ?? "Неуспешна промяна на ДДС.",
+        });
+      }
     },
   );
 }
