@@ -30,43 +30,29 @@ async function buildApp() {
   return app;
 }
 
-function callWith(clientQuery: any, fragment: string) {
-  return clientQuery.mock.calls.find((c: any[]) =>
-    String(c[0]).includes(fragment),
-  );
-}
+const flat = (sql: unknown) => String(sql).replace(/\s+/g, " ").trim();
+
 function allCallsWith(clientQuery: any, fragment: string) {
   return clientQuery.mock.calls.filter((c: any[]) =>
-    String(c[0]).includes(fragment),
+    flat(c[0]).includes(fragment),
   );
 }
 
-const PENDING = {
-  id: 7,
-  status: "pending",
-  vat_rate: null,
-  prices_include_vat: false,
-};
+const PENDING = { id: 7, status: "pending", vat_rate: null };
 
-/** 2 реда: 10 × 5.000 и 3 × 2.500 → без ДДС общо 57.50 */
-const ITEMS = [
-  { id: 30, quantity: "10", unit_price: "5.000", total_price: "50.00" },
-  { id: 31, quantity: "3", unit_price: "2.500", total_price: "7.50" },
-];
-
-describe("ДДС по входяща доставка", () => {
+describe("ДДС ставка по входяща доставка", () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockTransaction.mockReset();
   });
 
-  it("режим към сумите: пази цените, само записва ставката", async () => {
+  it("записва ставката и НЕ пипа нито един ред", async () => {
     const clientQuery = vi
       .fn()
-      .mockResolvedValueOnce(res([PENDING])) // SELECT ... FOR UPDATE
+      .mockResolvedValueOnce(res([PENDING]))
       .mockResolvedValueOnce(
-        res([{ ...PENDING, vat_rate: "20.00", prices_include_vat: false }]),
-      ); // UPDATE header
+        res([{ id: 7, vat_rate: "20.00", total_amount: "57.50" }]),
+      );
 
     mockTransaction.mockImplementation(async (cb: any) =>
       cb({ query: clientQuery }),
@@ -77,34 +63,29 @@ describe("ДДС по входяща доставка", () => {
       const r = await app.inject({
         method: "POST",
         url: "/incoming/7/vat",
-        payload: { mode: "totals", vat_rate: 20 },
+        payload: { mode: "set", vat_rate: 20 },
       });
 
       expect(r.statusCode).toBe(200);
       expect(r.json().vat_rate).toBeCloseTo(20, 2);
-      expect(r.json().prices_include_vat).toBe(false);
-
-      // Нито един ред не е пипнат — цените остават без ДДС.
+      // Ядрото на изискването: цените остават непокътнати. По-ранна
+      // версия ги умножаваше и така слагаше ДДС в себестойността.
       expect(allCallsWith(clientQuery, "UPDATE incoming_items")).toHaveLength(
         0,
       );
+      expect(allCallsWith(clientQuery, "unit_price")).toHaveLength(0);
     } finally {
       await app.close();
     }
   });
 
-  it("режим към цените: умножава единичните цени веднъж и вдига флага", async () => {
+  it("нулева ставка е позволена (гръцки доставчик, ВОП)", async () => {
     const clientQuery = vi
       .fn()
       .mockResolvedValueOnce(res([PENDING]))
-      .mockResolvedValueOnce(res(ITEMS)) // SELECT редовете FOR UPDATE
-      .mockResolvedValueOnce(res([], 1)) // UPDATE ред 30
-      .mockResolvedValueOnce(res([], 1)) // UPDATE ред 31
-      .mockResolvedValueOnce(res([{ total: "69.00" }])) // преизчисление на header
       .mockResolvedValueOnce(
-        res([{ ...PENDING, vat_rate: "20.00", prices_include_vat: true }]),
+        res([{ id: 7, vat_rate: "0.00", total_amount: "57.50" }]),
       );
-
     mockTransaction.mockImplementation(async (cb: any) =>
       cb({ query: clientQuery }),
     );
@@ -114,69 +95,22 @@ describe("ДДС по входяща доставка", () => {
       const r = await app.inject({
         method: "POST",
         url: "/incoming/7/vat",
-        payload: { mode: "prices", vat_rate: 20 },
+        payload: { mode: "set", vat_rate: 0 },
       });
-
       expect(r.statusCode).toBe(200);
-      expect(r.json().prices_include_vat).toBe(true);
-
-      const updates = allCallsWith(clientQuery, "UPDATE incoming_items");
-      expect(updates).toHaveLength(2);
-      // 5.000 × 1.20 = 6.000 (3 знака, както е колоната) и 10 × 6 = 60.00
-      expect(updates[0][1][0]).toBeCloseTo(6, 3);
-      expect(updates[0][1][1]).toBeCloseTo(60, 2);
-      // 2.500 × 1.20 = 3.000 и 3 × 3 = 9.00
-      expect(updates[1][1][0]).toBeCloseTo(3, 3);
-      expect(updates[1][1][1]).toBeCloseTo(9, 2);
+      expect(r.json().vat_rate).toBeCloseTo(0, 2);
     } finally {
       await app.close();
     }
   });
 
-  it("отказва второ прилагане към цените (иначе ×1.44)", async () => {
-    const clientQuery = vi.fn().mockResolvedValueOnce(
-      res([{ ...PENDING, vat_rate: "20.00", prices_include_vat: true }]),
-    );
-    mockTransaction.mockImplementation(async (cb: any) =>
-      cb({ query: clientQuery }),
-    );
-
-    const app = await buildApp();
-    try {
-      const r = await app.inject({
-        method: "POST",
-        url: "/incoming/7/vat",
-        payload: { mode: "prices", vat_rate: 20 },
-      });
-
-      expect(r.statusCode).toBe(409);
-      expect(r.json().message).toMatch(/вече/i);
-      expect(allCallsWith(clientQuery, "UPDATE incoming_items")).toHaveLength(
-        0,
-      );
-    } finally {
-      await app.close();
-    }
-  });
-
-  it("режим без ДДС: връща вградените цени обратно", async () => {
-    const withVat = [
-      { id: 30, quantity: "10", unit_price: "6.000", total_price: "60.00" },
-      { id: 31, quantity: "3", unit_price: "3.000", total_price: "9.00" },
-    ];
+  it("режим none маха ставката, пак без да пипа цени", async () => {
     const clientQuery = vi
       .fn()
+      .mockResolvedValueOnce(res([{ ...PENDING, vat_rate: "20.00" }]))
       .mockResolvedValueOnce(
-        res([{ ...PENDING, vat_rate: "20.00", prices_include_vat: true }]),
-      )
-      .mockResolvedValueOnce(res(withVat))
-      .mockResolvedValueOnce(res([], 1))
-      .mockResolvedValueOnce(res([], 1))
-      .mockResolvedValueOnce(res([{ total: "57.50" }]))
-      .mockResolvedValueOnce(
-        res([{ ...PENDING, vat_rate: null, prices_include_vat: false }]),
+        res([{ id: 7, vat_rate: null, total_amount: "57.50" }]),
       );
-
     mockTransaction.mockImplementation(async (cb: any) =>
       cb({ query: clientQuery }),
     );
@@ -190,17 +124,16 @@ describe("ДДС по входяща доставка", () => {
       });
 
       expect(r.statusCode).toBe(200);
-      const updates = allCallsWith(clientQuery, "UPDATE incoming_items");
-      expect(updates).toHaveLength(2);
-      // Обратно на 5.000 и 2.500 — точно откъдето тръгнахме.
-      expect(updates[0][1][0]).toBeCloseTo(5, 3);
-      expect(updates[1][1][0]).toBeCloseTo(2.5, 3);
+      expect(r.json().vat_rate).toBeNull();
+      expect(allCallsWith(clientQuery, "UPDATE incoming_items")).toHaveLength(
+        0,
+      );
     } finally {
       await app.close();
     }
   });
 
-  it("отказва промяна на ДДС по ПОТВЪРДЕНА доставка", async () => {
+  it("отказва промяна по ПОТВЪРДЕНА доставка", async () => {
     const clientQuery = vi
       .fn()
       .mockResolvedValueOnce(res([{ ...PENDING, status: "confirmed" }]));
@@ -213,7 +146,7 @@ describe("ДДС по входяща доставка", () => {
       const r = await app.inject({
         method: "POST",
         url: "/incoming/7/vat",
-        payload: { mode: "prices", vat_rate: 20 },
+        payload: { mode: "set", vat_rate: 20 },
       });
 
       expect(r.statusCode).toBe(400);
@@ -229,7 +162,23 @@ describe("ДДС по входяща доставка", () => {
       const r = await app.inject({
         method: "POST",
         url: "/incoming/7/vat",
-        payload: { mode: "totals", vat_rate: 120 },
+        payload: { mode: "set", vat_rate: 120 },
+      });
+      expect(r.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('старият режим „prices" вече не съществува', async () => {
+    // Регресия: ако някой го върне, цените пак ще носят ДДС в
+    // себестойността. Заявката трябва да се отхвърли като невалидна.
+    const app = await buildApp();
+    try {
+      const r = await app.inject({
+        method: "POST",
+        url: "/incoming/7/vat",
+        payload: { mode: "prices", vat_rate: 20 },
       });
       expect(r.statusCode).toBe(400);
     } finally {

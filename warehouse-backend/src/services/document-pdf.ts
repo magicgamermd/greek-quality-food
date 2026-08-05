@@ -418,8 +418,6 @@ interface IncomingStockReceiptData {
   items: IncomingStockReceiptItem[];
   /** ДДС ставка в проценти; null/undefined = документ без ДДС. */
   vat_rate?: number | null;
-  /** TRUE = ДДС-то е вградено в единичните цени (показва се справочно). */
-  prices_include_vat?: boolean;
   outputPath: string;
 }
 
@@ -1005,7 +1003,7 @@ function drawIncomingTotalsBlock(
   subtotal: number,
   discountTotal: number,
   total: number,
-  vat?: { rate: number | null; pricesIncludeVat: boolean },
+  vat?: { rate: number | null },
 ) {
   const blockWidth = 220;
   const labelWidth = 112;
@@ -1029,15 +1027,15 @@ function drawIncomingTotalsBlock(
     y += bold ? 13 : 12;
   };
 
+  // Цените по редовете са ВИНАГИ без ДДС — ставката само добавя
+  // справката отдолу, за да се връзва с фактурата на доставчика.
   const rate = vat?.rate ?? null;
-  const included = vat?.pricesIncludeVat === true;
   const hasVat = rate != null && rate > 0;
 
   row("Междинна сума:", subtotal);
   row("Отстъпка:", discountTotal, false, { negative: discountTotal > 0 });
 
-  if (hasVat && !included) {
-    // Цените са без ДДС → основата е сборът на редовете, ДДС отгоре.
+  if (hasVat) {
     const vatAmount = Math.round(total * (rate / 100) * 100) / 100;
     row("Данъчна основа:", total);
     row(`ДДС ${formatRate(rate)}%:`, vatAmount);
@@ -1047,19 +1045,6 @@ function drawIncomingTotalsBlock(
       .lineWidth(0.5)
       .stroke();
     row("Общо с ДДС:", Math.round((total + vatAmount) * 100) / 100, true);
-  } else if (hasVat && included) {
-    // ДДС-то вече е в цените — показваме го само справочно, за да не
-    // изглежда, че се начислява втори път.
-    const base = Math.round((total / (1 + rate / 100)) * 100) / 100;
-    const vatAmount = Math.round((total - base) * 100) / 100;
-    row("Данъчна основа:", base);
-    row(`в т.ч. ДДС ${formatRate(rate)}%:`, vatAmount);
-    doc
-      .moveTo(x, y - 1)
-      .lineTo(x + blockWidth, y - 1)
-      .lineWidth(0.5)
-      .stroke();
-    row("Общо (с ДДС):", total, true);
   } else {
     doc
       .moveTo(x, y - 1)
@@ -1215,10 +1200,15 @@ export async function generateIncomingStockReceiptPdf(
       },
     });
 
-    drawIncomingTotalsBlock(doc, leftCol, pageWidth, subtotal, discountTotal, total, {
-      rate: data.vat_rate ?? null,
-      pricesIncludeVat: data.prices_include_vat === true,
-    });
+    drawIncomingTotalsBlock(
+      doc,
+      leftCol,
+      pageWidth,
+      subtotal,
+      discountTotal,
+      total,
+      { rate: data.vat_rate ?? null },
+    );
 
     doc.font("Main").fontSize(7);
     doc.text("Всички стойности са в EUR.", leftCol, doc.y, {

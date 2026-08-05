@@ -69,7 +69,6 @@ describe("document pdf layout regression", () => {
           },
         ],
         vat_rate: 20,
-        prices_include_vat: false,
         outputPath,
       });
       rendered = textSpy.mock.calls
@@ -86,48 +85,6 @@ describe("document pdf layout regression", () => {
     expect(rendered).toContain("50.00 EUR");
     expect(rendered).toContain("10.00 EUR");
     expect(rendered).toContain("60.00 EUR");
-  });
-
-  it("при вградено ДДС показва „в т.ч.“ и НЕ начислява втори път", async () => {
-    fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
-    const outputPath = path.join(TEST_OUTPUT_DIR, "incoming-vat-included.pdf");
-    const textSpy = vi.spyOn(PDFDocument.prototype, "text");
-    let rendered: string[] = [];
-
-    try {
-      await generateIncomingStockReceiptPdf({
-        doc_number: "ISR-VAT-2",
-        doc_date: "2026-03-12",
-        buyer: partner,
-        supplier: partner,
-        // 10 × 6.00 = 60.00 вече С ДДС → основа 50.00, в т.ч. ДДС 10.00
-        items: [
-          {
-            sku: "SKU-1",
-            name_bg: "Зехтин",
-            unit: "l",
-            quantity: 10,
-            unit_price: 6,
-            total_price: 60,
-            currency: "EUR",
-          },
-        ],
-        vat_rate: 20,
-        prices_include_vat: true,
-        outputPath,
-      });
-      rendered = textSpy.mock.calls
-        .map(([t]) => (typeof t === "string" ? t : String(t ?? "")))
-        .filter(Boolean);
-    } finally {
-      textSpy.mockRestore();
-    }
-
-    expect(rendered).toContain("в т.ч. ДДС 20%:");
-    expect(rendered).toContain("Общо (с ДДС):");
-    // Крайното е 60.00 — не 72.00. Точно това щеше да е двойното ДДС.
-    expect(rendered).toContain("60.00 EUR");
-    expect(rendered).not.toContain("72.00 EUR");
   });
 
   it("без ставка разписката изглежда както преди (без ДДС редове)", async () => {

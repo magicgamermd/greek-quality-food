@@ -321,15 +321,15 @@ const jwtVerify = async (request: FastifyRequest) => {
   await request.jwtVerify();
 };
 
-// Заявка за ДДС по доставка. `vat_rate` е ПРОЦЕНТ (20, не 0.20) — в
-// режим "none" не се иска, защото ДДС-то се маха.
+// Заявка за ДДС по доставка. `vat_rate` е ПРОЦЕНТ (20, не 0.20).
+//
+// ДДС-то е СПРАВКА върху доставката, не се начислява никъде: цените по
+// редовете НИКОГА не се пипат. Ставката служи, за да се вижда общото с
+// ДДС (така се връзва с фактурата на българския доставчик) — при
+// гръцките доставчици ДДС няма и ставката просто не се задава.
 const incomingVatSchema = z.discriminatedUnion("mode", [
   z.object({
-    mode: z.literal("totals"),
-    vat_rate: z.number().min(0).max(100),
-  }),
-  z.object({
-    mode: z.literal("prices"),
+    mode: z.literal("set"),
     vat_rate: z.number().min(0).max(100),
   }),
   z.object({ mode: z.literal("none") }),
@@ -3183,7 +3183,6 @@ export default async function incomingRoutes(app: FastifyInstance) {
         // ДДС по доставката (мигр. 104). NULL = документът е без ДДС,
         // както беше досега.
         vat_rate: incoming.vat_rate != null ? Number(incoming.vat_rate) : null,
-        prices_include_vat: incoming.prices_include_vat === true,
         buyer: {
           name: settings.company_name || "BAKALIA GREEK DELI FOOD",
           eik: settings.eik || undefined,
@@ -3234,22 +3233,18 @@ export default async function incomingRoutes(app: FastifyInstance) {
     },
   );
 
-  // POST /incoming/:id/vat — ДДС по доставката, ПРЕДИ потвърждаване.
+  // POST /incoming/:id/vat — ДДС ставка по доставката, преди потвърждаване.
   //
-  // Фактурата на доставчика е с ДДС, а доставката тук нямаше никакво
-  // понятие за него — затова сумите не се връзваха. Два режима, защото
-  // двата случая са различни счетоводно:
+  // Фактурата на българския доставчик е с ДДС, а редовете тук се въвеждат
+  // по единични цени без него — затова общото не се връзваше. Записваме
+  // само СТАВКАТА; общото с ДДС се смята при показване.
   //
-  //   mode="totals" — цените по редовете остават БЕЗ ДДС; разписката
-  //     добавя ДДС ред отдолу. Себестойността остава чиста (ДДС-то по
-  //     покупки е възстановимо). Това е обичайният случай.
+  // Цените по редовете НЕ се пипат. По-ранна версия можеше да ги умножи
+  // по (1+r/100), но това правеше покупната цена (а оттам себестойността
+  // и маржовете) с ДДС вътре — точно това щеше да обърка сметките.
   //
-  //   mode="prices" — ДДС-то се ВГРАЖДА в единичните цени (× (1+r/100)).
-  //     Ползва се, когато цената с ДДС трябва да е покупната. Прилага се
-  //     ВЕДНЪЖ — флагът prices_include_vat пази от второ умножение.
-  //
-  //   mode="none" — маха ДДС-то; ако е било вградено в цените, ги дели
-  //     обратно, за да не остане доставката с надути цени след грешка.
+  // Гръцките доставчици (ВОП) са без ДДС → ставката просто не се задава
+  // и доставката изглежда както преди.
   app.post(
     "/:id/vat",
     { preHandler: incomingManagePreHandler },
@@ -3270,8 +3265,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
           const {
             rows: [doc],
           } = await client.query(
-            `SELECT id, status, vat_rate, prices_include_vat
-               FROM incoming_goods WHERE id = $1 FOR UPDATE`,
+            `SELECT id, status FROM incoming_goods WHERE id = $1 FOR UPDATE`,
             [id],
           );
           if (!doc) {
@@ -3282,74 +3276,23 @@ export default async function incomingRoutes(app: FastifyInstance) {
           if (doc.status !== "pending") {
             throw Object.assign(
               new Error(
-                "ДДС се задава само преди доставката да е потвърдена. " +
-                  "Тази вече е потвърдена — коригирай през редакция или " +
-                  "кредитно известие.",
+                "ДДС ставката се задава само преди доставката да е " +
+                  "потвърдена. Върни я в чакаща, ако трябва да се смени.",
               ),
               { statusCode: 400 },
             );
           }
 
-          const alreadyInPrices = doc.prices_include_vat === true;
-
-          if (body.mode === "prices" && alreadyInPrices) {
-            throw Object.assign(
-              new Error(
-                "ДДС вече е добавено към цените на тази доставка. " +
-                  "Махни го първо, ако искаш друга ставка.",
-              ),
-              { statusCode: 409 },
-            );
-          }
-
-          // Коефициентът за вграждане/изваждане на ДДС в цените.
-          const factorFor = (rate: number) => 1 + rate / 100;
-
-          // Пренася цените по редовете с даден множител. Единичната цена
-          // е с 3 знака (мигр. 101), стойността на реда — с 2.
-          const rescaleLines = async (multiplier: number) => {
-            const { rows: items } = await client.query(
-              `SELECT id, quantity, unit_price, total_price
-                 FROM incoming_items
-                WHERE incoming_goods_id = $1
-                ORDER BY id ASC
-                FOR UPDATE`,
-              [id],
-            );
-            for (const item of items) {
-              const qty = Number(item.quantity) || 0;
-              const newUnit =
-                Math.round(Number(item.unit_price) * multiplier * 1000) / 1000;
-              const newTotal = Math.round(newUnit * qty * 100) / 100;
-              await client.query(
-                `UPDATE incoming_items
-                    SET unit_price = $1, total_price = $2
-                  WHERE id = $3`,
-                [newUnit, newTotal, item.id],
-              );
-            }
-          };
-
-          if (body.mode === "prices") {
-            await rescaleLines(factorFor(body.vat_rate));
-            await refreshIncomingTotalAmount(client, id);
-          } else if (body.mode === "none" && alreadyInPrices) {
-            const oldRate = Number(doc.vat_rate) || 0;
-            await rescaleLines(1 / factorFor(oldRate));
-            await refreshIncomingTotalAmount(client, id);
-          }
-
           const nextRate = body.mode === "none" ? null : body.vat_rate;
-          const nextIncluded = body.mode === "prices";
 
           const {
             rows: [updated],
           } = await client.query(
             `UPDATE incoming_goods
-                SET vat_rate = $1, prices_include_vat = $2, updated_at = NOW()
-              WHERE id = $3
-              RETURNING id, vat_rate, prices_include_vat, total_amount`,
-            [nextRate, nextIncluded, id],
+                SET vat_rate = $1, updated_at = NOW()
+              WHERE id = $2
+              RETURNING id, vat_rate, total_amount`,
+            [nextRate, id],
           );
           return updated;
         });
@@ -3357,7 +3300,6 @@ export default async function incomingRoutes(app: FastifyInstance) {
         return reply.send({
           id: result?.id ?? Number(id),
           vat_rate: result?.vat_rate != null ? Number(result.vat_rate) : null,
-          prices_include_vat: result?.prices_include_vat === true,
           total_amount:
             result?.total_amount != null ? Number(result.total_amount) : null,
         });
