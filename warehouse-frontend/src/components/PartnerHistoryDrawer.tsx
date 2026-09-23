@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Order } from "@/types";
-import { formatCurrency, formatOrderTotal, formatDate } from "@/lib/utils";
+import { formatCurrency, formatOrderTotal, formatDate, formatUnitPrice } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Sheet,
@@ -408,7 +408,7 @@ function OrderCard({
                         </div>
                         <div className="text-xs text-gray-500 mt-0.5">
                           {it.quantity} {it.unit} ×{" "}
-                          {formatCurrency(it.unit_price)}
+                          {formatUnitPrice(it.unit_price)}
                           {it.discount_percent > 0 && (
                             <>
                               {" "}

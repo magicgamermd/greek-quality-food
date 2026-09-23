@@ -69,6 +69,11 @@ import {
   getApiErrorMessage,
   stockColorClass,
 } from "@/lib/utils";
+import {
+  computeLineTotal as computeExactLineTotal,
+  effectiveUnitPrice,
+  roundMoney,
+} from "@/lib/linePricing";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch, HighlightMultiToken } from "@/lib/highlight";
 import { Button } from "@/components/ui/button";
@@ -3306,22 +3311,28 @@ function OrderDetailModal({
               const cnEligible = items.filter(
                 (it) => (it.line_status ?? "normal") !== "awaiting",
               );
-              const includeVat = Boolean((detail as any)?.include_vat ?? true);
-              // Live preview: сума = sum(qty × unit_price). order_items
-              // съхраняват unit_price като ГРОС (с ДДС включено) в
-              // целия проект — invoice creation прави totalGross =
-              // SUM(total_price) и нетно се изчислява чрез / 1.2.
-              // Затова grossSum е директно "сума с ДДС" — НЕ добавяме
-              // отново 20% (би било double VAT).
-              let grossSum = 0;
+              // ДДС-то по издадената фактура — поръчката няма собствено
+              // include_vat, затова досега прегледът винаги добавяше 20%.
+              const includeVat = invoiceIncludesVat !== false;
+              // Преглед по СЪЩОТО правило като сървъра (routes/invoices.ts,
+              // lib/linePricing.ts): цената е НЕТО; цял ред се кредитира по
+              // фактурираната си стойност, част от ред — кол. × цена с
+              // отстъпката; ДДС се добавя отгоре. Преди тук беше
+              // „unit_price е с ДДС" (не е) и отстъпката се пропускаше.
+              const creditLineNet = (it: any, qty: number) =>
+                Math.abs(qty - parseFloat(String(it.quantity))) < 0.0005
+                  ? roundMoney(it.total_price)
+                  : computeExactLineTotal(qty, it.unit_price, it.discount_percent);
+              let creditNet = 0;
               for (const it of cnEligible) {
                 const sel = creditNoteSelection[it.id];
                 if (!sel || !sel.checked) continue;
                 const qty = Number.isFinite(sel.qty) ? sel.qty : 0;
                 if (qty <= 0) continue;
-                const unitPrice = parseFloat(String(it.unit_price ?? 0));
-                grossSum += qty * unitPrice;
+                creditNet = roundMoney(creditNet + creditLineNet(it, qty));
               }
+              const creditVat = includeVat ? roundMoney(creditNet * 0.2) : 0;
+              const grossSum = roundMoney(creditNet + creditVat);
               // Validation: има ли поне 1 ред със checked + qty > 0
               const hasAnySelected = cnEligible.some((it) => {
                 const sel = creditNoteSelection[it.id];
@@ -3389,11 +3400,13 @@ function OrderDetailModal({
                             qty: 0,
                           };
                           const orig = parseFloat(String(it.quantity));
-                          const unitPrice = parseFloat(
-                            String(it.unit_price ?? 0),
+                          // Цената след отстъпката — същата като на фактурата.
+                          const unitPrice = effectiveUnitPrice(
+                            it.unit_price,
+                            it.discount_percent,
                           );
                           const lineTotal = sel.checked
-                            ? sel.qty * unitPrice
+                            ? creditLineNet(it, sel.qty)
                             : 0;
                           const prodName =
                             it.name_bg ||
@@ -3427,7 +3440,7 @@ function OrderDetailModal({
                                 <div className="truncate">{prodName}</div>
                                 <div className="text-xs text-gray-500">
                                   оригинал: {orig} {unit} ×{" "}
-                                  {formatCurrency(unitPrice)}
+                                  {formatUnitPrice(unitPrice)}
                                 </div>
                               </div>
                               <input
@@ -3465,7 +3478,7 @@ function OrderDetailModal({
                   {/* Live total */}
                   <div className="flex items-center justify-end gap-4 text-sm">
                     <span className="text-gray-500">
-                      Сума за кредитиране{includeVat ? " (с ДДС)" : ""}:
+                      Сума за кредитиране{includeVat ? " (с ДДС)" : " (без ДДС)"}:
                     </span>
                     <span className="text-lg font-bold text-amber-700">
                       −{formatCurrency(grossSum)}
@@ -4442,10 +4455,17 @@ function EditOrderItemsModal({
     );
   });
   const hasBelowCost = belowCostItems.length > 0;
-  const totalBelowCostLoss = belowCostItems.reduce((sum, i) => {
-    const qty = Number(i.quantity) || 0;
-    return sum + (i.cost_price - Number(i.unit_price)) * qty;
-  }, 0);
+  // Загубата е от цената СЛЕД отстъпката — редът е маркиран „под ДЦ" по
+  // нея. С листовата цена ред с отстъпка излизаше с отрицателна загуба.
+  const totalBelowCostLoss = belowCostItems.reduce(
+    (sum, i) =>
+      roundMoney(
+        sum +
+          computeExactLineTotal(i.quantity, i.cost_price) -
+          computeExactLineTotal(i.quantity, i.unit_price, i.discount_percent),
+      ),
+    0,
+  );
 
   const mutation = useMutation({
     mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
@@ -4653,7 +4673,7 @@ function EditOrderItemsModal({
                         100,
                         Math.max(0, (amt / gross) * 100),
                       );
-                      setBulkDiscount(String(parseFloat(pct.toFixed(4))));
+                      setBulkDiscount(String(parseFloat(pct.toFixed(2))));
                     }
                   }}
                   onKeyDown={(e) => {
@@ -4665,6 +4685,26 @@ function EditOrderItemsModal({
                   placeholder="0.00"
                   className="w-24"
                 />
+                {/* Колоната пази отстъпката с 2 знака, затова написаната сума
+                    може да не е точно постижима — показваме реалната. */}
+                {bulkDiscountAmount !== "" && bulkDiscount !== "" && (() => {
+                  const pct = Number(bulkDiscount) || 0;
+                  const full = items.reduce(
+                    (sum, it) => roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price)),
+                    0,
+                  );
+                  const after = items.reduce(
+                    (sum, it) =>
+                      roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price, pct)),
+                    0,
+                  );
+                  const applied = roundMoney(full - after);
+                  return Math.abs(applied - (Number(bulkDiscountAmount) || 0)) >= 0.005 ? (
+                    <span className="text-xs text-amber-700">
+                      реално {formatCurrency(applied)} ({pct}%)
+                    </span>
+                  ) : null;
+                })()}
                 <Button
                   type="button"
                   variant="secondary"
@@ -4701,7 +4741,13 @@ function EditOrderItemsModal({
                     const qty = Number(item.quantity) || 0;
                     const price = Number(item.unit_price) || 0;
                     const discount = Number(item.discount_percent) || 0;
-                    const lineTotal = qty * price * (1 - discount / 100);
+                    // Същото правило като сървъра — редът, футърът и
+                    // записаното съвпадат до стотинка.
+                    const lineTotal = computeExactLineTotal(
+                      qty,
+                      price,
+                      discount,
+                    );
                     const availableStock = getEffectiveStock(item);
                     const hasKnownStock = availableStock >= 0;
                     // Batch F1 — split rows opt out of the oversell guard
@@ -5048,13 +5094,21 @@ function EditOrderItemsModal({
               </div>
               <ul className="list-disc list-inside space-y-0.5">
                 {belowCostItems.map((i, idx) => {
-                  const qty = Number(i.quantity) || 0;
-                  const loss = (i.cost_price - Number(i.unit_price)) * qty;
+                  const loss = roundMoney(
+                    computeExactLineTotal(i.quantity, i.cost_price) -
+                      computeExactLineTotal(
+                        i.quantity,
+                        i.unit_price,
+                        i.discount_percent,
+                      ),
+                  );
                   return (
                     <li key={idx}>
                       {i.product_name}: продаваш на{" "}
-                      {formatUnitPrice(Number(i.unit_price))}, ДЦ{" "}
-                      {formatCurrency(i.cost_price)} (загуба{" "}
+                      {formatUnitPrice(
+                        effectiveUnitPrice(i.unit_price, i.discount_percent),
+                      )}
+                      , ДЦ {formatUnitPrice(i.cost_price)} (загуба{" "}
                       {formatCurrency(loss)})
                     </li>
                   );
@@ -5748,11 +5802,10 @@ function CreateOrderModal({
   // lines DO NOT count toward the order total. They're tracked on the
   // parent for visibility but the goods haven't arrived yet, so the
   // cashier doesn't see them in the "to invoice / to charge" bucket.
-  const computeLineTotal = (i: OrderItemRow) => {
-    const disc = Number(i.discount_percent) || 0;
-    const line = Number(i.quantity) * Number(i.unit_price) * (1 - disc / 100);
-    return Math.round(line * 100) / 100;
-  };
+  // Същото правило като сървъра (lib/linePricing.ts) — иначе при точна
+  // половин стотинка екранът показваше една сума, а записаното беше друга.
+  const computeLineTotal = (i: OrderItemRow) =>
+    computeExactLineTotal(i.quantity, i.unit_price, i.discount_percent);
   // GQF: unit_price е NET (без ДДС). orderTotal (sum of line totals) е
   // NET база; ДДС се добавя ОТГОРЕ за gross total.
   const orderNetTotal = validItems
@@ -5785,10 +5838,17 @@ function CreateOrderModal({
     );
   });
   const hasBelowCost = belowCostItems.length > 0;
-  const totalBelowCostLoss = belowCostItems.reduce((sum, i) => {
-    const qty = Number(i.quantity) || 0;
-    return sum + (i.cost_price - Number(i.unit_price)) * qty;
-  }, 0);
+  // Загубата е от цената СЛЕД отстъпката — редът е маркиран „под ДЦ" по
+  // нея. С листовата цена ред с отстъпка излизаше с отрицателна загуба.
+  const totalBelowCostLoss = belowCostItems.reduce(
+    (sum, i) =>
+      roundMoney(
+        sum +
+          computeExactLineTotal(i.quantity, i.cost_price) -
+          computeExactLineTotal(i.quantity, i.unit_price, i.discount_percent),
+      ),
+    0,
+  );
 
   // Auto-fill Еконт teglo from sum(qty × weight_kg) whenever items change.
   // Еконт min е 0.1 кг; ако няма никакви тегла, държим минимум 0.1.
@@ -6537,11 +6597,11 @@ function CreateOrderModal({
                               100,
                               Math.max(0, (amt / gross) * 100),
                             );
-                            // Използваме до 4 знака за minimal loss на
-                            // точност при apply-а; визуализацията на
-                            // input-а ползва % .toFixed(4) -> parseFloat
-                            // = чист number без trailing нули.
-                            setBulkDiscount(String(parseFloat(pct.toFixed(4))));
+                            // 2 знака — толкова пази колоната
+                            // discount_percent (NUMERIC(5,2)) и сървърът
+                            // закръгля до тях. С 4 знака прегледът показваше
+                            // сума, различна от записаната.
+                            setBulkDiscount(String(parseFloat(pct.toFixed(2))));
                           }
                         }}
                         onKeyDown={(e) => {
@@ -6553,6 +6613,26 @@ function CreateOrderModal({
                         placeholder="0.00"
                         className="w-24"
                       />
+                      {/* Колоната пази отстъпката с 2 знака, затова написаната сума
+                          може да не е точно постижима — показваме реалната. */}
+                      {bulkDiscountAmount !== "" && bulkDiscount !== "" && (() => {
+                        const pct = Number(bulkDiscount) || 0;
+                        const full = items.reduce(
+                          (sum, it) => roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price)),
+                          0,
+                        );
+                        const after = items.reduce(
+                          (sum, it) =>
+                            roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price, pct)),
+                          0,
+                        );
+                        const applied = roundMoney(full - after);
+                        return Math.abs(applied - (Number(bulkDiscountAmount) || 0)) >= 0.005 ? (
+                          <span className="text-xs text-amber-700">
+                            реално {formatCurrency(applied)} ({pct}%)
+                          </span>
+                        ) : null;
+                      })()}
                       <Button
                         type="button"
                         variant="secondary"
@@ -6591,7 +6671,12 @@ function CreateOrderModal({
                           const qty = Number(item.quantity) || 0;
                           const price = Number(item.unit_price) || 0;
                           const discount = Number(item.discount_percent) || 0;
-                          const lineTotal = qty * price * (1 - discount / 100);
+                          // Същото правило като сървъра и футъра.
+                          const lineTotal = computeExactLineTotal(
+                            qty,
+                            price,
+                            discount,
+                          );
                           const availableStock = getEffectiveStock(item);
                           // Only flag overstock on normal lines; paid-not-taken
                           // and awaiting lines opt out of the red warning bg.
@@ -6766,7 +6851,7 @@ function CreateOrderModal({
                                   disabled={!item.product_id}
                                   title={
                                     belowCost
-                                      ? `Под доставната цена (${formatCurrency(item.cost_price)})`
+                                      ? `Под доставната цена (${formatUnitPrice(item.cost_price)})`
                                       : undefined
                                   }
                                 />
@@ -6777,7 +6862,7 @@ function CreateOrderModal({
                                 )}
                                 {!noPrice && belowCost && (
                                   <div className="text-[10px] text-amber-700 mt-0.5 whitespace-nowrap">
-                                    ⚠ под ДЦ: {formatCurrency(item.cost_price)}
+                                    ⚠ под ДЦ: {formatUnitPrice(item.cost_price)}
                                   </div>
                                 )}
                               </TableCell>
@@ -7035,19 +7120,18 @@ function CreateOrderModal({
                     (i) => i.product_id && Number(i.quantity) > 0,
                   ).length;
                   const totalCount = giveCount + retCount;
+                  // Всеки ред закръглен като на сървъра, после сборът.
                   const giveSum = replacementState.giveItems.reduce(
                     (s, i) =>
-                      s +
-                      (Number(i.quantity) || 0) * (Number(i.unit_price) || 0),
+                      roundMoney(s + computeExactLineTotal(i.quantity, i.unit_price)),
                     0,
                   );
                   const retSum = replacementState.returnItems.reduce(
                     (s, i) =>
-                      s +
-                      (Number(i.quantity) || 0) * (Number(i.unit_price) || 0),
+                      roundMoney(s + computeExactLineTotal(i.quantity, i.unit_price)),
                     0,
                   );
-                  const diff = giveSum - retSum;
+                  const diff = roundMoney(giveSum - retSum);
                   return (
                     <>
                       <span className="text-sm text-gray-500">
@@ -7148,13 +7232,21 @@ function CreateOrderModal({
                   </div>
                   <ul className="list-disc list-inside space-y-0.5">
                     {belowCostItems.map((i, idx) => {
-                      const qty = Number(i.quantity) || 0;
-                      const loss = (i.cost_price - Number(i.unit_price)) * qty;
+                      const loss = roundMoney(
+                        computeExactLineTotal(i.quantity, i.cost_price) -
+                          computeExactLineTotal(
+                            i.quantity,
+                            i.unit_price,
+                            i.discount_percent,
+                          ),
+                      );
                       return (
                         <li key={idx}>
                           {i.product_name}: продаваш на{" "}
-                          {formatUnitPrice(Number(i.unit_price))}, ДЦ{" "}
-                          {formatCurrency(i.cost_price)} (загуба{" "}
+                          {formatUnitPrice(
+                            effectiveUnitPrice(i.unit_price, i.discount_percent),
+                          )}
+                          , ДЦ {formatUnitPrice(i.cost_price)} (загуба{" "}
                           {formatCurrency(loss)})
                         </li>
                       );

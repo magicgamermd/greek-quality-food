@@ -355,7 +355,7 @@ function ProductModal({
                     />
                     {isBelowCost && (
                       <div className="text-[10px] text-amber-700 whitespace-nowrap">
-                        ⚠ под ДЦ: {formatCurrency(purchaseCost)}
+                        ⚠ под ДЦ: {formatUnitPrice(purchaseCost)}
                       </div>
                     )}
                   </div>
@@ -387,8 +387,8 @@ function ProductModal({
                   const lossPerUnit = purchaseCost - v;
                   return (
                     <li key={f.key}>
-                      {f.label}: {formatCurrency(v)} (губиш{" "}
-                      {formatCurrency(lossPerUnit)}/бр.)
+                      {f.label}: {formatUnitPrice(v)} (губиш{" "}
+                      {formatUnitPrice(lossPerUnit)}/бр.)
                     </li>
                   );
                 })}

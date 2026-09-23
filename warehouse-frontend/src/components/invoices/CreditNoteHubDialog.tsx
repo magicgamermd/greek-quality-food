@@ -9,13 +9,14 @@
 // Продажба  → POST /invoices/credit-note (свой номер КИ-*, печат /invoices/:id/pdf)
 // Покупка   → POST /incoming/:id/credit-note (номерът е на доставчика,
 //             печат /incoming/:id/receipt)
+import { effectiveUnitPrice } from "@/lib/linePricing";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowUpFromLine, FileText } from "lucide-react";
 import { api } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import type { Invoice } from "@/types";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, formatUnitPrice } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +40,8 @@ type SaleItemRow = {
   unit: string | null;
   quantity: string;
   unit_price: string;
+  /** Отстъпка % на реда — КИ-то печата цената СЛЕД нея. */
+  discount_percent: string;
   // UI state
   checked: boolean;
   qty: string;
@@ -207,6 +210,7 @@ export function CreditNoteHubDialog({
         unit: r.unit ?? null,
         quantity: String(r.quantity ?? ""),
         unit_price: String(r.unit_price ?? ""),
+        discount_percent: String(r.discount_percent ?? "0"),
         checked: false,
         qty: String(r.quantity ?? ""),
       })),
@@ -576,7 +580,12 @@ export function CreditNoteHubDialog({
                               {item.quantity} {item.unit ?? ""}
                             </td>
                             <td className="p-2 text-right">
-                              {formatCurrency(Number(item.unit_price))}
+                              {formatUnitPrice(
+                                effectiveUnitPrice(
+                                  item.unit_price,
+                                  item.discount_percent,
+                                ),
+                              )}
                             </td>
                             <td className="p-2">
                               <Input
@@ -729,7 +738,7 @@ export function CreditNoteHubDialog({
                                 {line.quantity}
                               </td>
                               <td className="p-2 text-right">
-                                {formatCurrency(Number(line.unit_price))}
+                                {formatUnitPrice(Number(line.unit_price))}
                               </td>
                               <td className="p-2">
                                 <Input

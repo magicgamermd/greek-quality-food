@@ -281,6 +281,8 @@ export interface OrderItem {
   quantity: number;
   unit_price: number;
   total_price: number;
+  /** Отстъпка % на реда (0–100). Сървърът я връща с всеки ред. */
+  discount_percent?: number | string | null;
   product?: Product;
   name_bg?: string;
   name_en?: string;

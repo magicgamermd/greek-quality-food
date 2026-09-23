@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
-import { formatCurrency, getApiErrorMessage } from "@/lib/utils";
+import { formatCurrency, getApiErrorMessage, formatUnitPrice } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { Combobox } from "@/components/ui/combobox";
 import { cn } from "@/lib/utils";
@@ -889,7 +889,7 @@ function ItemRow({
           ) : null}
           {/* Third line: quantity, prices */}
           <p className="text-xs text-[#9aa8d6] mt-0.5 truncate">
-            {item.quantity} × {formatCurrency(item.unit_price)}
+            {item.quantity} × {formatUnitPrice(item.unit_price)}
             {item.selling_price != null && item.selling_price > 0
               ? ` → ${formatCurrency(item.selling_price)}${priceChanged ? " *" : ""}`
               : ""}
