@@ -19,6 +19,7 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { formatUnitPricePlain } from "../utils/currency.js";
+import { getDisplayLine, roundMoney } from "../lib/line-pricing.js";
 
 // ── Fonts (same lookup pattern as document-pdf.ts) ──────────────────
 function getFontPath(filename: string): string {
@@ -76,6 +77,9 @@ export interface ReplacementPdfItem {
   product_code: string;
   quantity: number;
   unit_price: number;
+  /** Записаната стойност на реда (order_items.total_price). */
+  total_price?: number;
+  discount_percent?: number;
   is_returning: boolean;
 }
 
@@ -139,8 +143,10 @@ function paymentMethodBg(
   }
 }
 
+// Записаната стойност на реда, не незакръглено кол. × цена без отстъпката
+// — така разликата „дава/връща" съвпада с поръчката до стотинка.
 function lineSum(item: ReplacementPdfItem): number {
-  return item.quantity * item.unit_price;
+  return getDisplayLine(item).lineTotal;
 }
 
 // ── Main entry ──────────────────────────────────────────────────────
@@ -463,7 +469,7 @@ function drawSection(
   for (let idx = 0; idx < items.length; idx += 1) {
     const item = items[idx];
     const sum = lineSum(item);
-    total += sum;
+    total = roundMoney(total + sum);
 
     const rowY = doc.y;
     const rowH = 16;
@@ -478,7 +484,7 @@ function drawSection(
       item.product_code || "",
       item.product_name || "—",
       formatQty(item.quantity),
-      formatUnitPricePlain(item.unit_price),
+      formatUnitPricePlain(getDisplayLine(item).unitPrice),
       formatEUR(sum),
     ];
     let cellX = leftCol;

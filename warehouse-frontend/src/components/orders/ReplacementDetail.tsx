@@ -1,3 +1,4 @@
+import { getDisplayLine } from "@/lib/linePricing";
 import { useMemo } from "react";
 import {
   Printer,
@@ -8,7 +9,7 @@ import {
   RefreshCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatUnitPrice } from "@/lib/utils";
 import type { Order, OrderItem } from "@/types";
 
 /**
@@ -48,10 +49,10 @@ function formatAmount(amount: number): string {
   return formatCurrency(Math.abs(amount));
 }
 
+// Записаната стойност на реда — както на документа за замяна. Преди се
+// смяташе наново (кол. × цена, без отстъпката).
 function lineTotal(item: OrderItem): number {
-  const qty = Number(item.quantity) || 0;
-  const price = Number(item.unit_price) || 0;
-  return Math.round(qty * price * 100) / 100;
+  return getDisplayLine(item).lineTotal;
 }
 
 function ItemsSection({
@@ -122,7 +123,7 @@ function ItemsSection({
                     {it.unit ? ` ${it.unit}` : ""}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    {formatAmount(Number(it.unit_price) || 0)}
+                    {formatUnitPrice(getDisplayLine(it).unitPrice)}
                   </td>
                   <td className="px-3 py-2 text-right font-medium">
                     {formatAmount(lineTotal(it))}

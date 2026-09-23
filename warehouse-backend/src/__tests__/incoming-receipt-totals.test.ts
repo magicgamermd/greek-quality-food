@@ -64,4 +64,16 @@ describe("computeIncomingReceiptTotals — един източник на ист
     expect(subtotal).toBe(27.76);
     expect(total).toBe(27.76);
   });
+
+  it("точна половин стотинка: разписката показва записаното, не стотинка по-малко", () => {
+    // 2.500 × 4.010 = 10.025 → в базата 10.03 (ROUND). Float закръглянето
+    // даваше 10.02 и разписката не съвпадаше с общата сума на доставката.
+    const { lines, total } = computeIncomingReceiptTotals([
+      { quantity: "2.500", unit_price: "4.010", total_price: "10.03" },
+      { quantity: "1.000", unit_price: "1.005", total_price: "1.01" },
+    ]);
+    expect(lines[0].lineTotal).toBe(10.03);
+    expect(lines[1].lineTotal).toBe(1.01);
+    expect(total).toBe(11.04);
+  });
 });

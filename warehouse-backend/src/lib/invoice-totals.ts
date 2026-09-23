@@ -15,7 +15,11 @@ export interface InvoiceTotals {
   vatRate: number; // 20 когато има ДДС, иначе 0
 }
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+import { roundMoney } from "./line-pricing.js";
+
+// Точно закръгляне (половин встрани от нулата, като Postgres ROUND) —
+// Math.round(n × 100) бърка при двоичен шум около половин стотинка.
+const round2 = roundMoney;
 
 /**
  * Извежда нето / ДДС / бруто от НЕТО сума (без ДДС).

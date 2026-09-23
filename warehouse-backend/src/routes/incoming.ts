@@ -1,4 +1,14 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import {
+  computeLineTotal,
+  roundMoney,
+  roundUnitPrice,
+} from "../lib/line-pricing.js";
+
+// Покупната цена от фактурата на доставчика може да е с 4+ знака (OCR).
+// Стойността на реда трябва да съвпада с неговата фактура, затова тук
+// цената влиза с пълната си точност, а не закръглена до 3 знака.
+const SUPPLIER_PRICE = { priceDecimals: 6 };
 import { MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from "../lib/pagination.js";
 import type { QueryResultRow } from "pg";
 import { z } from "zod";
@@ -1414,8 +1424,16 @@ export default async function incomingRoutes(app: FastifyInstance) {
           // Create items
           const items = [];
           for (const [index, item] of body.items.entries()) {
-            const totalPrice = item.quantity * item.unit_price;
-            totalAmount += totalPrice;
+            // Точно закръгляне (като Postgres ROUND): кол. × цена при
+            // точността на колоните. Преди незакръглен float отиваше в
+            // базата (10 × 1.2345 = 12.344999… → 12.34 вместо 12.35).
+            const totalPrice = computeLineTotal(
+              item.quantity,
+              item.unit_price,
+              0,
+              SUPPLIER_PRICE,
+            );
+            totalAmount = roundMoney(totalAmount + totalPrice);
             const explicitProductId =
               typeof item.product_id === "number" ? item.product_id : null;
 
@@ -2451,8 +2469,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string };
       const body = creditNoteSchema.parse(request.body);
-      const round2 = (n: number) => Math.round(n * 100) / 100;
-      const round3 = (n: number) => Math.round(n * 1000) / 1000;
+      // Точно закръгляне — Math.round(n × 100) бърка при половин стотинка.
+      const round2 = roundMoney;
+      const round3 = roundUnitPrice;
 
       return await transaction(async (client) => {
         const {
@@ -2549,8 +2568,8 @@ export default async function incomingRoutes(app: FastifyInstance) {
               );
             }
             const delta = round3(origPrice - item.new_unit_price);
-            const amount = round2(delta * origQty);
-            creditTotal += amount;
+            const amount = computeLineTotal(origQty, delta);
+            creditTotal = round2(creditTotal + amount);
             lines.push({
               kind: "price",
               orig,
@@ -2569,8 +2588,8 @@ export default async function incomingRoutes(app: FastifyInstance) {
                 { statusCode: 400 },
               );
             }
-            const amount = round2(origPrice * item.returned_quantity);
-            creditTotal += amount;
+            const amount = computeLineTotal(item.returned_quantity, origPrice);
+            creditTotal = round2(creditTotal + amount);
             lines.push({
               kind: "return",
               orig,
@@ -2902,7 +2921,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
               const newQty = item.quantity ?? Number(current.quantity);
               const newPrice = item.unit_price ?? Number(current.unit_price);
               updates.push(`total_price = $${idx++}`);
-              vals.push(Number((newQty * newPrice).toFixed(2)));
+              vals.push(computeLineTotal(newQty, newPrice, 0, SUPPLIER_PRICE));
             }
             vals.push(id, item.id);
             await client.query(
@@ -2987,7 +3006,12 @@ export default async function incomingRoutes(app: FastifyInstance) {
           return reply.status(404).send({ error: "Продуктът не е намерен" });
         }
 
-        const totalPrice = Number((body.quantity * body.unit_price).toFixed(2));
+        const totalPrice = computeLineTotal(
+          body.quantity,
+          body.unit_price,
+          0,
+          SUPPLIER_PRICE,
+        );
         const { rows } = await client.query(
           `INSERT INTO incoming_items (
              incoming_goods_id, product_id, quantity, unit_price, total_price,

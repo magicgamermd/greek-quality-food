@@ -1,3 +1,8 @@
+import {
+  computeLineTotal,
+  roundMoney,
+  roundUnitPrice,
+} from "@/lib/linePricing";
 import React, { useState, useRef, useEffect } from "react";
 import {
   useQueries,
@@ -2259,16 +2264,22 @@ export function IncomingGoods() {
                     {(() => {
                       const total = editItems
                         .filter((i) => !i.toDelete)
-                        .reduce((sum, i) => {
-                          const q = Number(i.quantity) || 0;
-                          const p = Number(i.unit_price) || 0;
-                          return sum + q * p;
-                        }, 0);
+                        // Всеки ред закръглен като на сървъра, после сборът.
+                        .reduce(
+                          (sum, i) =>
+                            roundMoney(
+                              sum + computeLineTotal(i.quantity, i.unit_price),
+                            ),
+                          0,
+                        );
                       // Ставката е само справка — цените са без ДДС,
                       // затова брутото се смята тук, при показване.
                       const rate = Number((selectedDoc as any)?.vat_rate);
                       const hasVat = Number.isFinite(rate) && rate > 0;
-                      const gross = hasVat ? total * (1 + rate / 100) : total;
+                      // Като на стоковата разписка: ДДС-то до стотинка, после сборът.
+                      const gross = hasVat
+                        ? roundMoney(total + roundMoney((total * rate) / 100))
+                        : total;
                       return (
                         <div className="text-sm text-gray-600 text-right">
                           <div>
@@ -2650,8 +2661,10 @@ export function IncomingGoods() {
                               Ред общо:{" "}
                               <span className="font-medium text-gray-900">
                                 {formatCurrency(
-                                  (Number(item.quantity) || 0) *
-                                    (Number(item.unit_price) || 0),
+                                  computeLineTotal(
+                                    item.quantity,
+                                    item.unit_price,
+                                  ),
                                 )}
                               </span>
                             </div>
@@ -2966,11 +2979,21 @@ export function IncomingGoods() {
                   String(line.new_unit_price ?? "").trim() !== "";
                 const qtyFilled =
                   String(line.returned_quantity ?? "").trim() !== "";
+                // Същото правило като сървъра (routes/incoming.ts): разликата
+                // в цената до 3 знака, стойността до стотинка.
+                // По-висока нова цена не е кредит (сървърът я отказва) — „—".
+                const priceDelta = roundUnitPrice(
+                  line.unit_price - Number(line.new_unit_price || 0),
+                );
                 const credited = priceFilled
-                  ? (line.unit_price - Number(line.new_unit_price || 0)) *
-                    line.quantity
+                  ? priceDelta > 0
+                    ? computeLineTotal(line.quantity, priceDelta)
+                    : 0
                   : qtyFilled
-                    ? line.unit_price * Number(line.returned_quantity || 0)
+                    ? computeLineTotal(
+                        Number(line.returned_quantity || 0),
+                        line.unit_price,
+                      )
                     : 0;
                 return (
                   <div
@@ -3028,7 +3051,7 @@ export function IncomingGoods() {
                     <div className="col-span-12 md:col-span-2 text-right text-sm">
                       {credited > 0 ? (
                         <span className="text-amber-700 font-medium">
-                          −{fmtPrice3(credited)}€
+                          −{formatCurrency(credited)}
                         </span>
                       ) : (
                         <span className="text-gray-400">—</span>

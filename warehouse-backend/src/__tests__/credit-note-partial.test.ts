@@ -155,6 +155,117 @@ describe("POST /invoices/credit-note — partial", () => {
     },
   ];
 
+  // Реален случай (поръчка 202): 2.800 × 6.317 при 10% отстъпка е
+  // фактуриран за 15.92 нето. Преди КИ-то кредитираше 17.69 — пълната
+  // цена без отстъпката.
+  const discountedInvoice = {
+    ...baseInvoice,
+    total_net: "15.92",
+    total_vat: "3.18",
+    total_gross: "19.10",
+  };
+  const discountedItems = [
+    {
+      ...baseOrderItems[0],
+      id: 21,
+      quantity: "2.800",
+      unit_price: "6.317",
+      discount_percent: "10.00",
+      total_price: "15.92",
+    },
+  ];
+
+  async function issueCreditNote(items: Array<{ order_item_id: number; quantity: number }>, orderItems: any[], invoice: any) {
+    const clientQuery = buildClientQuery({ invoice, orderId: 50, orderItems });
+    mockTransaction.mockImplementation(async (cb: any) => cb({ query: clientQuery }));
+    const { generateInvoicePdf } = await import("../services/invoice-pdf.js");
+    vi.mocked(generateInvoicePdf).mockClear();
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/invoices/credit-note",
+        payload: { related_invoice_id: 100, reason: "Връщане", items },
+      });
+      const insert = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("INSERT INTO invoices"),
+      );
+const pdfArgs = vi.mocked(generateInvoicePdf).mock.calls[0]?.[0] as any;
+      const saved = clientQuery.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("credit_note_lines"),
+      );
+      const storedLines = saved ? JSON.parse((saved[1] as any[])[2]) : [];
+      return {
+        res,
+        params: insert?.[1] as any[],
+        pdfItems: pdfArgs?.items ?? [],
+        storedLines,
+      };
+    } finally {
+      await app.close();
+    }
+  }
+
+  it("ред с отстъпка, цял: кредитира фактурираните 15.92, не 17.69", async () => {
+    const { res, params, pdfItems } = await issueCreditNote(
+      [{ order_item_id: 21, quantity: 2.8 }],
+      discountedItems,
+      discountedInvoice,
+    );
+    expect(res.statusCode).toBe(201);
+    expect(params[2]).toBe(-15.92); // total_net
+    expect(params[3]).toBe(-3.18); // total_vat
+    expect(params[4]).toBe(-19.1); // total_gross
+    // Редът в PDF-а носи същата стойност, от която е сметнат тоталът.
+    expect(pdfItems[0].total_price).toBe(-15.92);
+    expect(pdfItems[0].discount_percent).toBe("10.00");
+  });
+
+  it("записва отпечатаните редове, за да се чертаят копията от тях", async () => {
+    const { storedLines } = await issueCreditNote(
+      [{ order_item_id: 21, quantity: 1.4 }],
+      discountedItems,
+      discountedInvoice,
+    );
+    expect(storedLines).toHaveLength(1);
+    expect(storedLines[0]).toMatchObject({
+      quantity: -1.4,
+      unit_price: 6.317,
+      discount_percent: "10.00",
+      total_price: -7.96,
+    });
+  });
+
+  it("ред с отстъпка, половин количество: с отстъпката, по правилото на поръчката", async () => {
+    const { params, pdfItems } = await issueCreditNote(
+      [{ order_item_id: 21, quantity: 1.4 }],
+      discountedItems,
+      discountedInvoice,
+    );
+    // 1.4 × 6.317 × 0.9 = 7.95942 → 7.96
+    expect(params[2]).toBe(-7.96);
+    expect(pdfItems[0].total_price).toBe(-7.96);
+  });
+
+  it("три реда по 1.114 (записани 1.11): тоталът е сборът на редовете 3.33, не 3.34", async () => {
+    const three = [1, 2, 3].map((n) => ({
+      ...baseOrderItems[0],
+      id: 30 + n,
+      quantity: "1.000",
+      unit_price: "1.114",
+      discount_percent: "0.00",
+      total_price: "1.11",
+    }));
+    const { params, pdfItems } = await issueCreditNote(
+      three.map((it) => ({ order_item_id: it.id, quantity: 1 })),
+      three,
+      { ...baseInvoice, total_net: "3.33", total_vat: "0.67", total_gross: "4.00" },
+    );
+    expect(params[2]).toBe(-3.33);
+    const printedSum = pdfItems.reduce((sum: number, it: any) => sum + it.total_price, 0);
+    expect(Math.round(printedSum * 100) / 100).toBe(-3.33);
+  });
+
   it("full credit note (no items) — totals negate parent invoice", async () => {
     const clientQuery = buildClientQuery({
       invoice: baseInvoice,

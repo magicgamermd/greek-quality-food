@@ -1,3 +1,4 @@
+import { computeLineTotal, roundMoney } from "@/lib/linePricing";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import AsyncSelect from "react-select/async";
 import { Trash2, Package, ArrowDownLeft, ArrowUpRight } from "lucide-react";
@@ -104,11 +105,12 @@ export function ReplacementForm({ partnerId, onChange }: ReplacementFormProps) {
   const [paymentMethod, setPaymentMethod] =
     useState<ReplacementPaymentMethod>("cash");
 
+  // Всеки ред закръглен като на сървъра (lib/linePricing.ts), после сборът —
+  // иначе „Разлика" можеше да се размине със записаната с една стотинка.
   const giveSum = useMemo(
     () =>
       giveItems.reduce(
-        (sum, it) =>
-          sum + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
+        (sum, it) => roundMoney(sum + computeLineTotal(it.quantity, it.unit_price)),
         0,
       ),
     [giveItems],
@@ -116,13 +118,12 @@ export function ReplacementForm({ partnerId, onChange }: ReplacementFormProps) {
   const retSum = useMemo(
     () =>
       returnItems.reduce(
-        (sum, it) =>
-          sum + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
+        (sum, it) => roundMoney(sum + computeLineTotal(it.quantity, it.unit_price)),
         0,
       ),
     [returnItems],
   );
-  const diff = giveSum - retSum;
+  const diff = roundMoney(giveSum - retSum);
   // Tolerance for "equal" — float math can leave 0.0001 residue when the
   // two sums are computed from different qty/price combos.
   const isZero = Math.abs(diff) < 0.005;
@@ -364,8 +365,7 @@ function ItemRow({
   onRemove: () => void;
 }) {
   const [loadError, setLoadError] = useState<string | null>(null);
-  const lineTotal =
-    (Number(item.quantity) || 0) * (Number(item.unit_price) || 0);
+  const lineTotal = computeLineTotal(item.quantity, item.unit_price);
 
   // Same endpoint Orders.tsx uses for the new-order picker so the user
   // sees identical results (partner-aware pricing, same name+sku label).

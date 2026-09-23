@@ -46,6 +46,12 @@ async function buildApp() {
   return app;
 }
 
+// Срокът е относителен спрямо днес. Беше заковано „2026-09-15" и от
+// 16.09.2026 тестът падаше — FEFO правилно пропуска изтеклите партиди.
+const FUTURE_EXPIRY = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .slice(0, 10);
+
 describe("commercial document — FEFO preview before fulfilment", () => {
   beforeEach(() => {
     mockQuery.mockReset();
@@ -114,7 +120,7 @@ describe("commercial document — FEFO preview before fulfilment", () => {
             {
               batch_id: 77,
               batch_number: "L-777",
-              expiry_date: "2026-09-15",
+              expiry_date: FUTURE_EXPIRY,
               purchase_price: 3.2,
               available: 10,
             },
@@ -139,7 +145,7 @@ describe("commercial document — FEFO preview before fulfilment", () => {
         name_bg: "Гръцко сирене",
         quantity: 4,
         batch_number: "L-777",
-        expiry_date: "2026-09-15",
+        expiry_date: FUTURE_EXPIRY,
       });
     } finally {
       await app.close();
