@@ -12,6 +12,7 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { formatEurAmount, formatEurUnitPrice } from "../utils/currency.js";
+import { getDisplayLine } from "../lib/line-pricing.js";
 
 function getFontPath(filename: string): string {
   const candidates = [
@@ -66,6 +67,8 @@ export interface OfferPdfData {
   totalNet: number;
   totalVat: number;
   totalGross: number;
+  /** ДДС ставка в %; 0 = без ДДС (износ/ВОП). По подразбиране 20. */
+  vatRate?: number;
   outputPath: string;
   // Settings → Документи toggle (migration 069). When true, the totals
   // block prints a "BGN | EUR" two-column layout. Default false →
@@ -209,10 +212,9 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
     data.items.forEach((it, idx) => {
       const y = doc.y;
       const qty = toNum(it.quantity);
-      const lineTotal = toNum(it.total_price);
-      // Show effective post-discount unit price така че Цена×Кол =
-      // Сума на документа.
-      const effectivePrice = qty > 0 ? lineTotal / qty : toNum(it.unit_price);
+      // Цената — от цената след отстъпката; стойността — записаната.
+      // (Не стойност ÷ количество: 6.317 излизаше 6.318.)
+      const { unitPrice: effectivePrice, lineTotal } = getDisplayLine(it);
       const cells = [
         String(idx + 1),
         it.name_bg || "—",
@@ -284,7 +286,8 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
       doc.y = y + 14;
     };
     totalLine("Сума без ДДС:", data.totalNet);
-    totalLine("ДДС 20%:", data.totalVat);
+    const vatRate = data.vatRate ?? 20;
+    totalLine(vatRate > 0 ? `ДДС ${vatRate}%:` : "ДДС 0%:", data.totalVat);
     doc
       .moveTo(totalsX + labelW - 60, doc.y - 2)
       .lineTo(totalsX + totalsBlockW, doc.y - 2)

@@ -10,6 +10,7 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { formatEurAmount, formatEurUnitPrice } from "../utils/currency.js";
+import { getDisplayLine } from "../lib/line-pricing.js";
 
 function getFontPath(filename: string): string {
   const candidates = [
@@ -33,6 +34,7 @@ export interface ProtocolItem {
   unit: string;
   unit_price: number | string;
   total_price: number | string;
+  discount_percent?: number | string | null;
 }
 
 export interface ProtocolData {
@@ -147,17 +149,20 @@ export async function generateProtocolPdf(data: ProtocolData): Promise<void> {
     y += 4;
     doc.font("Main").fontSize(9);
     for (const item of data.items) {
+      // Цената след отстъпката до записаната стойност — иначе при
+      // отстъпка протоколът показваше пълната цена до намалената сума.
+      const line = getDisplayLine(item);
       doc.text(item.name_bg, colsX[0], y, { width: 240 });
       doc.text(String(item.quantity), colsX[1], y, {
         width: 50,
         align: "right",
       });
       doc.text(item.unit, colsX[2], y, { width: 50, align: "left" });
-      doc.text(formatEurUnitPrice(item.unit_price), colsX[3], y, {
+      doc.text(formatEurUnitPrice(line.unitPrice), colsX[3], y, {
         width: 70,
         align: "right",
       });
-      doc.text(formatEurAmount(item.total_price), colsX[4], y, {
+      doc.text(formatEurAmount(line.lineTotal), colsX[4], y, {
         width: 70,
         align: "right",
       });

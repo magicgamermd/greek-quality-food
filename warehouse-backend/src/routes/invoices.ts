@@ -9,6 +9,7 @@ import {
 } from "../lib/permissions.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { computeInvoiceTotalsFromNet } from "../lib/invoice-totals.js";
+import { computeLineTotal, roundMoney } from "../lib/line-pricing.js";
 import {
   swapInvoiceNumbers,
   SwapInvoiceNumbersValidationError,
@@ -350,6 +351,22 @@ async function getCompanySettings(): Promise<{
   };
 }
 
+
+/**
+ * Цяло кредитно известие ли е: сборът на редовете, възстановени от
+ * поръчката, дава записаната му нето сума. При частично КИ не дава.
+ */
+function creditNoteLinesMatchTotals(items: any[], invoice: any): boolean {
+  const linesNet = items.reduce(
+    (sum: number, item: any) => roundMoney(sum + roundMoney(item.total_price)),
+    0,
+  );
+  return (
+    Math.abs(Math.abs(linesNet) - Math.abs(roundMoney(invoice.total_net))) <
+    0.005
+  );
+}
+
 export default async function invoiceRoutes(app: FastifyInstance) {
   // GET /invoices — admin and accountant only
   app.get(
@@ -554,6 +571,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
                 p.unit,
                 oi.quantity,
                 oi.unit_price,
+                oi.discount_percent,
                 oi.total_price
            FROM order_items oi
            LEFT JOIN products p ON p.id = oi.product_id
@@ -726,16 +744,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         //   total_net = sum(line.total_price)
         //   total_vat = total_net × vat_rate
         //   total_gross = total_net + total_vat
+        // Закръгляме до стотинка тук, а не да разчитаме колоната да го
+        // направи — PDF-ът и проверките за плащане получават същите числа,
+        // които се записват.
         const totalNetLines = items.reduce(
-          (sum: number, i: any) => sum + parseFloat(i.total_price),
+          (sum: number, i: any) => roundMoney(sum + roundMoney(i.total_price)),
           0,
         );
         const effectiveVatRate = body.include_vat ? body.vat_rate : 0;
         const totalNet = totalNetLines;
         const totalVat = body.include_vat
-          ? (totalNet * body.vat_rate) / 100
+          ? roundMoney((totalNet * body.vat_rate) / 100)
           : 0;
-        const totalGross = totalNet + totalVat;
+        const totalGross = roundMoney(totalNet + totalVat);
 
         // Invoice number: manual override (backfill an old-program invoice with
         // its original number) OR the normal sequential generator. A manual
@@ -944,15 +965,18 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         // GQF: order_items.total_price е NET (без ДДС). Recalculate
         // съответства на POST /invoices: total_vat = total_net × rate,
         // total_gross = total_net + total_vat.
+        // Закръглени тотали. Без това брутото беше 21.228 при платени 21.23
+        // и платена фактура не можеше да се регенерира (409 долу).
         const totalNetLines = items.reduce(
-          (sum: number, i: any) => sum + parseFloat(i.total_price),
+          (sum: number, i: any) => roundMoney(sum + roundMoney(i.total_price)),
           0,
         );
         const includeVat = body.include_vat ?? invoice.include_vat !== false;
         const vatRate = includeVat ? 20 : 0;
-        const totalNet = totalNetLines;
-        const totalVat = includeVat ? (totalNet * vatRate) / 100 : 0;
-        const totalGross = totalNet + totalVat;
+        const { totalNet, totalVat, totalGross } = computeInvoiceTotalsFromNet(
+          totalNetLines,
+          includeVat,
+        );
 
         const {
           rows: [{ total: paidTotal }],
@@ -1353,19 +1377,40 @@ export default async function invoiceRoutes(app: FastifyInstance) {
              ORDER BY oi.id`,
             [order.id],
           );
-          const items = isCreditNote
-            ? rawItems.map((item: any) => ({
-                ...item,
-                quantity: -Math.abs(parseFloat(item.quantity)),
-                unit_price: parseFloat(item.unit_price),
-                total_price: -Math.abs(parseFloat(item.total_price)),
-              }))
-            : rawItems;
+          // КИ, издадено след мигр. 105, носи отпечатаните си редове.
+          const storedCreditLines: any[] | null =
+            isCreditNote && Array.isArray(invoice.credit_note_lines)
+              ? invoice.credit_note_lines
+              : null;
+          const items = storedCreditLines
+            ? storedCreditLines
+            : isCreditNote
+              ? rawItems.map((item: any) => ({
+                  ...item,
+                  quantity: -Math.abs(parseFloat(item.quantity)),
+                  unit_price: parseFloat(item.unit_price),
+                  total_price: -Math.abs(parseFloat(item.total_price)),
+                }))
+              : rawItems;
+          // Старо КИ (без записани редове): възстановяваме от поръчката, но
+          // само ако е цяло. При частично редовете на поръчката не съвпадат
+          // с кредитираното и документът би излязъл грешен — отказваме.
+          if (
+            isCreditNote &&
+            !storedCreditLines &&
+            !creditNoteLinesMatchTotals(items, invoice)
+          ) {
+            return reply.status(409).send({
+              error:
+                "Това е частично кредитно известие — копие и английски вариант не могат да се възстановят от поръчката. Ползвайте оригинала.",
+            });
+          }
 
           const {
             rows: [partner],
           } = await query("SELECT * FROM partners WHERE id = $1", [
-            order.partner_id,
+            // Получателят на ФАКТУРАТА (може да е подменен при издаване).
+            invoice.partner_id ?? order.partner_id,
           ]);
           if (!partner) {
             return reply
@@ -1475,7 +1520,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           const {
             rows: [partner],
           } = await query("SELECT * FROM partners WHERE id = $1", [
-            order.partner_id,
+            // Получателят на ФАКТУРАТА (може да е подменен при издаване).
+            invoice.partner_id ?? order.partner_id,
           ]);
           if (!partner) {
             return reply
@@ -1558,19 +1604,40 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           );
           // For credit notes, negate qty + total (unit price stays positive)
           // to mirror the numbers rendered at issuance time.
-          const items = isCreditNote
-            ? rawItems.map((item: any) => ({
-                ...item,
-                quantity: -Math.abs(parseFloat(item.quantity)),
-                unit_price: parseFloat(item.unit_price),
-                total_price: -Math.abs(parseFloat(item.total_price)),
-              }))
-            : rawItems;
+          // КИ, издадено след мигр. 105, носи отпечатаните си редове.
+          const storedCreditLines: any[] | null =
+            isCreditNote && Array.isArray(invoice.credit_note_lines)
+              ? invoice.credit_note_lines
+              : null;
+          const items = storedCreditLines
+            ? storedCreditLines
+            : isCreditNote
+              ? rawItems.map((item: any) => ({
+                  ...item,
+                  quantity: -Math.abs(parseFloat(item.quantity)),
+                  unit_price: parseFloat(item.unit_price),
+                  total_price: -Math.abs(parseFloat(item.total_price)),
+                }))
+              : rawItems;
+          // Старо КИ (без записани редове): възстановяваме от поръчката, но
+          // само ако е цяло. При частично редовете на поръчката не съвпадат
+          // с кредитираното и документът би излязъл грешен — отказваме.
+          if (
+            isCreditNote &&
+            !storedCreditLines &&
+            !creditNoteLinesMatchTotals(items, invoice)
+          ) {
+            return reply.status(409).send({
+              error:
+                "Това е частично кредитно известие — копие и английски вариант не могат да се възстановят от поръчката. Ползвайте оригинала.",
+            });
+          }
 
           const {
             rows: [partner],
           } = await query("SELECT * FROM partners WHERE id = $1", [
-            order.partner_id,
+            // Получателят на ФАКТУРАТА (може да е подменен при издаване).
+            invoice.partner_id ?? order.partner_id,
           ]);
           if (!partner) {
             return reply
@@ -1683,6 +1750,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
 
       // Send email via SMTP
       try {
+        // Сумата е в ЕВРО (писмото казваше „лв.“), а подписът — фирмата от
+        // настройките, както е на фактурата (писмото казваше „ЕООД“).
+        const emailCompany = await getCompanySettings();
         const totalGrossEur = formatEurAmount(
           invoice.total_gross,
           (invoice as any).currency ?? null,
@@ -1705,7 +1775,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           from: process.env.SMTP_FROM || "invoices@greek-quality-food.bg",
           to: recipientEmail,
           subject: `Фактура ${invoice.invoice_number} — Greek Quality Food`,
-          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} лв.\n\nС уважение,\nGreek Quality Food ЕООД`,
+          text: `Уважаеми ${invoice.partner_name},\n\nПриложена е фактура ${invoice.invoice_number}.\n\nОбща сума: ${totalGrossEur} €\n\nС уважение,\n${emailCompany.company_name || "Greek Quality Food"}`,
           attachments: [
             {
               filename: `${invoice.invoice_number}.pdf`,
@@ -1861,24 +1931,38 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             }
             selectedItems.push({ ...oi, _partialQty: req.quantity });
           }
-          // GQF: order_items.unit_price е NET (без ДДС). При partial
-          // credit note: sumNet = sum(qty × unit_price), ДДС се добавя
-          // отгоре. Mirror на invoice creation logic.
-          let sumNetRaw = 0;
+          // GQF: цените са NET, ДДС се добавя отгоре — като във фактурата.
+          // Всеки ред се кредитира по ФАКТУРИРАНАТА си стойност:
+          //   • цял ред → записаната total_price (точно каквото е платено);
+          //   • част от ред → същото правило като при поръчката, С отстъпката.
+          // Преди беше кол. × цена без отстъпката: ред 2.8 × 6.317 при 10%,
+          // фактуриран 15.92, се кредитираше за 17.69. И сумата се
+          // закръгляше веднъж накрая, а редовете поотделно — с ±0.01 разлика.
+          let sumNet = 0;
           for (const sel of selectedItems) {
-            sumNetRaw += sel._partialQty * parseFloat(sel.unit_price);
+            const wholeLine =
+              Math.abs(sel._partialQty - parseFloat(sel.quantity)) < 0.0005;
+            sel._lineNet = wholeLine
+              ? roundMoney(sel.total_price)
+              : computeLineTotal(
+                  sel._partialQty,
+                  sel.unit_price,
+                  sel.discount_percent,
+                );
+            sumNet = roundMoney(sumNet + sel._lineNet);
           }
-          sumNetRaw = Math.round(sumNetRaw * 100) / 100;
-          const sumVat = includeVat ? Math.round(sumNetRaw * 20) / 100 : 0;
-          const sumGross = sumNetRaw + sumVat;
-          totalNet = -Math.abs(sumNetRaw);
-          totalVat = -Math.abs(Math.round(sumVat * 100) / 100);
-          totalGross = -Math.abs(Math.round(sumGross * 100) / 100);
+          const credited = computeInvoiceTotalsFromNet(sumNet, includeVat);
+          totalNet = -Math.abs(credited.totalNet);
+          totalVat = -Math.abs(credited.totalVat);
+          totalGross = -Math.abs(credited.totalGross);
         } else {
-          // Full credit note — negate parent invoice totals (backward-compat)
+          // Full credit note — negate parent invoice totals (backward-compat).
+          // Редовете носят записаната си стойност, за да се съберат точно
+          // в тоталите на оригинала.
           selectedItems = allOrderItems.map((it) => ({
             ...it,
             _partialQty: parseFloat(it.quantity),
+            _lineNet: roundMoney(it.total_price),
           }));
           totalNet = -Math.abs(parseFloat(original.total_net));
           totalVat = includeVat ? -Math.abs(parseFloat(original.total_vat)) : 0;
@@ -1934,6 +2018,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
 
         // Build PDF items от selectedItems — negate quantities + total_price.
         // unit_price остава положителна (КИ-то показва "цена × −количество").
+        // discount_percent минава през ...sel, така КИ-то печата същата цена
+        // след отстъпка като фактурата, а редовете му дават точно тоталите.
         const pdfItems = selectedItems.map((sel) => {
           const unitPrice = parseFloat(sel.unit_price);
           const partialQty = sel._partialQty;
@@ -1941,9 +2027,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             ...sel,
             quantity: -Math.abs(partialQty),
             unit_price: unitPrice,
-            total_price: -Math.abs(
-              Math.round(partialQty * unitPrice * 100) / 100,
-            ),
+            total_price: -Math.abs(sel._lineNet),
           };
         });
 
@@ -1985,11 +2069,24 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           showBgn: company.show_bgn_on_invoice === true,
         });
 
-        // Store PDF path
-        await client.query("UPDATE invoices SET pdf_path = $1 WHERE id = $2", [
-          pdfPath,
-          creditNote.id,
-        ]);
+        // Файлът + ТОЧНО отпечатаните редове (мигр. 105). Копие, английски
+        // вариант или изгубен файл се чертаят от тях — не от поръчката, чиито
+        // редове при частично КИ не съвпадат с кредитираното.
+        const printedLines = pdfItems.map((item) => ({
+          name_bg: item.name_bg ?? null,
+          name_en: item.name_en ?? null,
+          sku: item.sku ?? null,
+          unit: item.unit ?? null,
+          brand: item.brand ?? null,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          discount_percent: item.discount_percent ?? 0,
+          total_price: item.total_price,
+        }));
+        await client.query(
+          "UPDATE invoices SET pdf_path = $1, credit_note_lines = $3 WHERE id = $2",
+          [pdfPath, creditNote.id, JSON.stringify(printedLines)],
+        );
 
         return { ...creditNote, pdf_path: pdfPath };
       });

@@ -7,6 +7,7 @@ import {
   toEurAmount,
 } from "../utils/currency.js";
 import { mapUnit, mapUnitEn } from "./units.js";
+import { getDisplayLine } from "../lib/line-pricing.js";
 
 // Resolve font paths — works in both src/ and dist/
 function getFontPath(filename: string): string {
@@ -1026,15 +1027,11 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       for (let idx = 0; idx < data.items.length; idx += 1) {
         const item = data.items[idx];
         const qty = toNum(item.quantity);
-        const netTotal = toNum(item.total_price);
-        // Discount колоната е премахната → показваме EFFECTIVE цена
-        // (post-discount), за да съответства Цена × Кол = Стойност на
-        // печатния документ. При qty=0 fallback-ваме към storage-натия
-        // unit_price (per-unit net).
-        const effectiveNetPrice =
-          qty > 0 ? netTotal / qty : toNum(item.unit_price);
-        const price = effectiveNetPrice;
-        const total = netTotal;
+        // Цената идва от ЦЕНАТА (след отстъпката), стойността — записаната.
+        // Преди цената се смяташе като стойност ÷ количество и 6.317
+        // излизаше 6.318 (виж lib/line-pricing.ts). Кредитното известие
+        // подава отрицателни количество и стойност — правилото е същото.
+        const { unitPrice: price, lineTotal: total } = getDisplayLine(item);
         const description = en
           ? item.name_en || item.name_bg
           : item.name_bg || item.name_en;

@@ -4,6 +4,11 @@ import path from "node:path";
 import { mapUnit, mapUnitEn } from "./units.js";
 import { formatUnitPricePlain } from "../utils/currency.js";
 import { displayBatchNumber } from "../utils/batch-display.js";
+import {
+  computeLineTotal,
+  getDisplayLine,
+  roundMoney,
+} from "../lib/line-pricing.js";
 
 // ── Fonts ──────────────────────────────────────────────────────────
 function getFontPath(filename: string): string {
@@ -368,7 +373,10 @@ export function computeIncomingReceiptTotals(
   let subtotal = 0;
   let discountTotal = 0;
 
-  const round2 = (n: number) => Math.round(n * 100) / 100;
+  // Точно закръгляне — същото като ROUND в refreshIncomingTotalAmount,
+  // иначе при точна половин стотинка разписката показваше стотинка по-малко
+  // от записаното (2.5 × 4.01 = 10.025 → 10.02 вместо 10.03).
+  const round2 = roundMoney;
 
   for (const item of items) {
     const qty = toNum(item.quantity);
@@ -376,7 +384,7 @@ export function computeIncomingReceiptTotals(
     // Закръгляме ПО РЕД (както показваме клетката) — така който събере
     // колоната „Стойност" на калкулатор, получава точно Междинна/Общо.
     // (Същото правило ползва и refreshIncomingTotalAmount за header-а.)
-    const baseTotal = round2(qty * price);
+    const baseTotal = computeLineTotal(qty, price);
     const rawLineTotal = round2(toNum(item.total_price));
     const lineTotal =
       rawLineTotal > 0 ? Math.min(rawLineTotal, baseTotal) : baseTotal;
@@ -1036,7 +1044,7 @@ function drawIncomingTotalsBlock(
   row("Отстъпка:", discountTotal, false, { negative: discountTotal > 0 });
 
   if (hasVat) {
-    const vatAmount = Math.round(total * (rate / 100) * 100) / 100;
+    const vatAmount = roundMoney(total * (rate / 100));
     row("Данъчна основа:", total);
     row(`ДДС ${formatRate(rate)}%:`, vatAmount);
     doc
@@ -1044,7 +1052,7 @@ function drawIncomingTotalsBlock(
       .lineTo(x + blockWidth, y - 1)
       .lineWidth(0.5)
       .stroke();
-    row("Общо с ДДС:", Math.round((total + vatAmount) * 100) / 100, true);
+    row("Общо с ДДС:", roundMoney(total + vatAmount), true);
   } else {
     doc
       .moveTo(x, y - 1)
@@ -1602,16 +1610,12 @@ export async function generateStockDispatchPdf(
     for (let idx = 0; idx < data.items.length; idx += 1) {
       const item = data.items[idx];
       const qty = toNum(item.quantity);
-      const price = toNum(item.unit_price);
-      const baseTotal = qty * price;
-      const explicitTotal = toNum(item.total_price);
-      const lineTotal = explicitTotal > 0 ? explicitTotal : baseTotal;
-      subtotalEur += lineTotal;
-
-      // Effective post-discount цена (NET).
-      const effectivePrice = qty > 0 ? lineTotal / qty : price;
-      const displayPrice = effectivePrice;
-      const displayLineTotal = lineTotal;
+      // Цената — от цената след отстъпката; стойността — записаната (вкл.
+      // 0 при безплатен ред). Преди цената беше стойност ÷ количество
+      // (6.317 → 6.318), а ред със стойност 0 тихо ставаше кол. × цена.
+      const { unitPrice: displayPrice, lineTotal: displayLineTotal } =
+        getDisplayLine(item);
+      subtotalEur = roundMoney(subtotalEur + displayLineTotal);
 
       rows.push([
         String(idx + 1),
@@ -1671,9 +1675,11 @@ export async function generateStockDispatchPdf(
     //   totalNet = sum (както е)
     //   vatAmount = totalNet × (vat_rate / 100)
     //   totalGross = totalNet + vatAmount
-    const totalNetEur = subtotalEur;
-    const vatAmountEur = totalNetEur * (data.vat_rate / 100);
-    const totalGrossEur = totalNetEur + vatAmountEur;
+    // Закръглени като във фактурата — иначе „Словом“ получава 24.00599…
+    // и при дроб ≥ .995 изписва „100 цента“.
+    const totalNetEur = roundMoney(subtotalEur);
+    const vatAmountEur = roundMoney(totalNetEur * (data.vat_rate / 100));
+    const totalGrossEur = roundMoney(totalNetEur + vatAmountEur);
 
     ensurePageSpace(doc, 110, drawContinuationHeading);
     drawStockDispatchTotalsBlock(

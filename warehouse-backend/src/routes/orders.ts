@@ -29,6 +29,14 @@ import { generateOfferPdf } from "../services/offer-pdf.js";
 import { generateProtocolPdf } from "../services/protocol-pdf.js";
 import { generatePackingLabelPdf } from "../services/packing-label-pdf.js";
 import { isRazpiskaEligible } from "../constants/partners.js";
+import { computeInvoiceTotalsFromNet } from "../lib/invoice-totals.js";
+import {
+  computeLineTotal,
+  roundDiscountPercent,
+  roundMoney,
+  roundQuantity,
+  roundUnitPrice,
+} from "../lib/line-pricing.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -109,13 +117,26 @@ function isLatin(text: string): boolean {
 // (ползва се вместо FEFO, но пак се проверява за изтекъл срок и наличност).
 const orderItemSchema = z.object({
   product_id: z.number().int(),
-  quantity: z.number().positive(),
-  unit_price: z.number().min(0).optional(),
+  // Количество и цена се закръглят до точността на колоните (NUMERIC(12,3))
+  // още тук — иначе total_price се смяташе от незакръглената стойност
+  // (напр. цена от ценова листа с 4 знака), а в базата отиваше закръглената.
+  quantity: z
+    .number()
+    .positive()
+    .transform(roundQuantity)
+    .refine((qty) => qty > 0, "Количеството е под 0.001"),
+  unit_price: z.number().min(0).transform(roundUnitPrice).optional(),
   // По избор — ръчно подадена партида за този ред (вместо автоматично FEFO).
   batch_id: z.number().int().positive().optional(),
   // Per-line отстъпка % (0–100). Прилага се при запис на total_price.
   // Default 0 → backward-compatible за стари callers които не подават.
-  discount_percent: z.number().min(0).max(100).optional().default(0),
+  discount_percent: z
+    .number()
+    .min(0)
+    .max(100)
+    .transform(roundDiscountPercent)
+    .optional()
+    .default(0),
   // Batch F1: per-line state. Optional; defaults to 'normal' on the
   // backend side via orderLineStatusSchema's .default.
   line_status: orderLineStatusSchema.optional(),
@@ -1314,16 +1335,19 @@ export default async function orderRoutes(app: FastifyInstance) {
                   { statusCode: 400 },
                 );
               }
-              const unitPrice =
+              const unitPrice = roundUnitPrice(
                 item.unit_price ??
-                priceMap.get(item.product_id) ??
-                (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
-                0;
+                  priceMap.get(item.product_id) ??
+                  (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+                  0,
+              );
               const discountPct = item.discount_percent ?? 0;
-              const totalPrice = Number(
-                (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(
-                  2,
-                ),
+              // Точно закръгляне (като Postgres ROUND). Float toFixed(2)
+              // режеше точната половин стотинка: 1.54 × 19.75 → 30.41.
+              const totalPrice = computeLineTotal(
+                item.quantity,
+                unitPrice,
+                discountPct,
               );
               const isReturning = item.is_returning ?? false;
               if (item.line_status !== "awaiting") {
@@ -1331,7 +1355,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                 // total so the order's total_amount is the SIGNED
                 // difference (positive → customer pays the difference,
                 // negative → we refund). Spec section 4.1.
-                total += isReturning ? -totalPrice : totalPrice;
+                total = roundMoney(total + (isReturning ? -totalPrice : totalPrice));
               }
               const {
                 rows: [orderItem],
@@ -1675,9 +1699,13 @@ export default async function orderRoutes(app: FastifyInstance) {
             productId = newProduct.id;
           }
 
+          // Схемата подава total_price = 0, когато Comarch не го е дал —
+          // нулата значи „изчисли", не „безплатно".
           const totalPrice =
-            item.total_price || item.quantity * item.unit_price;
-          calculatedTotal += totalPrice;
+            item.total_price > 0
+              ? roundMoney(item.total_price)
+              : computeLineTotal(item.quantity, item.unit_price);
+          calculatedTotal = roundMoney(calculatedTotal + totalPrice);
 
           // Snapshot product identity at the moment of INSERT (Batch B).
           const {
@@ -1990,17 +2018,24 @@ export default async function orderRoutes(app: FastifyInstance) {
 
             for (const item of body.items) {
               const prod = productMap.get(item.product_id);
-              const unitPrice =
+              const unitPrice = roundUnitPrice(
                 item.unit_price ??
-                priceMap.get(item.product_id) ??
-                (prod?.selling_price ? parseFloat(prod.selling_price) : 0);
-              const discountPct = item.discount_percent ?? 0;
-              const totalPrice = Number(
-                (item.quantity * unitPrice * (1 - discountPct / 100)).toFixed(
-                  2,
-                ),
+                  priceMap.get(item.product_id) ??
+                  (prod?.selling_price ? parseFloat(prod.selling_price) : 0),
               );
-              totalAmount += totalPrice;
+              const discountPct = item.discount_percent ?? 0;
+              // Същото правило като при създаване (lib/line-pricing.ts).
+              const totalPrice = computeLineTotal(
+                item.quantity,
+                unitPrice,
+                discountPct,
+              );
+              // Чакащите редове не влизат в сумата — както при създаване и
+              // както във фактурата. Иначе редакция на смесена поръчка вдигаше
+              // total_amount над фактурираното и плащането изглеждаше непълно.
+              if (((item as any).line_status ?? "normal") !== "awaiting") {
+                totalAmount = roundMoney(totalAmount + totalPrice);
+              }
 
               // Snapshot the product identity AT THE MOMENT this line is
               // (re-)created. Existing rows that the user did not change are
@@ -3405,18 +3440,23 @@ export default async function orderRoutes(app: FastifyInstance) {
        FROM order_items oi
        LEFT JOIN products p ON p.id = oi.product_id
        WHERE oi.order_id = $1
+         AND oi.line_status != 'awaiting'
        ORDER BY oi.id`,
       [orderId],
     );
+    // Чакащите редове не се фактурират — както POST /invoices и
+    // PUT /invoices/:id/regenerate. Без филтъра редакция на смесена
+    // поръчка вдигаше сумата на вече издадената фактура.
 
-    const totalNet = items.reduce(
-      (sum: number, i: any) => sum + parseFloat(i.total_price),
-      0,
-    );
     const includeVat = invoice.include_vat !== false;
     const vatRate = includeVat ? 20 : 0;
-    const totalVat = includeVat ? totalNet * 0.2 : 0;
-    const totalGross = totalNet + totalVat;
+    const { totalNet, totalVat, totalGross } = computeInvoiceTotalsFromNet(
+      items.reduce(
+        (sum: number, i: any) => roundMoney(sum + roundMoney(i.total_price)),
+        0,
+      ),
+      includeVat,
+    );
 
     const {
       rows: [{ total: paidTotal }],
@@ -3445,9 +3485,14 @@ export default async function orderRoutes(app: FastifyInstance) {
       [totalNet, totalVat, totalGross, invoiceId],
     );
 
+    // Получателят е този НА ФАКТУРАТА (може да е подменен при издаване),
+    // не партньорът на поръчката — иначе преиздадената фактура сменя
+    // получателя. PUT /invoices/:id/regenerate вече прави същото.
     const {
       rows: [partner],
-    } = await db.query("SELECT * FROM partners WHERE id = $1", [partnerId]);
+    } = await db.query("SELECT * FROM partners WHERE id = $1", [
+      invoice.partner_id ?? partnerId,
+    ]);
 
     const company = await getCompanySettings(db);
     const invoicesDir = path.resolve("uploads", "invoices");
@@ -3780,6 +3825,8 @@ export default async function orderRoutes(app: FastifyInstance) {
             product_code: i.sku || "",
             quantity: parseFloat(i.quantity),
             unit_price: parseFloat(i.unit_price),
+            total_price: parseFloat(i.total_price),
+            discount_percent: parseFloat(i.discount_percent ?? 0),
             is_returning: i.is_returning === true,
           })),
           total: parseFloat(order.total_amount ?? 0),
@@ -4088,7 +4135,7 @@ export default async function orderRoutes(app: FastifyInstance) {
   // OF-NNNNNNN PDF used by the cashier to print a take-home offer for
   // the customer. Stock is NOT deducted; the order is still convertible
   // to pending → confirmed via POST /:id/unquote.
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { include_vat?: string } }>(
     "/:id/offer-pdf",
     { preHandler: ordersManagePreHandler },
     async (request, reply) => {
@@ -4110,12 +4157,27 @@ export default async function orderRoutes(app: FastifyInstance) {
       const offerNumber = `OF-${String(order.order_number || order.id).padStart(7, "0")}`;
       const company = await getCompanySettings();
 
-      const totalGross = items.reduce(
-        (sum: number, it: any) => sum + parseFloat(it.total_price || 0),
-        0,
-      );
-      const totalNet = totalGross / 1.2;
-      const totalVat = totalGross - totalNet;
+      // В GQF order_items.total_price е НЕТО — ДДС се добавя отгоре, както
+      // във фактурата. Преди тук беше MERT-M правилото „сумата е с ДДС,
+      // дели на 1.2" и офертата излизаше ~17% под фактурата
+      // (нето 100 → „Обща сума 100" вместо 120). Чакащите редове не влизат —
+      // те не се фактурират.
+      const offerNet = items
+        .filter((it: any) => it.line_status !== "awaiting")
+        .reduce((sum: number, it: any) => roundMoney(sum + roundMoney(it.total_price)), 0);
+      // ДДС като на стоковата разписка: по издадената фактура, ако има;
+      // иначе по заявката (по подразбиране с ДДС). Износ/ВОП е без ДДС.
+      let offerIncludesVat = request.query.include_vat !== "false";
+      if (order.invoice_id) {
+        const {
+          rows: [inv],
+        } = await query("SELECT include_vat FROM invoices WHERE id = $1", [
+          order.invoice_id,
+        ]);
+        offerIncludesVat = inv?.include_vat !== false;
+      }
+      const { totalNet, totalVat, totalGross, vatRate } =
+        computeInvoiceTotalsFromNet(offerNet, offerIncludesVat);
 
       const pdfDir = path.resolve(process.cwd(), "data", "documents");
       if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
@@ -4137,17 +4199,21 @@ export default async function orderRoutes(app: FastifyInstance) {
           email: company.email,
           mol: company.mol,
         },
-        items: items.map((i: any) => ({
-          name_bg: i.name_bg,
-          quantity: parseFloat(i.quantity),
-          unit: i.unit || "бр",
-          unit_price: parseFloat(i.unit_price),
-          discount_percent: parseFloat(i.discount_percent ?? 0),
-          total_price: parseFloat(i.total_price),
-        })),
+        // Същите редове, от които е сметната сумата — без чакащите.
+        items: items
+          .filter((i: any) => i.line_status !== "awaiting")
+          .map((i: any) => ({
+            name_bg: i.name_bg,
+            quantity: parseFloat(i.quantity),
+            unit: i.unit || "бр",
+            unit_price: parseFloat(i.unit_price),
+            discount_percent: parseFloat(i.discount_percent ?? 0),
+            total_price: parseFloat(i.total_price),
+          })),
         totalNet,
         totalVat,
         totalGross,
+        vatRate,
         outputPath,
         showBgn: company.show_bgn_on_invoice === true,
       });
@@ -4418,6 +4484,7 @@ export default async function orderRoutes(app: FastifyInstance) {
           unit: it.unit || "бр.",
           unit_price: it.unit_price,
           total_price: it.total_price,
+          discount_percent: it.discount_percent,
         })),
         totalAmount,
         outputPath,
