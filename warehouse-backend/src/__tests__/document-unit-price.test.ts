@@ -223,4 +223,24 @@ describe("печатна единична цена = въведената", () =
     expect(texts.some((text) => text.startsWith("6,317"))).toBe(true);
     expect(texts.some((text) => text.startsWith("6,318"))).toBe(false);
   });
+
+  it("ИЗДАДЕНА преди поправката фактура се чертае точно както е издадена (6,318)", async () => {
+    // Сървърът няма постоянен диск за PDF-ите — след всеки деплой старите
+    // фактури се чертаят наново. Те трябва да изглеждат като издадените.
+    const texts = await printedStrings(() =>
+      generateInvoicePdf(
+        invoiceData(order259, { unitPriceRule: "legacy_total_div_qty" }),
+      ),
+    );
+    expect(texts).toContain("6,318");
+    expect(texts).not.toContain("6,317");
+    expect(texts).toContain("17,69");
+  });
+
+  it("нова фактура (правило entered) печата въведената цена", async () => {
+    const texts = await printedStrings(() =>
+      generateInvoicePdf(invoiceData(order259, { unitPriceRule: "entered" })),
+    );
+    expect(texts).toContain("6,317");
+  });
 });

@@ -3503,6 +3503,8 @@ export default async function orderRoutes(app: FastifyInstance) {
     );
 
     await generateInvoicePdf({
+      // Издадените до 23.09.2026 — както са издадени (мигр. 106).
+      unitPriceRule: updatedInvoice?.unit_price_rule,
       invoice: updatedInvoice,
       partner,
       company,
