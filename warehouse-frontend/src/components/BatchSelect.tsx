@@ -114,6 +114,47 @@ function batchLabel(batch: Batch): string {
   return `Лот #${batch.id} · без срок · ${qty}`;
 }
 
+/**
+ * Стойност на селекта за ред от редактирана поръчка, който пази досегашното
+ * си разпределение по партиди (order_item_batches). Не е id на партида.
+ */
+export const KEPT_BATCHES_VALUE = "kept";
+
+/** Една досегашна част от реда: колко е изписано от коя партида. */
+export interface KeptBatchAllocation {
+  batch_id: number;
+  batch_number: string | null;
+  expiry_date: string | null;
+  quantity: number;
+}
+
+function allocationName(allocation: KeptBatchAllocation): string {
+  return (
+    displayBatchNumber(allocation.batch_number) ??
+    (allocation.expiry_date
+      ? `срок ${formatDate(allocation.expiry_date)}`
+      : `лот #${allocation.batch_id}`)
+  );
+}
+
+/**
+ * Надпис за досегашното разпределение: една партида → номер и срок;
+ * няколко → „2 партиди: 00170926 (0.5) + 00250926 (2.5)“.
+ */
+function keptAllocationsLabel(
+  allocations: KeptBatchAllocation[],
+): string {
+  if (allocations.length === 1) {
+    const [only] = allocations;
+    const expiry = only.expiry_date ? formatDate(only.expiry_date) : "без срок";
+    return `${allocationName(only)} · ${expiry} · в поръчката`;
+  }
+  const parts = allocations
+    .map((allocation) => `${allocationName(allocation)} (${allocation.quantity})`)
+    .join(" + ");
+  return `${allocations.length} партиди: ${parts}`;
+}
+
 interface BatchSelectProps {
   productId: string;
   /** Selected batch id (as string, matching the row's batch_id field). */
@@ -124,6 +165,12 @@ interface BatchSelectProps {
    */
   onChange: (batchId: string, expiryDate: string) => void;
   disabled?: boolean;
+  /**
+   * Редакция: досегашното разпределение на реда. Показва се като опция
+   * KEPT_BATCHES_VALUE, дори партидите вече да са на нула — стоката им е
+   * в тази поръчка и се връща при запис.
+   */
+  keptAllocations?: KeptBatchAllocation[];
 }
 
 /**
@@ -135,7 +182,9 @@ export function BatchSelect({
   value,
   onChange,
   disabled,
+  keptAllocations,
 }: BatchSelectProps) {
+  const hasKept = !!keptAllocations && keptAllocations.length > 0;
   const { batches, fefoBatch, isLoading, isError } =
     useProductBatches(productId);
 
@@ -180,24 +229,43 @@ export function BatchSelect({
     return <span className="text-xs text-red-500">грешка при зареждане</span>;
   }
 
-  if (batches.length === 0) {
+  if (batches.length === 0 && !hasKept) {
     // No stock → leave batch_id empty; backend decides (back-order for
     // paid lines, or a clean 400). Do NOT hard-block here.
     return <span className="text-xs text-gray-400">няма налична партида</span>;
   }
+
+  // Клетката е тясна — пълният надпис на избраното се вижда при посочване.
+  const selectedBatch = batches.find((batch) => String(batch.id) === value);
+  const selectedLabel =
+    value === KEPT_BATCHES_VALUE && keptAllocations?.length
+      ? keptAllocationsLabel(keptAllocations)
+      : selectedBatch
+        ? batchLabel(selectedBatch)
+        : undefined;
 
   return (
     <Select
       value={value}
       disabled={disabled}
       className="text-xs"
+      title={selectedLabel}
       aria-label="Избор на партида"
       onChange={(event) => {
         const id = event.target.value;
+        if (id === KEPT_BATCHES_VALUE && keptAllocations?.[0]) {
+          onChange(id, keptAllocations[0].expiry_date ?? "");
+          return;
+        }
         const chosen = batches.find((batch) => String(batch.id) === id);
         onChange(id, chosen?.expiry_date ?? "");
       }}
     >
+      {keptAllocations && keptAllocations.length > 0 && (
+        <option value={KEPT_BATCHES_VALUE}>
+          {keptAllocationsLabel(keptAllocations)}
+        </option>
+      )}
       {batches.map((batch) => {
         const expired = isBatchExpired(batch.expiry_date);
         return (

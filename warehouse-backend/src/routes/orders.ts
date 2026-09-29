@@ -128,6 +128,21 @@ const orderItemSchema = z.object({
   unit_price: z.number().min(0).transform(roundUnitPrice).optional(),
   // По избор — ръчно подадена партида за този ред (вместо автоматично FEFO).
   batch_id: z.number().int().positive().optional(),
+  // Само при редакция: точното досегашно разпределение на реда по партиди
+  // (order_item_batches). Формата го праща за редове, чиито партида и
+  // количество не са пипани — иначе ред, изписан от 2 партиди, се свиваше
+  // до първата и записът падаше с „Недостатъчна наличност“. Има предимство
+  // пред batch_id; сумата трябва да е равна на quantity.
+  batch_allocations: z
+    .array(
+      z.object({
+        batch_id: z.number().int().positive(),
+        quantity: z.number().positive().transform(roundQuantity),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .optional(),
   // Per-line отстъпка % (0–100). Прилага се при запис на total_price.
   // Default 0 → backward-compatible за стари callers които не подават.
   discount_percent: z
@@ -1028,6 +1043,7 @@ export default async function orderRoutes(app: FastifyInstance) {
               (
                 SELECT COALESCE(
                   json_agg(json_build_object(
+                    'batch_id', ab.id,
                     'batch_number', ab.batch_number,
                     'expiry_date', ab.expiry_date,
                     'quantity', oib.quantity
@@ -2094,6 +2110,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                     item.quantity,
                     lineStatus === "paid_not_taken",
                     item.batch_id,
+                    item.batch_allocations,
                   );
                   expiryWarnings.push(...deduction.warnings);
                   const firstBatch = deduction.allocations[0]?.batch_id ?? null;
@@ -3257,6 +3274,82 @@ export default async function orderRoutes(app: FastifyInstance) {
   }
 
   /**
+   * Редакция: изписва реда наново по досегашното му разпределение по
+   * партиди. Стоката вече е върната по същите партиди от
+   * restoreOrderItemsToInventory, така че това възстановява предишното
+   * състояние. Срокът на годност НЕ се проверява — стоката вече е продадена,
+   * редакцията не е нова продажба. Наличността се проверява (друг ред в
+   * същата редакция може да е взел от партидата); откриващата 'НАЧАЛНО'
+   * партида на back-order ред може да остане в минус, както при създаване.
+   */
+  async function takeKeptAllocations(
+    client: PoolClient,
+    productId: number,
+    warehouseId: number,
+    qty: number,
+    allowBackorder: boolean,
+    kept: { batch_id: number; quantity: number }[],
+  ): Promise<{ batch_id: number; quantity: number; unit_cost: number }[]> {
+    const merged = new Map<number, number>();
+    for (const part of kept) {
+      merged.set(
+        part.batch_id,
+        roundQuantity((merged.get(part.batch_id) ?? 0) + part.quantity),
+      );
+    }
+    const total = roundQuantity(
+      [...merged.values()].reduce((sum, part) => sum + part, 0),
+    );
+    if (Math.abs(total - qty) > 0.0005) {
+      throw Object.assign(
+        new Error(
+          `Разпределението по партиди (${total}) не съвпада с количеството (${qty})`,
+        ),
+        { statusCode: 400 },
+      );
+    }
+
+    const result: { batch_id: number; quantity: number; unit_cost: number }[] =
+      [];
+    for (const [batchId, partQty] of merged) {
+      const { rows } = await client.query(
+        "SELECT batch_number, purchase_price FROM batches WHERE id = $1 AND product_id = $2",
+        [batchId, productId],
+      );
+      const row = rows[0];
+      if (!row) {
+        throw Object.assign(
+          new Error(`Партида ${batchId} не е от този продукт`),
+          { statusCode: 400 },
+        );
+      }
+      // Заключваме реда за наличност, както ръчният и FEFO пътят.
+      const { rows: stockRows } = await client.query(
+        `SELECT quantity FROM inventory
+          WHERE product_id = $1 AND warehouse_id = $2 AND batch_id = $3
+          FOR UPDATE`,
+        [productId, warehouseId, batchId],
+      );
+      const available = parseFloat(stockRows[0]?.quantity ?? "0");
+      const isOpening = row.batch_number === "НАЧАЛНО";
+      if (!(isOpening && allowBackorder) && available < partQty - 0.0005) {
+        throw Object.assign(
+          new Error(
+            `Недостатъчна наличност за партида ${row.batch_number ?? batchId}: налични ${available}, искани ${partQty}`,
+          ),
+          { statusCode: 409 },
+        );
+      }
+      result.push({
+        batch_id: batchId,
+        quantity: partQty,
+        unit_cost: parseFloat(row.purchase_price ?? "0"),
+      });
+    }
+    return result;
+  }
+
+  /**
    * GQF batch-aware изписване по партиди (FEFO или ръчно подадена партида).
    *
    * Изписва `qty` за конкретен поръчков ред:
@@ -3281,6 +3374,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     qty: number,
     allowBackorder: boolean,
     manualBatchId?: number,
+    keptAllocations?: { batch_id: number; quantity: number }[],
   ): Promise<{
     cost: number;
     warnings: string[];
@@ -3293,7 +3387,16 @@ export default async function orderRoutes(app: FastifyInstance) {
     }[];
     let warnings: string[] = [];
 
-    if (manualBatchId) {
+    if (keptAllocations && keptAllocations.length > 0) {
+      allocations = await takeKeptAllocations(
+        client,
+        productId,
+        warehouseId,
+        qty,
+        allowBackorder,
+        keptAllocations,
+      );
+    } else if (manualBatchId) {
       const { rows } = await client.query(
         `SELECT i.batch_id, b.batch_number, b.expiry_date, b.purchase_price,
                 i.quantity AS available
