@@ -51,6 +51,8 @@ import {
   BatchSelect,
   isBatchExpired,
   expiryColorClass,
+  KEPT_BATCHES_VALUE,
+  type KeptBatchAllocation,
 } from "@/components/BatchSelect";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
@@ -267,6 +269,12 @@ interface OrderItemRow {
   batch_id: string;
   /** Срок на годност на избраната партида (read-only display). */
   expiry_date: string;
+  /** Редакция: досегашното разпределение на реда по партиди. */
+  kept_allocations?: KeptBatchAllocation[];
+  /** Редакция: количеството, с което редът е изписан по kept_allocations. */
+  kept_quantity?: string;
+  /** Редакция: партидата не е пипана → при запис се изписва по старому. */
+  keep_batches?: boolean;
 }
 
 let orderItemRowSeq = 0;
@@ -313,6 +321,70 @@ function assertNoExpiredBatches(rows: OrderItemRow[]) {
         "Изберете партида с валиден срок на годност.",
     );
   }
+}
+
+/**
+ * Редакция: полетата за досегашното разпределение на реда от
+ * GET /orders/:id (batch_allocations). Празно, ако редът не е изписван.
+ */
+function keptBatchFields(
+  item: unknown,
+): Pick<OrderItemRow, "kept_allocations" | "kept_quantity" | "keep_batches"> {
+  const raw = (item as { batch_allocations?: unknown }).batch_allocations;
+  const allocations: KeptBatchAllocation[] = Array.isArray(raw)
+    ? raw
+        .map((entry: Record<string, unknown> | null) => ({
+          batch_id: Number(entry?.batch_id),
+          batch_number:
+            entry?.batch_number != null ? String(entry.batch_number) : null,
+          expiry_date: entry?.expiry_date
+            ? String(entry.expiry_date).slice(0, 10)
+            : null,
+          quantity: Number(entry?.quantity),
+        }))
+        .filter(
+          (entry) =>
+            Number.isInteger(entry.batch_id) &&
+            entry.batch_id > 0 &&
+            entry.quantity > 0,
+        )
+    : [];
+  if (allocations.length === 0) return { keep_batches: false };
+  return {
+    kept_allocations: allocations,
+    kept_quantity: String((item as { quantity?: unknown }).quantity ?? ""),
+    keep_batches: true,
+  };
+}
+
+/**
+ * Редакция: какво пращаме за партидата на реда.
+ *  - непипнат ред със същото количество → точното старо разпределение;
+ *  - непипнат ред с ново количество → нищо (сървърът избира по FEFO след
+ *    като е върнал старото);
+ *  - ръчно избрана партида → тя.
+ */
+function editLineBatchPayload(
+  row: Pick<
+    OrderItemRow,
+    "batch_id" | "quantity" | "keep_batches" | "kept_allocations" | "kept_quantity"
+  >,
+): {
+  batch_id?: number;
+  batch_allocations?: { batch_id: number; quantity: number }[];
+} {
+  if (row.keep_batches && row.kept_allocations?.length) {
+    if (Number(row.quantity) === Number(row.kept_quantity)) {
+      return {
+        batch_allocations: row.kept_allocations.map((allocation) => ({
+          batch_id: allocation.batch_id,
+          quantity: allocation.quantity,
+        })),
+      };
+    }
+    return {};
+  }
+  return { batch_id: row.batch_id ? Number(row.batch_id) : undefined };
 }
 
 async function openInvoicePdf(
@@ -4265,6 +4337,9 @@ function EditOrderItemsModal({
           expiry_date: (item as any).expiry_date
             ? String((item as any).expiry_date).slice(0, 10)
             : "",
+          // Реалното изписване на реда (може да е от няколко партиди) —
+          // без пипане при запис се изписва пак така.
+          ...keptBatchFields(item),
         });
       }) || [];
 
@@ -4312,6 +4387,8 @@ function EditOrderItemsModal({
                 // the FEFO default for the new product once its batches load.
                 batch_id: "",
                 expiry_date: "",
+                keep_batches: false,
+                kept_allocations: undefined,
               }
             : item,
         ),
@@ -4470,7 +4547,8 @@ function EditOrderItemsModal({
   const mutation = useMutation({
     mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
       // GQF: block lines pointing at an expired batch before persisting.
-      assertNoExpiredBatches(validItems);
+      // Непипнатите редове не са нова продажба — стоката им вече е изписана.
+      assertNoExpiredBatches(validItems.filter((i) => !i.keep_batches));
       const res = await api.put(`/orders/${order.id}`, {
         delivery_date: deliveryDate || undefined,
         notes: notes || undefined,
@@ -4482,8 +4560,7 @@ function EditOrderItemsModal({
           // Batch F1 — only send when not the default; spares the wire
           // and lets the backend's column DEFAULT 'normal' handle it.
           line_status: i.line_status !== "normal" ? i.line_status : undefined,
-          // GQF: партида (ако не е подадена, backend FEFO я избира)
-          batch_id: i.batch_id ? Number(i.batch_id) : undefined,
+          ...editLineBatchPayload(i),
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
       });
@@ -4814,10 +4891,33 @@ function EditOrderItemsModal({
                         <TableCell>
                           <BatchSelect
                             productId={item.product_id}
-                            value={item.batch_id}
+                            value={
+                              item.keep_batches
+                                ? KEPT_BATCHES_VALUE
+                                : item.batch_id
+                            }
+                            keptAllocations={item.kept_allocations}
                             onChange={(batchId, expiry) => {
-                              setItem(i, "batch_id", batchId);
-                              setItem(i, "expiry_date", expiry);
+                              const keep = batchId === KEPT_BATCHES_VALUE;
+                              setItems((prev) =>
+                                prev.map((row, rowIdx) =>
+                                  rowIdx === i
+                                    ? {
+                                        ...row,
+                                        keep_batches: keep,
+                                        batch_id: keep
+                                          ? String(
+                                              row.kept_allocations?.[0]
+                                                ?.batch_id ?? "",
+                                            )
+                                          : batchId,
+                                        expiry_date: expiry
+                                          ? expiry.slice(0, 10)
+                                          : "",
+                                      }
+                                    : row,
+                                ),
+                              );
                             }}
                           />
                         </TableCell>
