@@ -9,7 +9,12 @@ import {
 } from "../lib/permissions.js";
 import { generateInvoicePdf } from "../services/invoice-pdf.js";
 import { computeInvoiceTotalsFromNet } from "../lib/invoice-totals.js";
-import { computeLineTotal, roundMoney } from "../lib/line-pricing.js";
+import {
+  computeLineTotal,
+  effectiveUnitPrice,
+  roundMoney,
+  roundUnitPrice,
+} from "../lib/line-pricing.js";
 import {
   swapInvoiceNumbers,
   SwapInvoiceNumbersValidationError,
@@ -242,13 +247,21 @@ const createCreditNoteSchema = z.object({
   // редове на оригиналната поръчка/фактура.
   // - order_item_id трябва да е от поръчката, свързана с related_invoice_id
   // - quantity > 0 AND ≤ оригиналното количество на реда
-  // - цената се заключва на оригиналната (audit safety) — не я приемаме
-  //   от клиента
+  // - unit_price (по избор) — колко се кредитира на единица, без ДДС, до 3
+  //   знака: търговска отстъпка след продажбата, напр. 2,8 кг × 0,665 €.
+  //   Не може да е над фактурираната цена (след отстъпката на реда), нито
+  //   редът да надхвърли фактурираната си стойност. Без нея — фактурираната.
   items: z
     .array(
       z.object({
         order_item_id: z.number().int().positive(),
         quantity: z.number().positive(),
+        unit_price: z
+          .number()
+          .positive()
+          .transform(roundUnitPrice)
+          .refine((price) => price > 0, "Цената е под 0,001")
+          .optional(),
       }),
     )
     .min(1)
@@ -351,7 +364,6 @@ async function getCompanySettings(): Promise<{
   };
 }
 
-
 /**
  * Цяло кредитно известие ли е: сборът на редовете, възстановени от
  * поръчката, дава записаната му нето сума. При частично КИ не дава.
@@ -365,6 +377,20 @@ function creditNoteLinesMatchTotals(items: any[], invoice: any): boolean {
     Math.abs(Math.abs(linesNet) - Math.abs(roundMoney(invoice.total_net))) <
     0.005
   );
+}
+
+/** Името на ред от поръчката за съобщение за грешка. */
+function creditLineName(item: {
+  name_bg?: string | null;
+  sku?: string | null;
+  id?: number;
+}): string {
+  return item.name_bg || item.sku || `ред ${item.id}`;
+}
+
+/** Число със запетая за съобщение: 0.665 → „0,665“, 1.86 → „1,86“. */
+function bgNumber(value: number, decimals: number): string {
+  return value.toFixed(decimals).replace(".", ",");
 }
 
 export default async function invoiceRoutes(app: FastifyInstance) {
@@ -387,9 +413,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       } = request.query as any;
       const pageNum = Math.max(1, parseInt(page) || 1);
       const pageSize = Math.min(
-      MAX_PAGE_SIZE,
-      Math.max(1, parseInt(limit) || DEFAULT_PAGE_SIZE),
-    );
+        MAX_PAGE_SIZE,
+        Math.max(1, parseInt(limit) || DEFAULT_PAGE_SIZE),
+      );
       const offset = (pageNum - 1) * pageSize;
 
       const conditions: string[] = [];
@@ -1920,6 +1946,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           const byId = new Map<number, any>(
             allOrderItems.map((it) => [it.id, it]),
           );
+          const seen = new Set<number>();
           for (const req of body.items!) {
             const oi = byId.get(req.order_item_id);
             if (!oi) {
@@ -1930,6 +1957,15 @@ export default async function invoiceRoutes(app: FastifyInstance) {
                 { statusCode: 400 },
               );
             }
+            // Един ред два пъти би минал проверките поотделно, а заедно би
+            // кредитирал повече от фактурираното.
+            if (seen.has(oi.id)) {
+              throw Object.assign(
+                new Error(`„${creditLineName(oi)}“ е подаден два пъти.`),
+                { statusCode: 400 },
+              );
+            }
+            seen.add(oi.id);
             const orig = parseFloat(oi.quantity);
             if (req.quantity > orig + 0.0001) {
               throw Object.assign(
@@ -1939,7 +1975,11 @@ export default async function invoiceRoutes(app: FastifyInstance) {
                 { statusCode: 400 },
               );
             }
-            selectedItems.push({ ...oi, _partialQty: req.quantity });
+            selectedItems.push({
+              ...oi,
+              _partialQty: req.quantity,
+              _requestedPrice: req.unit_price,
+            });
           }
           // GQF: цените са NET, ДДС се добавя отгоре — като във фактурата.
           // Всеки ред се кредитира по ФАКТУРИРАНАТА си стойност:
@@ -1948,17 +1988,56 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           // Преди беше кол. × цена без отстъпката: ред 2.8 × 6.317 при 10%,
           // фактуриран 15.92, се кредитираше за 17.69. И сумата се
           // закръгляше веднъж накрая, а редовете поотделно — с ±0.01 разлика.
+          //
+          // Своя цена за кредитиране (търговска отстъпка след продажбата):
+          // ред = ROUND(кол. × цена, 2), без отстъпката на реда. Таван —
+          // фактурираната цена и фактурираната стойност на това количество.
+          // Цена, равна на фактурираната, е „без промяна“ — тогава важи
+          // точното правило горе (с отстъпката, без загуба от 3-те знака).
           let sumNet = 0;
           for (const sel of selectedItems) {
             const wholeLine =
               Math.abs(sel._partialQty - parseFloat(sel.quantity)) < 0.0005;
-            sel._lineNet = wholeLine
+            const invoicedNet = wholeLine
               ? roundMoney(sel.total_price)
               : computeLineTotal(
                   sel._partialQty,
                   sel.unit_price,
                   sel.discount_percent,
                 );
+            const invoicedPrice = effectiveUnitPrice(
+              sel.unit_price,
+              sel.discount_percent,
+            );
+            const requested: number | undefined = sel._requestedPrice;
+            if (
+              requested == null ||
+              Math.abs(requested - invoicedPrice) < 0.0005
+            ) {
+              sel._lineNet = invoicedNet;
+            } else {
+              if (requested > invoicedPrice) {
+                throw Object.assign(
+                  new Error(
+                    `„${creditLineName(sel)}“: цената в КИ ${bgNumber(requested, 3)} ` +
+                      `е над фактурираната ${bgNumber(invoicedPrice, 3)}.`,
+                  ),
+                  { statusCode: 400 },
+                );
+              }
+              const lineNet = computeLineTotal(sel._partialQty, requested, 0);
+              if (lineNet > invoicedNet + 0.005) {
+                throw Object.assign(
+                  new Error(
+                    `„${creditLineName(sel)}“: ${bgNumber(lineNet, 2)} € е над ` +
+                      `фактурираното за това количество (${bgNumber(invoicedNet, 2)} €).`,
+                  ),
+                  { statusCode: 400 },
+                );
+              }
+              sel._lineNet = lineNet;
+              sel._creditPrice = requested;
+            }
             sumNet = roundMoney(sumNet + sel._lineNet);
           }
           const credited = computeInvoiceTotalsFromNet(sumNet, includeVat);
@@ -2032,12 +2111,17 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         // discount_percent минава през ...sel, така КИ-то печата същата цена
         // след отстъпка като фактурата, а редовете му дават точно тоталите.
         const pdfItems = selectedItems.map((sel) => {
-          const unitPrice = parseFloat(sel.unit_price);
           const partialQty = sel._partialQty;
+          // Своя цена за кредитиране → печата се тя, без отстъпката на реда
+          // (стойността вече е кол. × тази цена).
+          const ownPrice = sel._creditPrice != null;
           return {
             ...sel,
             quantity: -Math.abs(partialQty),
-            unit_price: unitPrice,
+            unit_price: ownPrice
+              ? sel._creditPrice
+              : parseFloat(sel.unit_price),
+            discount_percent: ownPrice ? 0 : sel.discount_percent,
             total_price: -Math.abs(sel._lineNet),
           };
         });
