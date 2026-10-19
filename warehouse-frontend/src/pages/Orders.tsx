@@ -78,6 +78,7 @@ import {
   effectiveUnitPrice,
   roundMoney,
 } from "@/lib/linePricing";
+import { creditNoteLine, invoicedCreditPrice } from "@/lib/creditNoteLine";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch, HighlightMultiToken } from "@/lib/highlight";
 import { Button } from "@/components/ui/button";
@@ -1007,8 +1008,10 @@ function OrderDetailModal({
   // КИ — backward-compat UX). Когато потребителят свали checkbox или
   // редактира qty, payload-ът включва `items[]` и backend-ът превключва
   // в partial mode.
+  // price — цената в КИ на единица (низ от полето); по подразбиране
+  // фактурираната след отстъпката.
   const [creditNoteSelection, setCreditNoteSelection] = useState<
-    Record<number, { checked: boolean; qty: number }>
+    Record<number, { checked: boolean; qty: number; price: string }>
   >({});
   const [issuedCreditNoteId, setIssuedCreditNoteId] = useState<number | null>(
     null,
@@ -1053,10 +1056,17 @@ function OrderDetailModal({
   // и не могат да бъдат сторнирани.
   useEffect(() => {
     if (!creditNoteOpen) return;
-    const next: Record<number, { checked: boolean; qty: number }> = {};
+    const next: Record<
+      number,
+      { checked: boolean; qty: number; price: string }
+    > = {};
     for (const it of items) {
       if ((it.line_status ?? "normal") === "awaiting") continue;
-      next[it.id] = { checked: true, qty: parseFloat(String(it.quantity)) };
+      next[it.id] = {
+        checked: true,
+        qty: parseFloat(String(it.quantity)),
+        price: invoicedCreditPrice(it).toFixed(3),
+      };
     }
     setCreditNoteSelection(next);
   }, [creditNoteOpen, items]);
@@ -1763,7 +1773,12 @@ function OrderDetailModal({
       restore_stock?: boolean;
       // Partial — ако присъства, КИ-то е само за избраните редове с
       // указани количества. Без `items` поведението е пълно сторниране.
-      items?: Array<{ order_item_id: number; quantity: number }>;
+      // unit_price — само при сменена цена (търговска отстъпка).
+      items?: Array<{
+        order_item_id: number;
+        quantity: number;
+        unit_price?: number;
+      }>;
     }) => api.post("/invoices/credit-note", data),
     onSuccess: (res) => {
       const cnId = res.data?.id ?? null;
@@ -2357,7 +2372,9 @@ function OrderDetailModal({
                                       key={partIdx}
                                       className="font-mono whitespace-nowrap text-gray-700"
                                     >
-                                      {displayBatchNumber(part.batch_number) ?? (
+                                      {displayBatchNumber(
+                                        part.batch_number,
+                                      ) ?? (
                                         <span className="text-xs text-gray-400">
                                           —
                                         </span>
@@ -2382,7 +2399,10 @@ function OrderDetailModal({
                                     );
                                   }
                                   return parts.map((part, partIdx) => (
-                                    <div key={partIdx} className="text-gray-700">
+                                    <div
+                                      key={partIdx}
+                                      className="text-gray-700"
+                                    >
                                       {part.expiry_date ?? (
                                         <span className="text-xs text-gray-400">
                                           —
@@ -3550,26 +3570,31 @@ function OrderDetailModal({
               // ДДС-то по издадената фактура — поръчката няма собствено
               // include_vat, затова досега прегледът винаги добавяше 20%.
               const includeVat = invoiceIncludesVat !== false;
-              // Преглед по СЪЩОТО правило като сървъра (routes/invoices.ts,
-              // lib/linePricing.ts): цената е НЕТО; цял ред се кредитира по
-              // фактурираната си стойност, част от ред — кол. × цена с
-              // отстъпката; ДДС се добавя отгоре. Преди тук беше
-              // „unit_price е с ДДС" (не е) и отстъпката се пропускаше.
-              const creditLineNet = (it: any, qty: number) =>
-                Math.abs(qty - parseFloat(String(it.quantity))) < 0.0005
-                  ? roundMoney(it.total_price)
-                  : computeExactLineTotal(
-                      qty,
-                      it.unit_price,
-                      it.discount_percent,
-                    );
-              let creditNet = 0;
-              for (const it of cnEligible) {
+              // Преглед по СЪЩОТО правило като сървъра (lib/creditNoteLine.ts):
+              // цената е НЕТО; цял ред се кредитира по фактурираната си
+              // стойност, част от ред — кол. × цена с отстъпката, а своя
+              // цена (търговска отстъпка) — кол. × нея. ДДС се добавя отгоре.
+              const invoicedPriceText = (it: (typeof cnEligible)[number]) =>
+                invoicedCreditPrice(it).toFixed(3);
+              const lineCalc = (it: (typeof cnEligible)[number]) => {
                 const sel = creditNoteSelection[it.id];
-                if (!sel || !sel.checked) continue;
-                const qty = Number.isFinite(sel.qty) ? sel.qty : 0;
-                if (qty <= 0) continue;
-                creditNet = roundMoney(creditNet + creditLineNet(it, qty));
+                if (!sel || !sel.checked) return null;
+                return creditNoteLine(
+                  it,
+                  Number.isFinite(sel.qty) ? sel.qty : 0,
+                  sel.price ?? invoicedPriceText(it),
+                );
+              };
+              let creditNet = 0;
+              let hasLineError = false;
+              for (const it of cnEligible) {
+                const calc = lineCalc(it);
+                if (!calc) continue;
+                if (calc.error) {
+                  hasLineError = true;
+                  continue;
+                }
+                creditNet = roundMoney(creditNet + calc.lineNet);
               }
               const creditVat = includeVat ? roundMoney(creditNet * 0.2) : 0;
               const grossSum = roundMoney(creditNet + creditVat);
@@ -3578,13 +3603,16 @@ function OrderDetailModal({
                 const sel = creditNoteSelection[it.id];
                 return sel && sel.checked && sel.qty > 0;
               });
-              // Дали е "full" (всички items checked + full qty) → не
-              // изпращаме `items` (backward-compat path в backend-а).
+              // Дали е "full" (всички items checked + full qty + фактурираната
+              // цена) → не изпращаме `items` (backward-compat path в backend-а).
               const isFull = cnEligible.every((it) => {
                 const sel = creditNoteSelection[it.id];
                 if (!sel || !sel.checked) return false;
                 const orig = parseFloat(String(it.quantity));
-                return Math.abs(sel.qty - orig) < 0.0001;
+                return (
+                  Math.abs(sel.qty - orig) < 0.0001 &&
+                  lineCalc(it)?.ownPrice == null
+                );
               });
 
               const toggleAll = (checked: boolean) => {
@@ -3593,6 +3621,9 @@ function OrderDetailModal({
                   next[it.id] = {
                     checked,
                     qty: parseFloat(String(it.quantity)),
+                    price:
+                      creditNoteSelection[it.id]?.price ??
+                      invoicedPriceText(it),
                   };
                 }
                 setCreditNoteSelection(next);
@@ -3605,9 +3636,10 @@ function OrderDetailModal({
                     <span className="font-mono font-bold">{invoiceLabel}</span>
                   </p>
                   <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
-                    Избери редовете за сторниране и количеството.{" "}
+                    Избери редовете за сторниране, количеството и цената.{" "}
                     <strong>По подразбиране всички са избрани</strong> (пълно
-                    КИ). За частично — свали отметката или намали qty.
+                    КИ). За частично — свали отметката или намали количеството;
+                    за търговска отстъпка — намали цената.
                   </div>
 
                   {/* Items table */}
@@ -3638,6 +3670,7 @@ function OrderDetailModal({
                           const sel = creditNoteSelection[it.id] ?? {
                             checked: false,
                             qty: 0,
+                            price: invoicedPriceText(it),
                           };
                           const orig = parseFloat(String(it.quantity));
                           // Цената след отстъпката — същата като на фактурата.
@@ -3645,9 +3678,7 @@ function OrderDetailModal({
                             it.unit_price,
                             it.discount_percent,
                           );
-                          const lineTotal = sel.checked
-                            ? creditLineNet(it, sel.qty)
-                            : 0;
+                          const calc = lineCalc(it);
                           const prodName =
                             it.name_bg ||
                             it.product?.name_bg ||
@@ -3655,6 +3686,23 @@ function OrderDetailModal({
                             it.product?.name_en ||
                             `Продукт #${it.product_id}`;
                           const unit = it.unit || it.product?.unit || "бр.";
+                          const patchSel = (
+                            patch: Partial<{
+                              checked: boolean;
+                              qty: number;
+                              price: string;
+                            }>,
+                          ) =>
+                            setCreditNoteSelection((prev) => ({
+                              ...prev,
+                              [it.id]: {
+                                checked: prev[it.id]?.checked ?? true,
+                                qty: prev[it.id]?.qty ?? orig,
+                                price:
+                                  prev[it.id]?.price ?? invoicedPriceText(it),
+                                ...patch,
+                              },
+                            }));
                           return (
                             <li
                               key={it.id}
@@ -3664,15 +3712,7 @@ function OrderDetailModal({
                                 type="checkbox"
                                 checked={sel.checked}
                                 onChange={(e) =>
-                                  setCreditNoteSelection((prev) => ({
-                                    ...prev,
-                                    [it.id]: {
-                                      checked: e.target.checked,
-                                      qty:
-                                        prev[it.id]?.qty ??
-                                        parseFloat(String(it.quantity)),
-                                    },
-                                  }))
+                                  patchSel({ checked: e.target.checked })
                                 }
                                 className="h-4 w-4"
                               />
@@ -3682,6 +3722,11 @@ function OrderDetailModal({
                                   оригинал: {orig} {unit} ×{" "}
                                   {formatUnitPrice(unitPrice)}
                                 </div>
+                                {calc?.error && (
+                                  <div className="text-xs text-red-600">
+                                    {calc.error}
+                                  </div>
+                                )}
                               </div>
                               <input
                                 type="number"
@@ -3690,23 +3735,38 @@ function OrderDetailModal({
                                 step="0.001"
                                 value={sel.qty}
                                 disabled={!sel.checked}
+                                aria-label={`Количество в КИ за ${prodName}`}
                                 onChange={(e) => {
                                   const v = parseFloat(e.target.value);
-                                  setCreditNoteSelection((prev) => ({
-                                    ...prev,
-                                    [it.id]: {
-                                      checked: prev[it.id]?.checked ?? true,
-                                      qty: Number.isFinite(v) ? v : 0,
-                                    },
-                                  }));
+                                  patchSel({ qty: Number.isFinite(v) ? v : 0 });
                                 }}
                                 className="w-20 px-2 py-1 border rounded text-right disabled:bg-gray-100 disabled:text-gray-400"
                               />
                               <span className="text-xs text-gray-400 w-8">
                                 {unit}
                               </span>
+                              <span className="text-xs text-gray-400">×</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step="0.001"
+                                value={sel.price}
+                                disabled={!sel.checked}
+                                aria-label={`Цена в КИ за ${prodName}`}
+                                title="Цена в КИ на единица (без ДДС) — за търговска отстъпка я намали"
+                                onChange={(e) =>
+                                  patchSel({ price: e.target.value })
+                                }
+                                className={`w-24 px-2 py-1 border rounded text-right disabled:bg-gray-100 disabled:text-gray-400 ${
+                                  calc?.ownPrice != null && !calc.error
+                                    ? "border-amber-400 bg-amber-50"
+                                    : ""
+                                }`}
+                              />
                               <span className="text-right font-medium w-20 text-sm">
-                                {sel.checked ? formatCurrency(lineTotal) : "—"}
+                                {calc && !calc.error
+                                  ? formatCurrency(calc.lineNet)
+                                  : "—"}
                               </span>
                             </li>
                           );
@@ -3786,10 +3846,16 @@ function OrderDetailModal({
                                 const sel = creditNoteSelection[it.id];
                                 return sel && sel.checked && sel.qty > 0;
                               })
-                              .map((it) => ({
-                                order_item_id: it.id,
-                                quantity: creditNoteSelection[it.id].qty,
-                              }));
+                              .map((it) => {
+                                const ownPrice = lineCalc(it)?.ownPrice;
+                                return {
+                                  order_item_id: it.id,
+                                  quantity: creditNoteSelection[it.id].qty,
+                                  ...(ownPrice != null
+                                    ? { unit_price: ownPrice }
+                                    : {}),
+                                };
+                              });
                         creditNoteMutation.mutate({
                           related_invoice_id: effectiveInvoiceId,
                           reason:
@@ -3798,7 +3864,11 @@ function OrderDetailModal({
                           ...(partialItems ? { items: partialItems } : {}),
                         });
                       }}
-                      disabled={creditNoteMutation.isPending || !hasAnySelected}
+                      disabled={
+                        creditNoteMutation.isPending ||
+                        !hasAnySelected ||
+                        hasLineError
+                      }
                       className="bg-amber-600 hover:bg-amber-700"
                     >
                       {creditNoteMutation.isPending ? (

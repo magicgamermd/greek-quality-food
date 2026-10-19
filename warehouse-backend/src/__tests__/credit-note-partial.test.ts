@@ -175,7 +175,11 @@ describe("POST /invoices/credit-note — partial", () => {
     },
   ];
 
-  async function issueCreditNote(items: Array<{ order_item_id: number; quantity: number }>, orderItems: any[], invoice: any) {
+  async function issueCreditNote(
+    items: Array<{ order_item_id: number; quantity: number; unit_price?: number }>,
+    orderItems: any[],
+    invoice: any,
+  ) {
     const clientQuery = buildClientQuery({ invoice, orderId: 50, orderItems });
     mockTransaction.mockImplementation(async (cb: any) => cb({ query: clientQuery }));
     const { generateInvoicePdf } = await import("../services/invoice-pdf.js");
@@ -264,6 +268,160 @@ const pdfArgs = vi.mocked(generateInvoicePdf).mock.calls[0]?.[0] as any;
     expect(params[2]).toBe(-3.33);
     const printedSum = pdfItems.reduce((sum: number, it: any) => sum + it.total_price, 0);
     expect(Math.round(printedSum * 100) / 100).toBe(-3.33);
+  });
+
+  // КИ 0000022662 от старата програма (ДАР Г.Н., 28.07.2026): търговска
+  // отстъпка след продажбата — 3 кг Чашки и 2,8 кг Портокалопита по
+  // 0,665 € → 2,00 + 1,86 = 3,86 нето, 0,77 ДДС, 4,63 общо.
+  const rebateInvoice = {
+    ...baseInvoice,
+    total_net: "37.64",
+    total_vat: "7.53",
+    total_gross: "45.17",
+  };
+  const rebateItems = [
+    {
+      ...baseOrderItems[0],
+      id: 41,
+      name_bg: "Чашки Микс Пури",
+      sku: "D1033",
+      quantity: "3.000",
+      unit_price: "6.650",
+      discount_percent: "0.00",
+      total_price: "19.95",
+    },
+    {
+      ...baseOrderItems[0],
+      id: 42,
+      name_bg: "Портокалопита",
+      sku: "D1109",
+      quantity: "2.800",
+      unit_price: "6.317",
+      discount_percent: "0.00",
+      total_price: "17.69",
+    },
+  ];
+  // Тестовото приложение е без error handler-а от index.ts: текстът е в
+  // `message` (в продукцията — в `error`).
+  const errorText = (res: any) => {
+    const body = res.json();
+    return String(body.message ?? body.error ?? "");
+  };
+
+  it("своя цена: 3 кг и 2,8 кг по 0,665 → 2,00 + 1,86 (като КИ 0000022662)", async () => {
+    const { res, params, pdfItems, storedLines } = await issueCreditNote(
+      [
+        { order_item_id: 41, quantity: 3, unit_price: 0.665 },
+        { order_item_id: 42, quantity: 2.8, unit_price: 0.665 },
+      ],
+      rebateItems,
+      rebateInvoice,
+    );
+    expect(res.statusCode).toBe(201);
+    expect(params[2]).toBe(-3.86); // total_net
+    expect(params[3]).toBe(-0.77); // total_vat
+    expect(params[4]).toBe(-4.63); // total_gross
+    // Печата се цената за кредитиране, без отстъпка — 0,665 × 2,8 = 1,86.
+    expect(pdfItems[0]).toMatchObject({
+      quantity: -3,
+      unit_price: 0.665,
+      discount_percent: 0,
+      total_price: -2,
+    });
+    expect(pdfItems[1]).toMatchObject({
+      quantity: -2.8,
+      unit_price: 0.665,
+      discount_percent: 0,
+      total_price: -1.86,
+    });
+    // Копията и EN вариантът се чертаят от същото.
+    expect(storedLines[1]).toMatchObject({
+      quantity: -2.8,
+      unit_price: 0.665,
+      discount_percent: 0,
+      total_price: -1.86,
+    });
+  });
+
+  it("своя цена и по-малко количество на ред с отстъпка → кол. × цена, отстъпка 0", async () => {
+    const { res, params, pdfItems } = await issueCreditNote(
+      [{ order_item_id: 21, quantity: 1.4, unit_price: 1 }],
+      discountedItems,
+      discountedInvoice,
+    );
+    expect(res.statusCode).toBe(201);
+    expect(params[2]).toBe(-1.4);
+    expect(pdfItems[0]).toMatchObject({
+      unit_price: 1,
+      discount_percent: 0,
+      total_price: -1.4,
+    });
+  });
+
+  it("цена = фактурираната след отстъпката → без промяна, точното правило", async () => {
+    // 6,317 при 10% → 5,685 на документа; целият ред е фактуриран 15,92.
+    const { res, params, pdfItems } = await issueCreditNote(
+      [{ order_item_id: 21, quantity: 2.8, unit_price: 5.685 }],
+      discountedItems,
+      discountedInvoice,
+    );
+    expect(res.statusCode).toBe(201);
+    expect(params[2]).toBe(-15.92);
+    expect(pdfItems[0]).toMatchObject({
+      unit_price: 6.317,
+      discount_percent: "10.00",
+      total_price: -15.92,
+    });
+  });
+
+  it("цена над фактурираната → 400 с името и двете цени", async () => {
+    const { res, params } = await issueCreditNote(
+      [{ order_item_id: 42, quantity: 2.8, unit_price: 6.318 }],
+      rebateItems,
+      rebateInvoice,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(errorText(res)).toContain("Портокалопита");
+    expect(errorText(res)).toContain("6,318");
+    expect(errorText(res)).toContain("6,317");
+    expect(params).toBeUndefined(); // нищо не е записано
+  });
+
+  it("стойността на реда е таван: стар ред, записан под кол. × цена → 400", async () => {
+    const legacy = [{ ...rebateItems[0], total_price: "19.00" }];
+    const { res } = await issueCreditNote(
+      [{ order_item_id: 41, quantity: 3, unit_price: 6.5 }],
+      legacy,
+      rebateInvoice,
+    );
+    // 3 × 6,5 = 19,50 > фактурираните 19,00
+    expect(res.statusCode).toBe(400);
+    expect(errorText(res)).toContain("19,50");
+    expect(errorText(res)).toContain("19,00");
+  });
+
+  it("един ред, подаден два пъти → 400", async () => {
+    const { res } = await issueCreditNote(
+      [
+        { order_item_id: 42, quantity: 2.8, unit_price: 3 },
+        { order_item_id: 42, quantity: 2.8, unit_price: 3 },
+      ],
+      rebateItems,
+      rebateInvoice,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(errorText(res)).toContain("два пъти");
+  });
+
+  it("цена 0 или под 0,001 → 400", async () => {
+    for (const price of [0, 0.0004]) {
+      const { res } = await issueCreditNote(
+        [{ order_item_id: 42, quantity: 2.8, unit_price: price }],
+        rebateItems,
+        rebateInvoice,
+      );
+      expect(res.statusCode).toBe(400);
+    }
   });
 
   it("full credit note (no items) — totals negate parent invoice", async () => {

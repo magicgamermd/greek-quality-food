@@ -9,7 +9,8 @@
 // Продажба  → POST /invoices/credit-note (свой номер КИ-*, печат /invoices/:id/pdf)
 // Покупка   → POST /incoming/:id/credit-note (номерът е на доставчика,
 //             печат /incoming/:id/receipt)
-import { effectiveUnitPrice } from "@/lib/linePricing";
+import { effectiveUnitPrice, roundMoney } from "@/lib/linePricing";
+import { type CreditLineCalc, creditNoteLine } from "@/lib/creditNoteLine";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowUpFromLine, FileText } from "lucide-react";
@@ -42,10 +43,19 @@ type SaleItemRow = {
   unit_price: string;
   /** Отстъпка % на реда — КИ-то печата цената СЛЕД нея. */
   discount_percent: string;
+  /** Фактурираната стойност на реда (нето). */
+  total_price: string;
   // UI state
   checked: boolean;
   qty: string;
+  /** Цена в КИ на единица — по подразбиране фактурираната. */
+  price: string;
 };
+
+/** Какво ще кредитира редът — правилото е в lib/creditNoteLine. */
+function creditRow(item: SaleItemRow): CreditLineCalc {
+  return creditNoteLine(item, item.qty, item.price);
+}
 
 type PurchaseLineRow = {
   incoming_item_id: number;
@@ -211,8 +221,13 @@ export function CreditNoteHubDialog({
         quantity: String(r.quantity ?? ""),
         unit_price: String(r.unit_price ?? ""),
         discount_percent: String(r.discount_percent ?? "0"),
+        total_price: String(r.total_price ?? ""),
         checked: false,
         qty: String(r.quantity ?? ""),
+        price: effectiveUnitPrice(
+          r.unit_price,
+          r.discount_percent ?? 0,
+        ).toFixed(3),
       })),
     );
   }, [saleItemsQuery.data]);
@@ -299,10 +314,21 @@ export function CreditNoteHubDialog({
         if (chosen.length === 0) {
           throw new Error("Избери поне един ред с количество.");
         }
-        payload.items = chosen.map((i) => ({
-          order_item_id: i.order_item_id,
-          quantity: Number(i.qty),
-        }));
+        const wrong = chosen.find((i) => creditRow(i).error);
+        if (wrong) {
+          throw new Error(
+            `„${wrong.name_bg ?? wrong.sku ?? "Ред"}“: ${creditRow(wrong).error}`,
+          );
+        }
+        payload.items = chosen.map((i) => {
+          const { ownPrice } = creditRow(i);
+          return {
+            order_item_id: i.order_item_id,
+            quantity: Number(i.qty),
+            // Само сменена цена — иначе сървърът кредитира фактурираната.
+            ...(ownPrice != null ? { unit_price: ownPrice } : {}),
+          };
+        });
       }
       const res = await api.post("/invoices/credit-note", payload);
       return res.data;
@@ -380,12 +406,24 @@ export function CreditNoteHubDialog({
 
   const busy = saleMutation.isPending || purchaseMutation.isPending;
 
+  // Частично КИ по продажба: избраните редове и сумата за кредитиране.
+  const chosenSaleItems = saleItems.filter(
+    (i) => i.checked && Number(i.qty) > 0,
+  );
+  const saleRowsValid = chosenSaleItems.every((i) => !creditRow(i).error);
+  const saleIncludesVat = selectedSaleInvoice?.include_vat !== false;
+  const partialNet = chosenSaleItems.reduce(
+    (sum, i) => roundMoney(sum + creditRow(i).lineNet),
+    0,
+  );
+  const partialVat = saleIncludesVat ? roundMoney(partialNet * 0.2) : 0;
+  const partialGross = roundMoney(partialNet + partialVat);
+
   const canSubmit =
     kind === "sale"
       ? !!selectedSaleInvoice &&
         !!reason.trim() &&
-        (saleScope === "full" ||
-          saleItems.some((i) => i.checked && Number(i.qty) > 0))
+        (saleScope === "full" || (chosenSaleItems.length > 0 && saleRowsValid))
       : kind === "purchase"
         ? !!purchaseDocId &&
           !!purchaseNumber.trim() &&
@@ -542,76 +580,137 @@ export function CreditNoteHubDialog({
                           <th className="p-2 w-8"></th>
                           <th className="p-2">Продукт</th>
                           <th className="p-2 text-right">Фактурирано</th>
-                          <th className="p-2 text-right">Ед. цена</th>
+                          <th className="p-2 text-right w-32">Ед. цена в КИ</th>
                           <th className="p-2 text-right w-32">
                             Количество в КИ
                           </th>
+                          <th className="p-2 text-right w-28">Стойност</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {saleItems.map((item, idx) => (
-                          <tr key={item.order_item_id} className="border-t">
-                            <td className="p-2">
-                              <input
-                                type="checkbox"
-                                checked={item.checked}
-                                onChange={(e) =>
-                                  setSaleItems((rows) =>
-                                    rows.map((r, i) =>
-                                      i === idx
-                                        ? { ...r, checked: e.target.checked }
-                                        : r,
-                                    ),
-                                  )
-                                }
-                              />
-                            </td>
-                            <td className="p-2">
-                              <div className="font-medium">
-                                {item.name_bg ?? "—"}
-                              </div>
-                              {item.sku && (
-                                <div className="text-xs text-gray-400">
-                                  {item.sku}
+                        {saleItems.map((item, idx) => {
+                          const calc = item.checked ? creditRow(item) : null;
+                          const setRow = (patch: Partial<SaleItemRow>) =>
+                            setSaleItems((rows) =>
+                              rows.map((r, i) =>
+                                i === idx ? { ...r, ...patch } : r,
+                              ),
+                            );
+                          return (
+                            <tr
+                              key={item.order_item_id}
+                              className="border-t align-top"
+                            >
+                              <td className="p-2 pt-3">
+                                <input
+                                  type="checkbox"
+                                  checked={item.checked}
+                                  onChange={(e) =>
+                                    setRow({ checked: e.target.checked })
+                                  }
+                                />
+                              </td>
+                              <td className="p-2">
+                                <div className="font-medium">
+                                  {item.name_bg ?? "—"}
                                 </div>
-                              )}
-                            </td>
-                            <td className="p-2 text-right">
-                              {item.quantity} {item.unit ?? ""}
-                            </td>
-                            <td className="p-2 text-right">
-                              {formatUnitPrice(
-                                effectiveUnitPrice(
-                                  item.unit_price,
-                                  item.discount_percent,
-                                ),
-                              )}
-                            </td>
-                            <td className="p-2">
-                              <Input
-                                type="number"
-                                min="0"
-                                max={item.quantity}
-                                step="any"
-                                value={item.qty}
-                                disabled={!item.checked}
-                                onChange={(e) =>
-                                  setSaleItems((rows) =>
-                                    rows.map((r, i) =>
-                                      i === idx
-                                        ? { ...r, qty: e.target.value }
-                                        : r,
-                                    ),
-                                  )
-                                }
-                                className="text-right"
-                              />
-                            </td>
-                          </tr>
-                        ))}
+                                {item.sku && (
+                                  <div className="text-xs text-gray-400">
+                                    {item.sku}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="p-2 pt-3 text-right whitespace-nowrap">
+                                {item.quantity} {item.unit ?? ""}
+                              </td>
+                              <td className="p-2">
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.001"
+                                  value={item.price}
+                                  disabled={!item.checked}
+                                  aria-label={`Цена в КИ за ${item.name_bg ?? "реда"}`}
+                                  onChange={(e) =>
+                                    setRow({ price: e.target.value })
+                                  }
+                                  className="text-right"
+                                />
+                                {calc?.ownPrice != null && !calc.error && (
+                                  <div className="mt-0.5 text-right text-xs text-gray-500">
+                                    фактурирана{" "}
+                                    {formatUnitPrice(
+                                      effectiveUnitPrice(
+                                        item.unit_price,
+                                        item.discount_percent,
+                                      ),
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="p-2">
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max={item.quantity}
+                                  step="any"
+                                  value={item.qty}
+                                  disabled={!item.checked}
+                                  aria-label={`Количество в КИ за ${item.name_bg ?? "реда"}`}
+                                  onChange={(e) =>
+                                    setRow({ qty: e.target.value })
+                                  }
+                                  className="text-right"
+                                />
+                              </td>
+                              <td className="p-2 pt-3 text-right whitespace-nowrap">
+                                {!calc ? (
+                                  <span className="text-gray-300">—</span>
+                                ) : calc.error ? (
+                                  <span className="text-xs text-red-600">
+                                    {calc.error}
+                                  </span>
+                                ) : (
+                                  <span className="font-medium">
+                                    {formatCurrency(calc.lineNet)}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}
+                  {chosenSaleItems.length > 0 && (
+                    <div className="flex flex-wrap items-baseline justify-end gap-x-4 gap-y-1 border-t bg-gray-50 px-3 py-2 text-sm">
+                      <span className="text-gray-500">
+                        Нето {formatCurrency(partialNet)}
+                      </span>
+                      {saleIncludesVat && (
+                        <span className="text-gray-500">
+                          ДДС {formatCurrency(partialVat)}
+                        </span>
+                      )}
+                      <span className="text-gray-700">
+                        Сума за кредитиране:{" "}
+                        <span className="text-base font-bold text-amber-700">
+                          −{formatCurrency(partialGross)}
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {saleScope === "full" && selectedSaleInvoice && (
+                <div className="flex justify-end text-sm text-gray-700">
+                  <span>
+                    Сума за кредитиране (цялата фактура):{" "}
+                    <span className="text-base font-bold text-amber-700">
+                      −{formatCurrency(Number(selectedSaleInvoice.total_gross))}
+                    </span>
+                  </span>
                 </div>
               )}
 
