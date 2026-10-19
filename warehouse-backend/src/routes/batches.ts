@@ -86,6 +86,44 @@ export default async function batchRoutes(app: FastifyInstance) {
     };
   });
 
+  // GET /batches/available?product_id=X — партидите, от които РЕАЛНО може
+  // да се изпише: наличността в склад 1 (както FEFO), не броячът на
+  // партидата. Ползва се от избора на партиди в поръчката.
+  // GET /batches връща и изчерпани партиди (най-старите първо) и при над
+  // 100 доставки на продукт текущите изпадаха от списъка.
+  app.get(
+    "/available",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      await requireAuth(request, reply);
+      const productId = parseInt((request.query as any)?.product_id, 10);
+      if (!Number.isInteger(productId) || productId <= 0) {
+        return reply
+          .status(400)
+          .send({ error: "product_id е задължителен" });
+      }
+      const { rows } = await query(
+        `SELECT b.id,
+                b.product_id,
+                b.batch_number,
+                b.expiry_date,
+                i.quantity AS available,
+                ig.invoice_number AS source_invoice_number,
+                ig.created_at::date AS source_received_date,
+                s.name AS source_supplier_name
+           FROM inventory i
+           JOIN batches b ON b.id = i.batch_id
+           LEFT JOIN incoming_goods ig ON ig.id = b.delivery_id
+           LEFT JOIN suppliers s ON s.id = ig.supplier_id
+          WHERE i.product_id = $1
+            AND i.warehouse_id = 1
+            AND i.quantity > 0
+          ORDER BY b.expiry_date ASC NULLS LAST, b.id ASC`,
+        [productId],
+      );
+      return { data: rows };
+    },
+  );
+
   // GET /batches/expiring?days=30 — list batches expiring within N days
   app.get("/expiring", async (request: FastifyRequest, reply: FastifyReply) => {
     await requireAuth(request, reply);
