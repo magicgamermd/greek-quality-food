@@ -28,15 +28,21 @@ const OLD = 1181; // 00170926, срок 17.11
 const NEW = 1245; // 00250926, срок 25.11
 const PRODUCT = 4;
 
-/** Склад и поръчка точно както бяха в прода преди редакцията. */
-function warehouse() {
+/**
+ * Склад и поръчка точно както бяха в прода преди редакцията.
+ * `oldExpiry` — срокът на 00170926; по подразбиране далеч напред.
+ */
+function warehouse({ oldExpiry = "2099-12-31" }: { oldExpiry?: string } = {}) {
   const stock = new Map<number, number>([
     [OLD, 0],
     [NEW, 3.5],
   ]);
-  const batchInfo = new Map<number, { batch_number: string }>([
-    [OLD, { batch_number: "00170926" }],
-    [NEW, { batch_number: "00250926" }],
+  const batchInfo = new Map<
+    number,
+    { batch_number: string; expiry_date: string }
+  >([
+    [OLD, { batch_number: "00170926", expiry_date: oldExpiry }],
+    [NEW, { batch_number: "00250926", expiry_date: "2099-12-31" }],
   ]);
   const oldItems = [
     { id: 778, product_id: PRODUCT, quantity: "6.000", batch_id: OLD },
@@ -122,8 +128,21 @@ function warehouse() {
           available: String(stock.get(params[2]) ?? 0),
         },
       ]);
-    // Запазено разпределение (новия път).
-    if (q.startsWith("SELECT batch_number, purchase_price FROM batches"))
+    // Колко от всяка партида вече е изписано по поръчката (преди връщането).
+    if (q.includes("SUM(oib.quantity)")) {
+      const sums = new Map<number, number>();
+      for (const a of oldAllocations)
+        sums.set(a.batch_id, (sums.get(a.batch_id) ?? 0) + parseFloat(a.quantity));
+      return rows(
+        [...sums].map(([batch_id, quantity]) => ({
+          product_id: PRODUCT,
+          batch_id,
+          quantity: String(quantity),
+        })),
+      );
+    }
+    // Точно разпределение (избрано или запазено).
+    if (q.startsWith("SELECT batch_number, expiry_date, purchase_price FROM batches"))
       return rows(
         params[1] === PRODUCT && batchInfo.has(params[0])
           ? [{ ...batchInfo.get(params[0]), purchase_price: "4" }]
@@ -194,7 +213,7 @@ describe("редакция на поръчка — ред от 2 партиди 
       },
     });
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toContain("налични 0.5, искани 3");
+    expect(res.json().message).toContain("налични 0.5, избрани 3");
   });
 
   it("досегашното разпределение се запазва и складът остава същият", async () => {
@@ -238,7 +257,7 @@ describe("редакция на поръчка — ред от 2 партиди 
   it("запазеното разпределение не минава през проверката за срок на ръчната партида", async () => {
     // Стоката вече е продадена — ако междувременно срокът е изтекъл,
     // редакцията (напр. на цена) пак трябва да мине.
-    const { client } = warehouse();
+    const { client } = warehouse({ oldExpiry: "2000-01-01" });
     mockTx.mockImplementation(async (cb: any) => cb({ query: client }));
     app = await buildApp();
 
@@ -270,6 +289,42 @@ describe("редакция на поръчка — ред от 2 партиди 
       flat(c[0]).includes("i.quantity AS available"),
     );
     expect(askedManualPath).toBe(false);
+  });
+
+  it("от изтекла партида може да се пази вече продаденото, но не и да се вземе ОЩЕ", async () => {
+    const { client, newAllocations } = warehouse({ oldExpiry: "2000-01-01" });
+    mockTx.mockImplementation(async (cb: any) => cb({ query: client }));
+    app = await buildApp();
+
+    // По поръчката от 00170926 са изписани 6.5; тук искаме 6 + 1 = 7.
+    const res = await app.inject({
+      method: "PUT",
+      url: "/orders/284",
+      payload: {
+        items: [
+          {
+            product_id: PRODUCT,
+            quantity: 6,
+            unit_price: 7.9,
+            batch_allocations: [{ batch_id: OLD, quantity: 6 }],
+          },
+          {
+            product_id: PRODUCT,
+            quantity: 3,
+            unit_price: 7.9,
+            batch_allocations: [
+              { batch_id: OLD, quantity: 1 },
+              { batch_id: NEW, quantity: 2 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain("изтекъл срок");
+    expect(res.json().message).toContain("00170926");
+    // Отказът е преди изписването на втория ред.
+    expect(newAllocations.filter((a) => a.quantity === 1)).toHaveLength(0);
   });
 
   it("сума на разпределението ≠ количеството → 400, нищо не се изписва", async () => {

@@ -53,7 +53,9 @@ import {
   expiryColorClass,
   KEPT_BATCHES_VALUE,
   type KeptBatchAllocation,
+  type PlannedBatch,
 } from "@/components/BatchSelect";
+import { BatchSplitDialog } from "@/components/BatchSplitDialog";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
 import { useAppSettings } from "@/hooks/useAppSettings";
@@ -275,6 +277,11 @@ interface OrderItemRow {
   kept_quantity?: string;
   /** Редакция: партидата не е пипана → при запис се изписва по старому. */
   keep_batches?: boolean;
+  /**
+   * „Разпредели по партиди…“: от 2+ партиди, с количество от всяка
+   * (5 кг с 15.12 + 5 кг с 08.12). Една партида се пази в batch_id.
+   */
+  batch_plan?: PlannedBatch[];
 }
 
 let orderItemRowSeq = 0;
@@ -358,16 +365,108 @@ function keptBatchFields(
 }
 
 /**
- * Редакция: какво пращаме за партидата на реда.
- *  - непипнат ред със същото количество → точното старо разпределение;
- *  - непипнат ред с ново количество → нищо (сървърът избира по FEFO след
- *    като е върнал старото);
- *  - ръчно избрана партида → тя.
+ * Редакция на неизпълнена поръчка: избраното разпределение по 2+ партиди
+ * от GET /orders/:id (planned_batches). Една партида идва и в batch_id.
  */
-function editLineBatchPayload(
+function plannedBatchesOf(item: unknown): PlannedBatch[] | undefined {
+  const raw = (item as { planned_batches?: unknown }).planned_batches;
+  const plan: PlannedBatch[] = Array.isArray(raw)
+    ? raw
+        .map((entry: Record<string, unknown> | null) => ({
+          batch_id: Number(entry?.batch_id),
+          quantity: Number(entry?.quantity),
+          batch_number:
+            entry?.batch_number != null ? String(entry.batch_number) : null,
+          expiry_date: entry?.expiry_date
+            ? String(entry.expiry_date).slice(0, 10)
+            : null,
+        }))
+        .filter(
+          (entry) =>
+            Number.isInteger(entry.batch_id) &&
+            entry.batch_id > 0 &&
+            entry.quantity > 0,
+        )
+    : [];
+  return plan.length >= 2 ? plan : undefined;
+}
+
+const planSum = (plan: PlannedBatch[]) =>
+  Math.round(plan.reduce((sum, part) => sum + part.quantity, 0) * 1000) / 1000;
+
+/**
+ * Разпределението по партиди вече не отговаря на количеството (редът е
+ * сменен след „Разпредели по партиди…“) → сумата му; иначе null.
+ */
+function batchPlanMismatch(row: OrderItemRow): number | null {
+  if (!row.batch_plan?.length || row.line_status === "awaiting") return null;
+  const sum = planSum(row.batch_plan);
+  return Math.abs(sum - Number(row.quantity)) < 0.0005 ? null : sum;
+}
+
+/** Не пуска запис, ако разпределен ред е с друго количество. */
+function assertBatchPlansMatch(rows: OrderItemRow[]) {
+  for (const row of rows) {
+    const sum = batchPlanMismatch(row);
+    if (sum == null) continue;
+    throw new Error(
+      `„${row.product_name || "Продукт"}“: по партиди са разпределени ${sum} ` +
+        `от ${Number(row.quantity) || 0} ${row.unit}. ` +
+        "Отворете „Разпредели по партиди…“ и поправете.",
+    );
+  }
+}
+
+/**
+ * С какво се отваря „Разпредели по партиди…“: досегашното разпределение
+ * или избраната една партида за цялото количество. Непипнат изписан ред
+ * (редакция) → нищо: прозорецът тръгва от изписаното.
+ */
+function splitRowInitialPlan(row: OrderItemRow): PlannedBatch[] | undefined {
+  if (row.batch_plan?.length) return row.batch_plan;
+  if (row.keep_batches || !row.batch_id) return undefined;
+  return [
+    {
+      batch_id: Number(row.batch_id),
+      quantity: Number(row.quantity) || 0,
+      batch_number: null,
+      expiry_date: row.expiry_date || null,
+    },
+  ];
+}
+
+/** Резултатът от „Разпредели по партиди…“ върху реда. */
+function withBatchPlan(row: OrderItemRow, plan: PlannedBatch[]): OrderItemRow {
+  const base = { ...row, keep_batches: false, batch_plan: undefined };
+  // Празно = автоматично; срокът за показване го подава BatchSelect.
+  if (plan.length === 0) return { ...base, batch_id: "", expiry_date: "" };
+  if (plan.length === 1) {
+    return {
+      ...base,
+      batch_id: String(plan[0].batch_id),
+      expiry_date: plan[0].expiry_date ?? "",
+    };
+  }
+  return { ...base, batch_plan: plan, batch_id: "", expiry_date: "" };
+}
+
+/**
+ * Какво пращаме за партидата на реда (създаване и редакция):
+ *  - редакция, непипнат ред със същото количество → точното старо
+ *    изписване; с ново количество → нищо (сървърът избира по FEFO, след
+ *    като е върнал старото);
+ *  - „Разпредели по партиди…“ → разпределението;
+ *  - една избрана партида → тя; иначе нищо (автоматично, FEFO).
+ */
+function lineBatchPayload(
   row: Pick<
     OrderItemRow,
-    "batch_id" | "quantity" | "keep_batches" | "kept_allocations" | "kept_quantity"
+    | "batch_id"
+    | "quantity"
+    | "keep_batches"
+    | "kept_allocations"
+    | "kept_quantity"
+    | "batch_plan"
   >,
 ): {
   batch_id?: number;
@@ -384,7 +483,95 @@ function editLineBatchPayload(
     }
     return {};
   }
+  if (row.batch_plan?.length) {
+    return {
+      batch_allocations: row.batch_plan.map((part) => ({
+        batch_id: part.batch_id,
+        quantity: part.quantity,
+      })),
+    };
+  }
   return { batch_id: row.batch_id ? Number(row.batch_id) : undefined };
+}
+
+/** Колоната „Годност“: при разпределение — всеки срок с количеството си. */
+function RowExpiryCell({ row }: { row: OrderItemRow }) {
+  if (row.batch_plan?.length) {
+    return (
+      <div className="space-y-0.5">
+        {row.batch_plan.map((part) => (
+          <div
+            key={part.batch_id}
+            className={`text-xs whitespace-nowrap ${expiryColorClass(part.expiry_date)}`}
+          >
+            {part.expiry_date ? formatDate(part.expiry_date) : "без срок"} ·{" "}
+            {part.quantity}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (row.expiry_date) {
+    return (
+      <span className={`text-xs ${expiryColorClass(row.expiry_date)}`}>
+        {formatDate(row.expiry_date)}
+      </span>
+    );
+  }
+  return <span className="text-xs text-gray-400">—</span>;
+}
+
+/** Под избора на партида: разпределението не отговаря на количеството. */
+function BatchPlanMismatchHint({ row }: { row: OrderItemRow }) {
+  const sum = batchPlanMismatch(row);
+  if (sum == null) return null;
+  return (
+    <div className="mt-0.5 text-[11px] text-red-600">
+      разпределени {sum} от {Number(row.quantity) || 0}
+    </div>
+  );
+}
+
+/** Една партида от реда в детайла на поръчка. */
+interface DetailBatchPart {
+  batch_number: string | null;
+  expiry_date: string | null;
+  /** Само когато редът е от 2+ партиди — колко е от тази. */
+  quantity?: number;
+}
+
+/**
+ * Детайл на поръчка — партидите на реда: реално изписаните
+ * (batch_allocations) с приоритет; преди изпълнение — избраното
+ * разпределение (planned_batches); иначе избраната една партида.
+ */
+function detailBatchParts(item: unknown): DetailBatchPart[] {
+  const source = item as {
+    batch_allocations?: unknown;
+    planned_batches?: unknown;
+    batch_number?: string | null;
+    expiry_date?: string | null;
+  };
+  for (const raw of [source.batch_allocations, source.planned_batches]) {
+    if (!Array.isArray(raw) || raw.length === 0) continue;
+    return raw.map((entry: Record<string, unknown> | null) => ({
+      batch_number:
+        entry?.batch_number != null ? String(entry.batch_number) : null,
+      expiry_date: entry?.expiry_date
+        ? String(entry.expiry_date).slice(0, 10)
+        : null,
+      quantity: raw.length > 1 ? Number(entry?.quantity) : undefined,
+    }));
+  }
+  if (!source.batch_number && !source.expiry_date) return [];
+  return [
+    {
+      batch_number: source.batch_number ?? null,
+      expiry_date: source.expiry_date
+        ? String(source.expiry_date).slice(0, 10)
+        : null,
+    },
+  ];
 }
 
 async function openInvoicePdf(
@@ -2152,80 +2339,57 @@ function OrderDetailModal({
                               <TableCell className="text-sm">
                                 {/* Реално изписаните лотове (order_item_batches,
                                     попълнени при Изпълни) с приоритет; преди
-                                    експедиране — избраната при създаване
-                                    партида (oi.batch_id). Служебните АВТО
-                                    номера не се показват — редът се
-                                    представя чрез срока си. */}
+                                    експедиране — избраното разпределение по
+                                    партиди или избраната една партида.
+                                    Служебните АВТО номера не се показват —
+                                    редът се представя чрез срока си. */}
                                 {(() => {
-                                  const allocs =
-                                    ((item as any).batch_allocations as
-                                      | Array<{
-                                          batch_number: string | null;
-                                          expiry_date: string | null;
-                                        }>
-                                      | undefined) ?? [];
-                                  if (allocs.length > 0) {
-                                    return allocs.map((a, ai) => (
-                                      <div
-                                        key={ai}
-                                        className="font-mono text-gray-700"
-                                      >
-                                        {displayBatchNumber(a.batch_number) ?? (
-                                          <span className="text-xs text-gray-400">
-                                            —
-                                          </span>
-                                        )}
-                                      </div>
-                                    ));
+                                  const parts = detailBatchParts(item);
+                                  if (parts.length === 0) {
+                                    return (
+                                      <span className="text-xs text-gray-400">
+                                        —
+                                      </span>
+                                    );
                                   }
-                                  const single = displayBatchNumber(
-                                    (item as any).batch_number,
-                                  );
-                                  return single ? (
-                                    <span className="font-mono text-gray-700">
-                                      {single}
-                                    </span>
-                                  ) : (
-                                    <span className="text-xs text-gray-400">
-                                      —
-                                    </span>
-                                  );
+                                  return parts.map((part, partIdx) => (
+                                    <div
+                                      key={partIdx}
+                                      className="font-mono whitespace-nowrap text-gray-700"
+                                    >
+                                      {displayBatchNumber(part.batch_number) ?? (
+                                        <span className="text-xs text-gray-400">
+                                          —
+                                        </span>
+                                      )}
+                                      {part.quantity != null && (
+                                        <span className="ml-1 font-sans text-xs text-gray-500">
+                                          ({part.quantity})
+                                        </span>
+                                      )}
+                                    </div>
+                                  ));
                                 })()}
                               </TableCell>
                               <TableCell className="text-sm">
                                 {(() => {
-                                  const allocs =
-                                    ((item as any).batch_allocations as
-                                      | Array<{
-                                          batch_number: string | null;
-                                          expiry_date: string | null;
-                                        }>
-                                      | undefined) ?? [];
-                                  if (allocs.length > 0) {
-                                    return allocs.map((a, ai) => (
-                                      <div key={ai} className="text-gray-700">
-                                        {a.expiry_date ? (
-                                          String(a.expiry_date).slice(0, 10)
-                                        ) : (
-                                          <span className="text-xs text-gray-400">
-                                            —
-                                          </span>
-                                        )}
-                                      </div>
-                                    ));
+                                  const parts = detailBatchParts(item);
+                                  if (parts.length === 0) {
+                                    return (
+                                      <span className="text-xs text-gray-400">
+                                        —
+                                      </span>
+                                    );
                                   }
-                                  return (item as any).expiry_date ? (
-                                    <span className="text-gray-700">
-                                      {String((item as any).expiry_date).slice(
-                                        0,
-                                        10,
+                                  return parts.map((part, partIdx) => (
+                                    <div key={partIdx} className="text-gray-700">
+                                      {part.expiry_date ?? (
+                                        <span className="text-xs text-gray-400">
+                                          —
+                                        </span>
                                       )}
-                                    </span>
-                                  ) : (
-                                    <span className="text-xs text-gray-400">
-                                      —
-                                    </span>
-                                  );
+                                    </div>
+                                  ));
                                 })()}
                               </TableCell>
                               <TableCell className="text-right text-sm">
@@ -3394,7 +3558,11 @@ function OrderDetailModal({
               const creditLineNet = (it: any, qty: number) =>
                 Math.abs(qty - parseFloat(String(it.quantity))) < 0.0005
                   ? roundMoney(it.total_price)
-                  : computeExactLineTotal(qty, it.unit_price, it.discount_percent);
+                  : computeExactLineTotal(
+                      qty,
+                      it.unit_price,
+                      it.discount_percent,
+                    );
               let creditNet = 0;
               for (const it of cnEligible) {
                 const sel = creditNoteSelection[it.id];
@@ -3550,7 +3718,8 @@ function OrderDetailModal({
                   {/* Live total */}
                   <div className="flex items-center justify-end gap-4 text-sm">
                     <span className="text-gray-500">
-                      Сума за кредитиране{includeVat ? " (с ДДС)" : " (без ДДС)"}:
+                      Сума за кредитиране
+                      {includeVat ? " (с ДДС)" : " (без ДДС)"}:
                     </span>
                     <span className="text-lg font-bold text-amber-700">
                       −{formatCurrency(grossSum)}
@@ -4204,6 +4373,9 @@ function EditOrderItemsModal({
   const [deliveryDate, setDeliveryDate] = useState("");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
+  // Ред, за който е отворено „Разпредели по партиди…“.
+  const [splitRowKey, setSplitRowKey] = useState<string | null>(null);
+  const splitRow = items.find((row) => row.row_key === splitRowKey) ?? null;
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   // Глобалната отстъпка може да се въвежда или като процент, или като
@@ -4303,6 +4475,9 @@ function EditOrderItemsModal({
 
     const mappedItems =
       order.items?.map((item) => {
+        const kept = keptBatchFields(item);
+        // Неизпълнена поръчка: избраното разпределение по 2+ партиди.
+        const plan = kept.keep_batches ? undefined : plannedBatchesOf(item);
         const rawW =
           (item as any).weight_kg ?? (item as any).product?.weight_kg ?? null;
         const w = rawW != null ? parseFloat(String(rawW)) : NaN;
@@ -4331,15 +4506,17 @@ function EditOrderItemsModal({
           // GQF: prefill the previously chosen batch when the backend returns
           // it; otherwise BatchSelect re-applies the FEFO default on open.
           batch_id:
-            (item as any).batch_id != null
+            !plan && (item as any).batch_id != null
               ? String((item as any).batch_id)
               : "",
-          expiry_date: (item as any).expiry_date
-            ? String((item as any).expiry_date).slice(0, 10)
-            : "",
+          expiry_date:
+            !plan && (item as any).expiry_date
+              ? String((item as any).expiry_date).slice(0, 10)
+              : "",
+          batch_plan: plan,
           // Реалното изписване на реда (може да е от няколко партиди) —
           // без пипане при запис се изписва пак така.
-          ...keptBatchFields(item),
+          ...kept,
         });
       }) || [];
 
@@ -4389,6 +4566,7 @@ function EditOrderItemsModal({
                 expiry_date: "",
                 keep_batches: false,
                 kept_allocations: undefined,
+                batch_plan: undefined,
               }
             : item,
         ),
@@ -4549,6 +4727,7 @@ function EditOrderItemsModal({
       // GQF: block lines pointing at an expired batch before persisting.
       // Непипнатите редове не са нова продажба — стоката им вече е изписана.
       assertNoExpiredBatches(validItems.filter((i) => !i.keep_batches));
+      assertBatchPlansMatch(validItems);
       const res = await api.put(`/orders/${order.id}`, {
         delivery_date: deliveryDate || undefined,
         notes: notes || undefined,
@@ -4560,7 +4739,7 @@ function EditOrderItemsModal({
           // Batch F1 — only send when not the default; spares the wire
           // and lets the backend's column DEFAULT 'normal' handle it.
           line_status: i.line_status !== "normal" ? i.line_status : undefined,
-          ...editLineBatchPayload(i),
+          ...lineBatchPayload(i),
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
       });
@@ -4611,6 +4790,9 @@ function EditOrderItemsModal({
       const msg =
         err?.response?.data?.error ||
         err?.response?.data?.message ||
+        // Проверка във формата преди заявката (изтекла партида,
+        // разпределение по партиди ≠ количеството).
+        (!err?.isAxiosError && err?.message) ||
         "Грешка при запис на поръчката";
       setErrorMsg(msg);
     },
@@ -4764,24 +4946,39 @@ function EditOrderItemsModal({
                 />
                 {/* Колоната пази отстъпката с 2 знака, затова написаната сума
                     може да не е точно постижима — показваме реалната. */}
-                {bulkDiscountAmount !== "" && bulkDiscount !== "" && (() => {
-                  const pct = Number(bulkDiscount) || 0;
-                  const full = items.reduce(
-                    (sum, it) => roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price)),
-                    0,
-                  );
-                  const after = items.reduce(
-                    (sum, it) =>
-                      roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price, pct)),
-                    0,
-                  );
-                  const applied = roundMoney(full - after);
-                  return Math.abs(applied - (Number(bulkDiscountAmount) || 0)) >= 0.005 ? (
-                    <span className="text-xs text-amber-700">
-                      реално {formatCurrency(applied)} ({pct}%)
-                    </span>
-                  ) : null;
-                })()}
+                {bulkDiscountAmount !== "" &&
+                  bulkDiscount !== "" &&
+                  (() => {
+                    const pct = Number(bulkDiscount) || 0;
+                    const full = items.reduce(
+                      (sum, it) =>
+                        roundMoney(
+                          sum +
+                            computeExactLineTotal(it.quantity, it.unit_price),
+                        ),
+                      0,
+                    );
+                    const after = items.reduce(
+                      (sum, it) =>
+                        roundMoney(
+                          sum +
+                            computeExactLineTotal(
+                              it.quantity,
+                              it.unit_price,
+                              pct,
+                            ),
+                        ),
+                      0,
+                    );
+                    const applied = roundMoney(full - after);
+                    return Math.abs(
+                      applied - (Number(bulkDiscountAmount) || 0),
+                    ) >= 0.005 ? (
+                      <span className="text-xs text-amber-700">
+                        реално {formatCurrency(applied)} ({pct}%)
+                      </span>
+                    ) : null;
+                  })()}
                 <Button
                   type="button"
                   variant="secondary"
@@ -4897,6 +5094,14 @@ function EditOrderItemsModal({
                                 : item.batch_id
                             }
                             keptAllocations={item.kept_allocations}
+                            plan={item.batch_plan}
+                            onSplitRequest={() => {
+                              if (!(Number(item.quantity) > 0)) {
+                                toast.error("Първо въведете количество.");
+                                return;
+                              }
+                              setSplitRowKey(item.row_key);
+                            }}
                             onChange={(batchId, expiry) => {
                               const keep = batchId === KEPT_BATCHES_VALUE;
                               setItems((prev) =>
@@ -4905,6 +5110,7 @@ function EditOrderItemsModal({
                                     ? {
                                         ...row,
                                         keep_batches: keep,
+                                        batch_plan: undefined,
                                         batch_id: keep
                                           ? String(
                                               row.kept_allocations?.[0]
@@ -4920,18 +5126,11 @@ function EditOrderItemsModal({
                               );
                             }}
                           />
+                          <BatchPlanMismatchHint row={item} />
                         </TableCell>
                         {/* GQF: Срок на годност на избраната партида */}
                         <TableCell>
-                          {item.expiry_date ? (
-                            <span
-                              className={`text-xs ${expiryColorClass(item.expiry_date)}`}
-                            >
-                              {formatDate(item.expiry_date)}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-400">—</span>
-                          )}
+                          <RowExpiryCell row={item} />
                         </TableCell>
                         <TableCell>
                           {item.product_id ? (
@@ -5248,6 +5447,28 @@ function EditOrderItemsModal({
             )}
           </Button>
         </DialogFooter>
+        {splitRow && (
+          <BatchSplitDialog
+            key={splitRow.row_key}
+            productId={splitRow.product_id}
+            productName={splitRow.product_name}
+            unit={splitRow.unit}
+            quantity={Number(splitRow.quantity) || 0}
+            initialPlan={splitRowInitialPlan(splitRow)}
+            keptAllocations={splitRow.kept_allocations}
+            onSave={(plan) => {
+              setItems((prev) =>
+                prev.map((row) =>
+                  row.row_key === splitRow.row_key
+                    ? withBatchPlan(row, plan)
+                    : row,
+                ),
+              );
+              setSplitRowKey(null);
+            }}
+            onClose={() => setSplitRowKey(null)}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -5435,6 +5656,9 @@ function CreateOrderModal({
     staleTime: 60_000,
   });
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
+  // Ред, за който е отворено „Разпредели по партиди…“.
+  const [splitRowKey, setSplitRowKey] = useState<string | null>(null);
+  const splitRow = items.find((row) => row.row_key === splitRowKey) ?? null;
   const [stockWarnings, setStockWarnings] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [orderCreated, setOrderCreated] = useState(false);
@@ -5711,6 +5935,7 @@ function CreateOrderModal({
             // FEFO default for the new product once its batches load.
             batch_id: "",
             expiry_date: "",
+            batch_plan: undefined,
           };
         }),
       );
@@ -6014,6 +6239,7 @@ function CreateOrderModal({
       // GQF: block lines that point at an expired batch (back-order lines
       // with no batch are allowed — backend handles those).
       assertNoExpiredBatches(validItems);
+      assertBatchPlansMatch(validItems);
 
       const res = await api.post("/orders", {
         partner_id: Number(form.partner_id),
@@ -6054,8 +6280,9 @@ function CreateOrderModal({
           discount_percent: Number(i.discount_percent) || 0,
           // Batch F1 — tunnel through the line state set by split-on-oversell
           line_status: (i as any).line_status ?? undefined,
-          // GQF: партида (ако не е подадена, backend FEFO я избира)
-          batch_id: i.batch_id ? Number(i.batch_id) : undefined,
+          // GQF: избрана партида или разпределение по партиди; без избор
+          // backend изписва по FEFO при изпълнение.
+          ...lineBatchPayload(i),
         })),
         allow_below_cost: vars.allow_below_cost === true ? true : undefined,
         status: vars.asQuoted ? "quoted" : undefined,
@@ -6126,6 +6353,9 @@ function CreateOrderModal({
       const msg =
         err.response?.data?.message ||
         err.response?.data?.error ||
+        // Проверка във формата преди заявката (изтекла партида,
+        // разпределение по партиди ≠ количеството).
+        (!err?.isAxiosError && err?.message) ||
         "Грешка при създаване на поръчката";
       setErrorMsg(msg);
     },
@@ -6715,24 +6945,42 @@ function CreateOrderModal({
                       />
                       {/* Колоната пази отстъпката с 2 знака, затова написаната сума
                           може да не е точно постижима — показваме реалната. */}
-                      {bulkDiscountAmount !== "" && bulkDiscount !== "" && (() => {
-                        const pct = Number(bulkDiscount) || 0;
-                        const full = items.reduce(
-                          (sum, it) => roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price)),
-                          0,
-                        );
-                        const after = items.reduce(
-                          (sum, it) =>
-                            roundMoney(sum + computeExactLineTotal(it.quantity, it.unit_price, pct)),
-                          0,
-                        );
-                        const applied = roundMoney(full - after);
-                        return Math.abs(applied - (Number(bulkDiscountAmount) || 0)) >= 0.005 ? (
-                          <span className="text-xs text-amber-700">
-                            реално {formatCurrency(applied)} ({pct}%)
-                          </span>
-                        ) : null;
-                      })()}
+                      {bulkDiscountAmount !== "" &&
+                        bulkDiscount !== "" &&
+                        (() => {
+                          const pct = Number(bulkDiscount) || 0;
+                          const full = items.reduce(
+                            (sum, it) =>
+                              roundMoney(
+                                sum +
+                                  computeExactLineTotal(
+                                    it.quantity,
+                                    it.unit_price,
+                                  ),
+                              ),
+                            0,
+                          );
+                          const after = items.reduce(
+                            (sum, it) =>
+                              roundMoney(
+                                sum +
+                                  computeExactLineTotal(
+                                    it.quantity,
+                                    it.unit_price,
+                                    pct,
+                                  ),
+                              ),
+                            0,
+                          );
+                          const applied = roundMoney(full - after);
+                          return Math.abs(
+                            applied - (Number(bulkDiscountAmount) || 0),
+                          ) >= 0.005 ? (
+                            <span className="text-xs text-amber-700">
+                              реално {formatCurrency(applied)} ({pct}%)
+                            </span>
+                          ) : null;
+                        })()}
                       <Button
                         type="button"
                         variant="secondary"
@@ -6858,25 +7106,35 @@ function CreateOrderModal({
                                 <BatchSelect
                                   productId={item.product_id}
                                   value={item.batch_id}
+                                  plan={item.batch_plan}
+                                  onSplitRequest={() => {
+                                    if (!(Number(item.quantity) > 0)) {
+                                      toast.error("Първо въведете количество.");
+                                      return;
+                                    }
+                                    setSplitRowKey(item.row_key);
+                                  }}
                                   onChange={(batchId, expiry) => {
-                                    setItem(i, "batch_id", batchId);
-                                    setItem(i, "expiry_date", expiry);
+                                    setItems((prev) =>
+                                      prev.map((row, rowIdx) =>
+                                        rowIdx === i
+                                          ? {
+                                              ...row,
+                                              batch_id: batchId,
+                                              expiry_date: expiry,
+                                              batch_plan: undefined,
+                                            }
+                                          : row,
+                                      ),
+                                    );
+                                    setStockWarnings([]);
                                   }}
                                 />
+                                <BatchPlanMismatchHint row={item} />
                               </TableCell>
                               {/* GQF: Срок на годност на избраната партида */}
                               <TableCell>
-                                {item.expiry_date ? (
-                                  <span
-                                    className={`text-xs ${expiryColorClass(item.expiry_date)}`}
-                                  >
-                                    {formatDate(item.expiry_date)}
-                                  </span>
-                                ) : (
-                                  <span className="text-xs text-gray-400">
-                                    —
-                                  </span>
-                                )}
+                                <RowExpiryCell row={item} />
                               </TableCell>
                               <TableCell>
                                 {item.product_id ? (
@@ -7223,12 +7481,16 @@ function CreateOrderModal({
                   // Всеки ред закръглен като на сървъра, после сборът.
                   const giveSum = replacementState.giveItems.reduce(
                     (s, i) =>
-                      roundMoney(s + computeExactLineTotal(i.quantity, i.unit_price)),
+                      roundMoney(
+                        s + computeExactLineTotal(i.quantity, i.unit_price),
+                      ),
                     0,
                   );
                   const retSum = replacementState.returnItems.reduce(
                     (s, i) =>
-                      roundMoney(s + computeExactLineTotal(i.quantity, i.unit_price)),
+                      roundMoney(
+                        s + computeExactLineTotal(i.quantity, i.unit_price),
+                      ),
                     0,
                   );
                   const diff = roundMoney(giveSum - retSum);
@@ -7344,7 +7606,10 @@ function CreateOrderModal({
                         <li key={idx}>
                           {i.product_name}: продаваш на{" "}
                           {formatUnitPrice(
-                            effectiveUnitPrice(i.unit_price, i.discount_percent),
+                            effectiveUnitPrice(
+                              i.unit_price,
+                              i.discount_percent,
+                            ),
                           )}
                           , ДЦ {formatUnitPrice(i.cost_price)} (загуба{" "}
                           {formatCurrency(loss)})
@@ -7435,6 +7700,28 @@ function CreateOrderModal({
               )}
             </DialogFooter>
           </div>
+          {splitRow && (
+            <BatchSplitDialog
+              key={splitRow.row_key}
+              productId={splitRow.product_id}
+              productName={splitRow.product_name}
+              unit={splitRow.unit}
+              quantity={Number(splitRow.quantity) || 0}
+              initialPlan={splitRowInitialPlan(splitRow)}
+              onSave={(plan) => {
+                setItems((prev) =>
+                  prev.map((row) =>
+                    row.row_key === splitRow.row_key
+                      ? withBatchPlan(row, plan)
+                      : row,
+                  ),
+                );
+                setStockWarnings([]);
+                setSplitRowKey(null);
+              }}
+              onClose={() => setSplitRowKey(null)}
+            />
+          )}
         </DialogContent>
         {customerMode === "legal" && form.partner_id && (
           <PartnerHistoryDrawer

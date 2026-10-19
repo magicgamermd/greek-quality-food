@@ -37,11 +37,182 @@ import {
   roundQuantity,
   roundUnitPrice,
 } from "../lib/line-pricing.js";
+import {
+  type BatchPlanEntry,
+  type KeptBudget,
+  budgetKey,
+  isExpiredOn,
+  normalizePlan,
+  planMatchesQuantity,
+  planTotal,
+  takeFromBudget,
+  todayInSofia,
+} from "../lib/batch-plan.js";
+import { displayBatchNumber } from "../utils/batch-display.js";
 import fs from "node:fs";
 import path from "node:path";
 
 const STOCK_COMMITTED_STATUSES = new Set(["fulfilled", "invoiced"]);
 const EPSILON = 0.001;
+
+// ISO дата + N дни (UTC аритметика — без изместване от часовата зона).
+function addDaysIso(iso: string, days: number): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// Номерът на партидата за съобщение към склада. Служебните (АВТО-…,
+// НАЧАЛНО) не значат нищо за човек — тогава „(без номер)“; срокът така или
+// иначе е в съобщението.
+function batchLabel(batchNumber: string | null | undefined): string {
+  return displayBatchNumber(batchNumber ?? null) ?? "(без номер)";
+}
+
+// 2026-12-15 → 15.12.2026 — за съобщения към склада.
+function bgDate(iso: string | null | undefined): string {
+  if (!iso) return "без срок";
+  const [year, month, day] = String(iso).slice(0, 10).split("-");
+  return `${day}.${month}.${year}`;
+}
+
+/**
+ * Разпределението по партиди, избрано за ред: от batch_allocations или от
+ * една избрана партида. null = автоматично (FEFO при изпълнение). Чакащите
+ * и връщаните редове нямат разпределение — нямат стока за изписване.
+ */
+function planFromItem(item: {
+  quantity: number;
+  batch_id?: number;
+  batch_allocations?: { batch_id: number; quantity: number }[];
+  line_status?: string;
+  is_returning?: boolean;
+}): BatchPlanEntry[] | null {
+  if (item.line_status === "awaiting" || item.is_returning) return null;
+  if (item.batch_allocations && item.batch_allocations.length > 0) {
+    const plan = normalizePlan(item.batch_allocations);
+    return plan.length > 0 ? plan : null;
+  }
+  if (item.batch_id) {
+    return [{ batch_id: item.batch_id, quantity: item.quantity }];
+  }
+  return null;
+}
+
+/**
+ * Проверява избраните разпределения по партиди на поръчка ПРЕДИ запис:
+ * сумата = количеството, партидата е от продукта и не е изтекла, а
+ * наличността в склад 1 стига — сборно за всички редове, които я взимат.
+ * Нищо не се изписва: изписването е при изпълнение и там се проверява
+ * наново (резервации няма). Без избрани партиди → нито една заявка.
+ */
+async function validateOrderBatchPlans(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  lines: Array<{
+    productId: number;
+    productName: string;
+    quantity: number;
+    plan: BatchPlanEntry[] | null;
+    allowBackorder: boolean;
+  }>,
+): Promise<void> {
+  const planned = lines.filter((line) => line.plan && line.plan.length > 0);
+  if (planned.length === 0) return;
+
+  for (const line of planned) {
+    if (!planMatchesQuantity(line.plan!, line.quantity)) {
+      throw Object.assign(
+        new Error(
+          `Разпределението по партиди за „${line.productName}“ (${planTotal(line.plan!)}) не съвпада с количеството (${line.quantity})`,
+        ),
+        { statusCode: 400 },
+      );
+    }
+  }
+
+  const batchIds = [
+    ...new Set(planned.flatMap((line) => line.plan!.map((e) => e.batch_id))),
+  ];
+  const { rows } = await client.query(
+    `SELECT b.id, b.product_id, b.batch_number, b.expiry_date,
+            COALESCE(i.quantity, 0) AS available
+       FROM batches b
+       LEFT JOIN inventory i
+              ON i.batch_id = b.id
+             AND i.product_id = b.product_id
+             AND i.warehouse_id = 1
+      WHERE b.id = ANY($1::int[])`,
+    [batchIds],
+  );
+  const byId = new Map<number, any>(
+    rows.map((row: any) => [Number(row.id), row]),
+  );
+  const today = todayInSofia();
+  const demand = new Map<
+    number,
+    { quantity: number; backorder: boolean; productName: string }
+  >();
+
+  for (const line of planned) {
+    for (const entry of line.plan!) {
+      const batch = byId.get(entry.batch_id);
+      if (!batch || Number(batch.product_id) !== line.productId) {
+        throw Object.assign(
+          new Error(`Партида ${entry.batch_id} не е от „${line.productName}“`),
+          { statusCode: 400 },
+        );
+      }
+      const expiry = batch.expiry_date
+        ? String(batch.expiry_date).slice(0, 10)
+        : null;
+      if (isExpiredOn(expiry, today)) {
+        throw Object.assign(
+          new Error(
+            `Партида ${batchLabel(batch.batch_number)} на „${line.productName}“ е с изтекъл срок на годност (${bgDate(expiry)}). Изберете друга партида.`,
+          ),
+          { statusCode: 400 },
+        );
+      }
+      const previous = demand.get(entry.batch_id) ?? {
+        quantity: 0,
+        backorder: false,
+        productName: line.productName,
+      };
+      previous.quantity = roundQuantity(previous.quantity + entry.quantity);
+      previous.backorder = previous.backorder || line.allowBackorder;
+      demand.set(entry.batch_id, previous);
+    }
+  }
+
+  for (const [batchId, need] of demand) {
+    const batch = byId.get(batchId);
+    const available = parseFloat(batch.available ?? "0");
+    const isOpening = batch.batch_number === "НАЧАЛНО";
+    if (!(isOpening && need.backorder) && available < need.quantity - 0.0005) {
+      const expiry = batch.expiry_date
+        ? String(batch.expiry_date).slice(0, 10)
+        : null;
+      throw Object.assign(
+        new Error(
+          `„${need.productName}“ — партида ${batchLabel(batch.batch_number)} (${bgDate(expiry)}): налични ${available}, избрани ${need.quantity}.`,
+        ),
+        { statusCode: 409 },
+      );
+    }
+  }
+}
+
+/** order_items.batch_plan от базата (JSONB) → проверен списък или null. */
+function storedPlan(raw: unknown): BatchPlanEntry[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const plan = normalizePlan(
+    raw.map((entry: any) => ({
+      batch_id: Number(entry?.batch_id),
+      quantity: Number(entry?.quantity),
+    })),
+  );
+  return plan.length > 0 ? plan : null;
+}
 
 type DbExecutor = {
   query: (
@@ -128,11 +299,11 @@ const orderItemSchema = z.object({
   unit_price: z.number().min(0).transform(roundUnitPrice).optional(),
   // По избор — ръчно подадена партида за този ред (вместо автоматично FEFO).
   batch_id: z.number().int().positive().optional(),
-  // Само при редакция: точното досегашно разпределение на реда по партиди
-  // (order_item_batches). Формата го праща за редове, чиито партида и
-  // количество не са пипани — иначе ред, изписан от 2 партиди, се свиваше
-  // до първата и записът падаше с „Недостатъчна наличност“. Има предимство
-  // пред batch_id; сумата трябва да е равна на quantity.
+  // Разпределение на реда по партиди, сумата = quantity. Има предимство
+  // пред batch_id. Пази се в order_items.batch_plan и при изпълнение се
+  // изписва точно то. Идва от „Разпредели по партиди…“ (5 кг от едната
+  // партида + 5 от другата) или при редакция — досегашното изписване
+  // (order_item_batches) на непипнат ред.
   batch_allocations: z
     .array(
       z.object({
@@ -1054,6 +1225,23 @@ export default async function orderRoutes(app: FastifyInstance) {
                 JOIN batches ab ON ab.id = oib.batch_id
                 WHERE oib.order_item_id = oi.id
               ) AS batch_allocations,
+              -- Избраното от склада разпределение (мигр. 107) за още
+              -- неизписан ред — с номер и срок, за формата и детайла.
+              (
+                SELECT COALESCE(
+                  json_agg(json_build_object(
+                    'batch_id', pb.id,
+                    'batch_number', pb.batch_number,
+                    'expiry_date', pb.expiry_date,
+                    'quantity', (plan.entry->>'quantity')::numeric
+                  ) ORDER BY pb.expiry_date ASC NULLS LAST, pb.id),
+                  '[]'::json
+                )
+                FROM jsonb_array_elements(
+                       COALESCE(oi.batch_plan, '[]'::jsonb)
+                     ) AS plan(entry)
+                JOIN batches pb ON pb.id = (plan.entry->>'batch_id')::int
+              ) AS planned_batches,
               (
                 SELECT COALESCE(SUM(quantity), 0)
                 FROM inventory
@@ -1331,6 +1519,23 @@ export default async function orderRoutes(app: FastifyInstance) {
             : body.items;
           const mainStatus = onlyAwaiting ? "awaiting_stock" : body.status;
 
+          // Избраните партиди се проверяват още тук (срок, наличност, сума),
+          // за да не се запише поръчка, която после не може да се изпълни.
+          await validateOrderBatchPlans(
+            client,
+            nonAwaitingItems
+              .filter((item) => !item.is_returning)
+              .map((item) => ({
+                productId: item.product_id,
+                productName:
+                  (productMap.get(item.product_id) as any)?.name_bg ??
+                  `продукт ${item.product_id}`,
+                quantity: item.quantity,
+                plan: planFromItem(item),
+                allowBackorder: item.line_status === "paid_not_taken",
+              })),
+          );
+
           // Insert helper — used twice: once for the main order and once
           // for the awaiting child (mixed case). Snapshots product fields
           // onto each line, returns total + inserted rows. Awaiting lines
@@ -1340,6 +1545,7 @@ export default async function orderRoutes(app: FastifyInstance) {
           const insertItems = async (
             targetOrderId: number,
             sourceItems: typeof body.items,
+            withBatchPlans: boolean,
           ) => {
             let total = 0;
             const inserted: any[] = [];
@@ -1354,7 +1560,9 @@ export default async function orderRoutes(app: FastifyInstance) {
               const unitPrice = roundUnitPrice(
                 item.unit_price ??
                   priceMap.get(item.product_id) ??
-                  (prod?.selling_price ? parseFloat(prod.selling_price) : null) ??
+                  (prod?.selling_price
+                    ? parseFloat(prod.selling_price)
+                    : null) ??
                   0,
               );
               const discountPct = item.discount_percent ?? 0;
@@ -1366,20 +1574,24 @@ export default async function orderRoutes(app: FastifyInstance) {
                 discountPct,
               );
               const isReturning = item.is_returning ?? false;
+              const linePlan = withBatchPlans ? planFromItem(item) : null;
               if (item.line_status !== "awaiting") {
                 // Замяна — returning lines subtract from the running
                 // total so the order's total_amount is the SIGNED
                 // difference (positive → customer pays the difference,
                 // negative → we refund). Spec section 4.1.
-                total = roundMoney(total + (isReturning ? -totalPrice : totalPrice));
+                total = roundMoney(
+                  total + (isReturning ? -totalPrice : totalPrice),
+                );
               }
               const {
                 rows: [orderItem],
               } = await client.query(
                 `INSERT INTO order_items
                    (order_id, product_id, quantity, unit_price, discount_percent, total_price,
-                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status, is_returning)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status, is_returning,
+                    batch_id, batch_plan)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
                 [
                   targetOrderId,
                   item.product_id,
@@ -1392,6 +1604,10 @@ export default async function orderRoutes(app: FastifyInstance) {
                   prod.sku,
                   item.line_status ?? "normal",
                   isReturning,
+                  // Избраните партиди (мигр. 107). Досега изборът във формата
+                  // се изхвърляше и при изпълнение пак се взимаше най-старата.
+                  linePlan?.[0]?.batch_id ?? null,
+                  linePlan ? JSON.stringify(linePlan) : null,
                 ],
               );
               inserted.push(orderItem);
@@ -1462,7 +1678,11 @@ export default async function orderRoutes(app: FastifyInstance) {
             ],
           );
 
-          const mainResult = await insertItems(order.id, mainItems);
+          const mainResult = await insertItems(
+            order.id,
+            mainItems,
+            !onlyAwaiting,
+          );
           const totalAmount = mainResult.total;
           const items = mainResult.items;
 
@@ -1496,7 +1716,12 @@ export default async function orderRoutes(app: FastifyInstance) {
               ...i,
               line_status: "normal" as const,
             }));
-            const childResult = await insertItems(child.id, childAwaitingItems);
+            // Чакащата стока още я няма — без разпределение по партиди.
+            const childResult = await insertItems(
+              child.id,
+              childAwaitingItems,
+              false,
+            );
             awaitingChild = {
               ...child,
               total_amount: childResult.total,
@@ -2015,8 +2240,46 @@ export default async function orderRoutes(app: FastifyInstance) {
               }
             }
 
+            // Изпълнена поръчка: колко от всяка партида вече е изписано по нея.
+            // До това количество стоката е продадена и срокът ѝ не се гледа
+            // при повторното изписване; над него е нова продажба (lib/batch-plan).
+            let keptBudget: KeptBudget | undefined;
             if (mustReconcileStock) {
+              const { rows: previous } = await client.query(
+                `SELECT oi.product_id, oib.batch_id, SUM(oib.quantity) AS quantity
+                   FROM order_item_batches oib
+                   JOIN order_items oi ON oi.id = oib.order_item_id
+                  WHERE oi.order_id = $1
+                  GROUP BY oi.product_id, oib.batch_id`,
+                [id],
+              );
+              keptBudget = new Map(
+                previous.map((row: any) => [
+                  budgetKey(Number(row.product_id), Number(row.batch_id)),
+                  parseFloat(row.quantity),
+                ]),
+              );
               await restoreOrderItemsToInventory(client, orderId);
+            } else {
+              // Неизпълнена: нищо не се изписва сега — само проверка, че
+              // избраните партиди са валидни и стигат.
+              await validateOrderBatchPlans(
+                client,
+                body.items
+                  .filter(
+                    (item) =>
+                      item.line_status !== "awaiting" && !item.is_returning,
+                  )
+                  .map((item) => ({
+                    productId: item.product_id,
+                    productName:
+                      (productMap.get(item.product_id) as any)?.name_bg ??
+                      `продукт ${item.product_id}`,
+                    quantity: item.quantity,
+                    plan: planFromItem(item),
+                    allowBackorder: item.line_status === "paid_not_taken",
+                  })),
+              );
             }
 
             await client.query("DELETE FROM order_items WHERE order_id = $1", [
@@ -2069,13 +2332,18 @@ export default async function orderRoutes(app: FastifyInstance) {
               // to attach the per-batch allocations to. COGS / batch_id are
               // back-filled below once FEFO has chosen the partidi.
               const lineStatus = (item as any).line_status ?? "normal";
+              const linePlan = planFromItem({
+                ...item,
+                line_status: lineStatus,
+              });
               const {
                 rows: [orderItem],
               } = await client.query(
                 `INSERT INTO order_items
                    (order_id, product_id, quantity, unit_price, discount_percent, total_price, cost_unit_price,
-                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+                    name_bg_snapshot, name_en_snapshot, sku_snapshot, line_status,
+                    batch_id, batch_plan)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
                 [
                   id,
                   item.product_id,
@@ -2088,6 +2356,10 @@ export default async function orderRoutes(app: FastifyInstance) {
                   snap.name_en,
                   snap.sku,
                   lineStatus,
+                  // Избраните партиди (мигр. 107) — досега редакцията на
+                  // неизпълнена поръчка ги губеше.
+                  linePlan?.[0]?.batch_id ?? null,
+                  linePlan ? JSON.stringify(linePlan) : null,
                 ],
               );
 
@@ -2109,8 +2381,9 @@ export default async function orderRoutes(app: FastifyInstance) {
                     1,
                     item.quantity,
                     lineStatus === "paid_not_taken",
-                    item.batch_id,
-                    item.batch_allocations,
+                    undefined,
+                    linePlan,
+                    { keptBudget, productLabel: snap.name_bg },
                   );
                   expiryWarnings.push(...deduction.warnings);
                   const firstBatch = deduction.allocations[0]?.batch_id ?? null;
@@ -2440,6 +2713,10 @@ export default async function orderRoutes(app: FastifyInstance) {
             continue;
           }
           try {
+            // Избраното от склада разпределение (мигр. 107) има предимство:
+            // изписва се точно то. Без него — една ръчно избрана партида
+            // (стари редове) или автоматично по FEFO.
+            const plannedBatches = storedPlan(item.batch_plan);
             const deduction = await deductBatched(
               client,
               item.id,
@@ -2447,7 +2724,9 @@ export default async function orderRoutes(app: FastifyInstance) {
               1,
               parseFloat(item.quantity),
               item.line_status === "paid_not_taken",
-              item.batch_id ?? undefined,
+              plannedBatches ? undefined : (item.batch_id ?? undefined),
+              plannedBatches,
+              { productLabel: item.name_bg_snapshot ?? undefined },
             );
             expiryWarnings.push(...deduction.warnings);
             const qtyNum = parseFloat(item.quantity);
@@ -2695,6 +2974,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         // наличност (clean 400/409 чрез asStockHttpError).
         let deduction;
         try {
+          const plannedBatches = storedPlan(item.batch_plan);
           deduction = await deductBatched(
             client,
             item.id,
@@ -2702,7 +2982,9 @@ export default async function orderRoutes(app: FastifyInstance) {
             1,
             parseFloat(item.quantity),
             item.line_status === "paid_not_taken",
-            item.batch_id ?? undefined,
+            plannedBatches ? undefined : (item.batch_id ?? undefined),
+            plannedBatches,
+            { productLabel: item.name_bg_snapshot ?? undefined },
           );
         } catch (err) {
           throw asStockHttpError(err);
@@ -3274,46 +3556,53 @@ export default async function orderRoutes(app: FastifyInstance) {
   }
 
   /**
-   * Редакция: изписва реда наново по досегашното му разпределение по
-   * партиди. Стоката вече е върната по същите партиди от
-   * restoreOrderItemsToInventory, така че това възстановява предишното
-   * състояние. Срокът на годност НЕ се проверява — стоката вече е продадена,
-   * редакцията не е нова продажба. Наличността се проверява (друг ред в
-   * същата редакция може да е взел от партидата); откриващата 'НАЧАЛНО'
-   * партида на back-order ред може да остане в минус, както при създаване.
+   * Изписва реда ТОЧНО по зададеното разпределение по партиди — избраното
+   * от склада (order_items.batch_plan, мигр. 107) или досегашното при
+   * редакция на изпълнена поръчка (PR #98, поръчка №280).
+   *
+   * Срок на годност: проверява се за всичко, което е НОВА продажба. При
+   * редакция на изпълнена поръчка `keptBudget` носи вече изписаното по
+   * поръчката (продукт + партида) — до него стоката е продадена и срокът не
+   * се гледа; над него се гледа.
+   * Наличност: проверява се винаги (FOR UPDATE). Откриващата 'НАЧАЛНО'
+   * партида на back-order ред може да остане в минус, както при FEFO.
+   * Недостиг или изтекла партида → ясен отказ; изборът НЕ се подменя тихо
+   * с друга партида — точно това беше разминаването хартия/склад на №363.
    */
-  async function takeKeptAllocations(
+  async function takeExactAllocations(
     client: PoolClient,
     productId: number,
     warehouseId: number,
     qty: number,
     allowBackorder: boolean,
-    kept: { batch_id: number; quantity: number }[],
-  ): Promise<{ batch_id: number; quantity: number; unit_cost: number }[]> {
-    const merged = new Map<number, number>();
-    for (const part of kept) {
-      merged.set(
-        part.batch_id,
-        roundQuantity((merged.get(part.batch_id) ?? 0) + part.quantity),
-      );
-    }
-    const total = roundQuantity(
-      [...merged.values()].reduce((sum, part) => sum + part, 0),
-    );
-    if (Math.abs(total - qty) > 0.0005) {
+    requested: { batch_id: number; quantity: number }[],
+    keptBudget?: KeptBudget,
+    productLabel?: string,
+  ): Promise<{
+    allocations: { batch_id: number; quantity: number; unit_cost: number }[];
+    warnings: string[];
+  }> {
+    const merged = normalizePlan(requested);
+    if (!planMatchesQuantity(merged, qty)) {
       throw Object.assign(
         new Error(
-          `Разпределението по партиди (${total}) не съвпада с количеството (${qty})`,
+          `Разпределението по партиди${productLabel ? ` за „${productLabel}“` : ""} (${planTotal(merged)}) не съвпада с количеството (${qty})`,
         ),
         { statusCode: 400 },
       );
     }
 
-    const result: { batch_id: number; quantity: number; unit_cost: number }[] =
-      [];
-    for (const [batchId, partQty] of merged) {
+    const today = todayInSofia();
+    const warnBefore = addDaysIso(today, 30);
+    const allocations: {
+      batch_id: number;
+      quantity: number;
+      unit_cost: number;
+    }[] = [];
+    const warnings: string[] = [];
+    for (const { batch_id: batchId, quantity: partQty } of merged) {
       const { rows } = await client.query(
-        "SELECT batch_number, purchase_price FROM batches WHERE id = $1 AND product_id = $2",
+        "SELECT batch_number, expiry_date, purchase_price FROM batches WHERE id = $1 AND product_id = $2",
         [batchId, productId],
       );
       const row = rows[0];
@@ -3323,6 +3612,25 @@ export default async function orderRoutes(app: FastifyInstance) {
           { statusCode: 400 },
         );
       }
+      const label = batchLabel(row.batch_number);
+      const expiry = row.expiry_date
+        ? String(row.expiry_date).slice(0, 10)
+        : null;
+      const newPortion = takeFromBudget(
+        keptBudget,
+        productId,
+        batchId,
+        partQty,
+      );
+      if (newPortion > 0 && isExpiredOn(expiry, today)) {
+        throw Object.assign(
+          new Error(
+            `Партида ${label}${productLabel ? ` на „${productLabel}“` : ""} е с изтекъл срок на годност (${bgDate(expiry)}). Изберете друга партида.`,
+          ),
+          { statusCode: 400 },
+        );
+      }
+
       // Заключваме реда за наличност, както ръчният и FEFO пътят.
       const { rows: stockRows } = await client.query(
         `SELECT quantity FROM inventory
@@ -3335,18 +3643,21 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (!(isOpening && allowBackorder) && available < partQty - 0.0005) {
         throw Object.assign(
           new Error(
-            `Недостатъчна наличност за партида ${row.batch_number ?? batchId}: налични ${available}, искани ${partQty}`,
+            `${productLabel ? `„${productLabel}“ — ` : ""}партида ${label}${expiry ? ` (${bgDate(expiry)})` : ""}: налични ${available}, избрани ${partQty}. Отворете поръчката и изберете партидите наново.`,
           ),
           { statusCode: 409 },
         );
       }
-      result.push({
+      allocations.push({
         batch_id: batchId,
         quantity: partQty,
         unit_cost: parseFloat(row.purchase_price ?? "0"),
       });
+      if (newPortion > 0 && expiry && expiry <= warnBefore) {
+        warnings.push(`Партида ${label} изтича на ${bgDate(expiry)}`);
+      }
     }
-    return result;
+    return { allocations, warnings };
   }
 
   /**
@@ -3374,7 +3685,8 @@ export default async function orderRoutes(app: FastifyInstance) {
     qty: number,
     allowBackorder: boolean,
     manualBatchId?: number,
-    keptAllocations?: { batch_id: number; quantity: number }[],
+    exactAllocations?: { batch_id: number; quantity: number }[] | null,
+    exactOptions: { keptBudget?: KeptBudget; productLabel?: string } = {},
   ): Promise<{
     cost: number;
     warnings: string[];
@@ -3387,15 +3699,19 @@ export default async function orderRoutes(app: FastifyInstance) {
     }[];
     let warnings: string[] = [];
 
-    if (keptAllocations && keptAllocations.length > 0) {
-      allocations = await takeKeptAllocations(
+    if (exactAllocations && exactAllocations.length > 0) {
+      const exact = await takeExactAllocations(
         client,
         productId,
         warehouseId,
         qty,
         allowBackorder,
-        keptAllocations,
+        exactAllocations,
+        exactOptions.keptBudget,
+        exactOptions.productLabel,
       );
+      allocations = exact.allocations;
+      warnings = exact.warnings;
     } else if (manualBatchId) {
       const { rows } = await client.query(
         `SELECT i.batch_id, b.batch_number, b.expiry_date, b.purchase_price,
@@ -4099,6 +4415,25 @@ export default async function orderRoutes(app: FastifyInstance) {
         [id],
       );
 
+      // Избраните от склада разпределения (мигр. 107) на още неизписани
+      // редове — номер и срок на партидите с една заявка.
+      const plannedBatchIds = [
+        ...new Set(
+          (items as any[]).flatMap((it) =>
+            (storedPlan(it.batch_plan) ?? []).map((entry) => entry.batch_id),
+          ),
+        ),
+      ];
+      const plannedBatchInfo = new Map<number, any>();
+      if (plannedBatchIds.length > 0) {
+        const { rows: plannedRows } = await query(
+          "SELECT id, batch_number, expiry_date FROM batches WHERE id = ANY($1::int[])",
+          [plannedBatchIds],
+        );
+        for (const row of plannedRows)
+          plannedBatchInfo.set(Number(row.id), row);
+      }
+
       // Групираме разпределенията по order_item_id, за да можем да слеем
       // редовете с партиди и fallback-редовете при запазен ред на поръчката.
       const allocationsByItem = new Map<number, any[]>();
@@ -4137,6 +4472,43 @@ export default async function orderRoutes(app: FastifyInstance) {
               expiry_date: alloc.expiry_date,
             });
           }
+        } else if (storedPlan(orderItem.batch_plan)) {
+          // Неизписан ред с избрани от склада партиди → печатаме ТЯХ, по ред
+          // за всяка партида с нейното количество. Точно те ще се изпишат
+          // при изпълнение. (Досега документът показваше автоматичния избор
+          // и складът дописваше реалната партида на ръка — поръчка №363.)
+          const plan = [...storedPlan(orderItem.batch_plan)!].sort((a, b) => {
+            const ea = plannedBatchInfo.get(a.batch_id)?.expiry_date ?? "9999";
+            const eb = plannedBatchInfo.get(b.batch_id)?.expiry_date ?? "9999";
+            return (
+              String(ea).localeCompare(String(eb)) || a.batch_id - b.batch_id
+            );
+          });
+          for (const entry of plan) {
+            const batch = plannedBatchInfo.get(entry.batch_id);
+            docItems.push({
+              sku: orderItem.sku,
+              name_bg: orderItem.name_bg,
+              name_en: orderItem.name_en,
+              brand: orderItem.brand,
+              unit: orderItem.unit,
+              quantity: entry.quantity,
+              batch_number: batch?.batch_number ?? null,
+              expiry_date: batch?.expiry_date ?? null,
+            });
+          }
+        } else if (orderItem.batch_id) {
+          // Стар ред с една ръчно избрана партида → нея, не автоматичната.
+          docItems.push({
+            sku: orderItem.sku,
+            name_bg: orderItem.name_bg,
+            name_en: orderItem.name_en,
+            brand: orderItem.brand,
+            unit: orderItem.unit,
+            quantity: parseFloat(orderItem.quantity),
+            batch_number: orderItem.batch_number,
+            expiry_date: orderItem.expiry_date,
+          });
         } else {
           // Редът още не е експедиран → няма записани order_item_batches.
           // Показваме FEFO ПРЕДВИЖДАНЕ (кои партиди + срокове ще излязат при
@@ -4269,7 +4641,11 @@ export default async function orderRoutes(app: FastifyInstance) {
       // те не се фактурират.
       const offerNet = items
         .filter((it: any) => it.line_status !== "awaiting")
-        .reduce((sum: number, it: any) => roundMoney(sum + roundMoney(it.total_price)), 0);
+        .reduce(
+          (sum: number, it: any) =>
+            roundMoney(sum + roundMoney(it.total_price)),
+          0,
+        );
       // ДДС като на стоковата разписка: по издадената фактура, ако има;
       // иначе по заявката (по подразбиране с ДДС). Износ/ВОП е без ДДС.
       let offerIncludesVat = request.query.include_vat !== "false";
