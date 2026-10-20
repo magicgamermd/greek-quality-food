@@ -925,17 +925,43 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             { statusCode: 400 },
           );
         }
-        if (
+        // Смяна на ДДС режима на издадена фактура — същият номер и дата,
+        // нов PDF. Повод: фактура 0000000338 на Bulstock (износ) излезе с
+        // ДДС по грешка. Само докато към нея няма кредитно известие (то
+        // стъпва на старите суми); без ДДС — само с основание, защото то
+        // се печата в „Основание за сделката“.
+        const vatModeChange =
           body.include_vat !== undefined &&
-          body.include_vat !== (invoice.include_vat !== false) &&
-          !isProforma
-        ) {
-          throw Object.assign(
-            new Error(
-              "Издадена фактура не сменя ДДС режим — изтрий/анулирай я и издай нова.",
-            ),
-            { statusCode: 400 },
+          body.include_vat !== (invoice.include_vat !== false);
+        if (vatModeChange && !isProforma) {
+          const { rows: creditNotes } = await client.query(
+            `SELECT invoice_number FROM invoices
+              WHERE related_invoice_id = $1
+                AND document_type = 'credit_note'
+                AND status <> 'cancelled'
+              LIMIT 1`,
+            [id],
           );
+          if (creditNotes.length > 0) {
+            throw Object.assign(
+              new Error(
+                `Към фактурата има кредитно известие ${creditNotes[0].invoice_number} — ДДС режимът не може да се смени.`,
+              ),
+              { statusCode: 409 },
+            );
+          }
+          if (
+            body.include_vat === false &&
+            !body.vat_exemption_reason &&
+            !invoice.vat_exemption_reason
+          ) {
+            throw Object.assign(
+              new Error(
+                "Изберете основание за фактура без ДДС (напр. износ — чл. 28 ЗДДС).",
+              ),
+              { statusCode: 400 },
+            );
+          }
         }
         if (invoice.status === "cancelled") {
           throw Object.assign(
@@ -1015,7 +1041,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         if (parseFloat(paidTotal) > totalGross + 0.001) {
           throw Object.assign(
             new Error(
-              "Invoice cannot be regenerated: recorded payments exceed recalculated total",
+              `Платени са ${bgNumber(parseFloat(paidTotal), 2)} €, а фактурата ` +
+                `след преизчисляване е ${bgNumber(totalGross, 2)} € — първо ` +
+                "коригирайте плащането.",
             ),
             { statusCode: 409 },
           );
@@ -1057,6 +1085,19 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             id,
           ],
         );
+
+        // Следа: издадена фактура със сменен ДДС режим (номерът е същият).
+        if (vatModeChange && !isProforma) {
+          await client.query(
+            `INSERT INTO notifications (type, message) VALUES ('invoice_vat_changed', $1)`,
+            [
+              includeVat
+                ? `Фактура ${invoice.invoice_number} е преиздадена С ДДС: ${bgNumber(totalGross, 2)} €.`
+                : `Фактура ${invoice.invoice_number} е преиздадена БЕЗ ДДС: ${bgNumber(totalGross, 2)} €. ` +
+                  `Основание: ${updated?.vat_exemption_reason ?? "—"}.`,
+            ],
+          );
+        }
 
         // Regenerate PDF
         const company = await getCompanySettings();
