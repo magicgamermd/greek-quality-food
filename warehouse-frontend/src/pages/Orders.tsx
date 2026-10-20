@@ -107,6 +107,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -924,6 +925,10 @@ function OrderDetailModal({
   // legal-basis fields. Replaces the inline inputs that were pushing the
   // "Генерирай фактура" button around.
   const [invoiceExtrasOpen, setInvoiceExtrasOpen] = useState(false);
+  // Смяна на ДДС на издадена фактура: целевият режим (null = затворено) и
+  // основанието при „без ДДС“. Фактурата се преиздава със същия номер.
+  const [vatChangeTarget, setVatChangeTarget] = useState<boolean | null>(null);
+  const [vatChangeBasis, setVatChangeBasis] = useState("");
   const [protocolDialogOpen, setProtocolDialogOpen] = useState(false);
   const [protocolPlace, setProtocolPlace] = useState("");
   const [protocolDate, setProtocolDate] = useState(
@@ -1029,6 +1034,8 @@ function OrderDetailModal({
     setCreditNoteReason("");
     setCreditNoteRestoreStock(true);
     setCreditNoteSelection({});
+    setVatChangeTarget(null);
+    setVatChangeBasis("");
     setIssuedCreditNoteId(null);
     setClientDisplayName("");
     setClientDisplayEgn("");
@@ -2831,17 +2838,55 @@ function OrderDetailModal({
                     </DropdownMenu>
                   </div>
                 ) : (
+                  // Издадена фактура: смяна на ДДС → преиздаване със същия
+                  // номер (прозорец за потвърждение с основание и сума).
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border">
                     <span className="text-xs text-gray-500">ДДС:</span>
-                    <span
-                      className={`px-2.5 py-1 text-xs font-medium rounded-md ${
-                        invoiceIncludesVat !== false
-                          ? "bg-[#6c3dff]/10 text-[#6c3dff] border border-[#6c3dff]/20"
-                          : "bg-violet-50 text-violet-600 border border-violet-200"
-                      }`}
-                    >
-                      {invoiceIncludesVat !== false ? "С ДДС" : "Без ДДС"}
-                    </span>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md ${
+                            invoiceIncludesVat !== false
+                              ? "bg-[#6c3dff]/10 text-[#6c3dff] border border-[#6c3dff]/20 hover:bg-[#6c3dff]/20"
+                              : "bg-violet-50 text-violet-600 border border-violet-200 hover:bg-violet-100"
+                          }`}
+                          title="Смени ДДС режима — фактурата се преиздава със същия номер"
+                        >
+                          {invoiceIncludesVat !== false ? "С ДДС" : "Без ДДС"}
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        className="min-w-[220px]"
+                      >
+                        <DropdownMenuItem
+                          disabled={invoiceIncludesVat !== false}
+                          onClick={() => setVatChangeTarget(true)}
+                          className={
+                            invoiceIncludesVat !== false ? "font-semibold" : ""
+                          }
+                        >
+                          С ДДС (20%)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={invoiceIncludesVat === false}
+                          onClick={() => {
+                            setVatChangeBasis(
+                              vatExemptionReason.trim() ||
+                                VAT_EXEMPTION_REASONS[0],
+                            );
+                            setVatChangeTarget(false);
+                          }}
+                          className={
+                            invoiceIncludesVat === false ? "font-semibold" : ""
+                          }
+                        >
+                          Без ДДС (износ/ВОД — иска основание)
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 )}
 
@@ -3947,6 +3992,142 @@ function OrderDetailModal({
             </Button>
             <Button onClick={() => setInvoiceExtrasOpen(false)}>Готово</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Смяна на ДДС на издадена фактура — преиздава се със същия номер
+          и дата (PUT /invoices/:id/regenerate с include_vat). */}
+      <Dialog
+        open={vatChangeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setVatChangeTarget(null);
+        }}
+        modal={false}
+      >
+        <DialogContent className="max-w-md">
+          {vatChangeTarget !== null &&
+            (() => {
+              // Сумата както ще я преизчисли сървърът — от редовете на
+              // поръчката (без чакащите), ДДС 20% отгоре.
+              const lines = (detail.items ?? []).filter(
+                (it) => (it.line_status ?? "normal") !== "awaiting",
+              );
+              const net = lines.reduce(
+                (sum, it) => roundMoney(sum + roundMoney(it.total_price)),
+                0,
+              );
+              const withVat = roundMoney(net + roundMoney(net * 0.2));
+              const fromGross = invoiceIncludesVat !== false ? withVat : net;
+              const toGross = vatChangeTarget ? withVat : net;
+              const partnerVat = String(
+                detail.partner?.vat_number ?? "",
+              ).trim();
+              const bulgarianVat = !vatChangeTarget && /^BG/i.test(partnerVat);
+              const invoiceId = effectiveInvoiceId;
+              const target = vatChangeTarget;
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>
+                      {target ? "Фактура с ДДС" : "Фактура без ДДС"}
+                    </DialogTitle>
+                    <DialogDescription>
+                      Фактура {detail.invoice_number ?? ""} се преиздава със
+                      същия номер и дата — {target ? "с ДДС 20%" : "без ДДС"}.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm">
+                    <div className="flex items-baseline justify-between gap-3 rounded-md bg-gray-50 px-3 py-2">
+                      <span className="text-gray-500">Сума за получаване</span>
+                      <span className="whitespace-nowrap">
+                        <span className="text-gray-400 line-through">
+                          {formatCurrency(fromGross)}
+                        </span>{" "}
+                        →{" "}
+                        <span className="font-semibold">
+                          {formatCurrency(toGross)}
+                        </span>
+                      </span>
+                    </div>
+                    {!target && (
+                      <div>
+                        <Label className="text-xs text-amber-700">
+                          Основание (без ДДС)
+                        </Label>
+                        <Input
+                          list="vat-change-basis"
+                          value={vatChangeBasis}
+                          onChange={(e) => setVatChangeBasis(e.target.value)}
+                          placeholder="избери или въведи свободно"
+                          maxLength={500}
+                          className="text-sm"
+                        />
+                        <datalist id="vat-change-basis">
+                          {VAT_EXEMPTION_REASONS.map((r) => (
+                            <option key={r} value={r} />
+                          ))}
+                        </datalist>
+                        <div className="mt-1 text-xs text-gray-500">
+                          Печата се в „Основание за сделката“.
+                        </div>
+                      </div>
+                    )}
+                    {bulgarianVat && (
+                      <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        {detail.partner?.name ?? "Клиентът"} е с български ДДС
+                        номер ({partnerVat}) — без ДДС само при износ/ВОД или с
+                        основание от счетоводителя.
+                      </div>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      Ако фактурата вече е осчетоводена при клиента, правилното
+                      е кредитно известие и нова фактура.
+                    </p>
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setVatChangeTarget(null)}
+                    >
+                      Отказ
+                    </Button>
+                    <Button
+                      disabled={
+                        regenerateInvoiceMutation.isPending ||
+                        !invoiceId ||
+                        (!target && !vatChangeBasis.trim())
+                      }
+                      onClick={() => {
+                        if (!invoiceId) return;
+                        const basis = vatChangeBasis.trim();
+                        regenerateInvoiceMutation.mutate(
+                          {
+                            id: invoiceId,
+                            include_vat: target,
+                            vat_exemption_reason: target ? undefined : basis,
+                          },
+                          {
+                            onSuccess: () => {
+                              setVatChangeTarget(null);
+                              setIncludeVat(target);
+                              if (!target) setVatExemptionReason(basis);
+                              setTimeout(
+                                () => void openInvoicePdf(invoiceId),
+                                300,
+                              );
+                            },
+                          },
+                        );
+                      }}
+                    >
+                      {regenerateInvoiceMutation.isPending && (
+                        <Spinner size="sm" />
+                      )}
+                      Преиздай {target ? "с ДДС" : "без ДДС"}
+                    </Button>
+                  </DialogFooter>
+                </>
+              );
+            })()}
         </DialogContent>
       </Dialog>
       {/* Acceptance protocol — manual override dialog before PDF download */}
