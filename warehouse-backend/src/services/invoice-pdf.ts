@@ -174,6 +174,8 @@ interface InvoiceData {
   includeVat?: boolean;
   documentType?: "invoice" | "credit_note" | "proforma";
   relatedInvoiceNumber?: string;
+  /** Дата на фактурата, към която е КИ-то — печата се до номера ѝ. */
+  relatedInvoiceDate?: string | Date | null;
   sourceCurrency?: string | null;
   outputPath: string;
   /**
@@ -217,7 +219,7 @@ function formatBgn(amountEur: number): string {
   return `${bgn.toFixed(2).replace(".", ",")} лв.`;
 }
 
-function formatDate(date: string): string {
+function formatDate(date: string | Date): string {
   const d = new Date(date);
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -880,9 +882,13 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
       }
 
       if (isCreditNote && data.relatedInvoiceNumber) {
+        // „Към фактура: 0000000333 от 12.10.2026“ — с датата на фактурата.
+        const relatedDate = data.relatedInvoiceDate
+          ? ` ${tr("от", "dated")} ${formatDate(data.relatedInvoiceDate)}`
+          : "";
         doc.fontSize(8).font("Main");
-        doc.text(`${tr("Към фактура:", "To invoice:")} ${data.relatedInvoiceNumber}`, R - 180, y + 36, {
-          width: 180,
+        doc.text(`${tr("Към фактура:", "To invoice:")} ${data.relatedInvoiceNumber}${relatedDate}`, R - 240, y + 36, {
+          width: 240,
           align: "right",
         });
       }
@@ -1047,6 +1053,8 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               ? toNum(item.total_price) / qty
               : toNum(item.unit_price)
             : display.unitPrice;
+        // КИ: количеството без минус — стойността и сумите остават с минус.
+        const shownQty = isCreditNote ? Math.abs(qty) : qty;
         const description = en
           ? item.name_en || item.name_bg
           : item.name_bg || item.name_en;
@@ -1060,7 +1068,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               item.sku || "",
               description,
               unit,
-              qty.toFixed(3),
+              shownQty.toFixed(3),
               formatEurUnitPrice(price, sourceCurrency),
               `${vatRateLabel}%`,
               formatEur(total, sourceCurrency),
@@ -1070,7 +1078,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               item.sku || "",
               description,
               unit,
-              qty.toFixed(3),
+              shownQty.toFixed(3),
               formatEurUnitPrice(price, sourceCurrency),
               formatEur(total, sourceCurrency),
             ];

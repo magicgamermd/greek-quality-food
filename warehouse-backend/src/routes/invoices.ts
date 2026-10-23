@@ -1490,14 +1490,16 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           }
 
           let relatedInvoiceNumber: string | null = null;
+          let relatedInvoiceDate: string | Date | null = null;
           if (isCreditNote) {
             const {
               rows: [parent],
             } = await query(
-              "SELECT invoice_number FROM invoices WHERE id = $1",
+              "SELECT invoice_number, invoice_date FROM invoices WHERE id = $1",
               [invoice.related_invoice_id],
             );
             relatedInvoiceNumber = parent?.invoice_number ?? null;
+            relatedInvoiceDate = parent?.invoice_date ?? null;
           }
 
           const company = await getCompanySettings();
@@ -1525,6 +1527,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
                   ? "proforma"
                   : "invoice",
               relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
+              relatedInvoiceDate,
               sourceCurrency: (invoice as any).currency ?? null,
               outputPath: tmpPath,
               variant,
@@ -1723,14 +1726,16 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           // For credit notes, look up the parent's invoice_number so the
           // PDF header can show "Към фактура: 0000000003".
           let relatedInvoiceNumber: string | null = null;
+          let relatedInvoiceDate: string | Date | null = null;
           if (isCreditNote) {
             const {
               rows: [parent],
             } = await query(
-              "SELECT invoice_number FROM invoices WHERE id = $1",
+              "SELECT invoice_number, invoice_date FROM invoices WHERE id = $1",
               [invoice.related_invoice_id],
             );
             relatedInvoiceNumber = parent?.invoice_number ?? null;
+            relatedInvoiceDate = parent?.invoice_date ?? null;
           }
 
           const company = await getCompanySettings();
@@ -1752,6 +1757,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             includeVat,
             documentType: isCreditNote ? "credit_note" : "invoice",
             relatedInvoiceNumber: relatedInvoiceNumber ?? undefined,
+            relatedInvoiceDate,
             sourceCurrency: (invoice as any).currency ?? null,
             outputPath: pdfPath,
             showBgn: company.show_bgn_on_invoice === true,
@@ -2202,6 +2208,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           includeVat,
           documentType: "credit_note",
           relatedInvoiceNumber: original.invoice_number,
+          relatedInvoiceDate: original.invoice_date,
           sourceCurrency: (creditNote as any).currency ?? null,
           outputPath: pdfPath,
           showBgn: company.show_bgn_on_invoice === true,
