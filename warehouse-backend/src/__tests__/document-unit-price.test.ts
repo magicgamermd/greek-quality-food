@@ -152,6 +152,73 @@ describe("печатна единична цена = въведената", () =
     expect(texts).toContain("5,685");
   });
 
+  // КИ-0000000002 (ДАР, 23.10.2026) към фактура 0000000333 от 12.10.2026 —
+  // търговска отстъпка 0,631 €/кг. Складът поиска количеството без минус
+  // и датата на фактурата до номера ѝ.
+  const rebateLines = [
+    {
+      sku: "D1002",
+      name_bg: "Баклавички",
+      unit: "kg",
+      quantity: -3,
+      unit_price: 0.631,
+      total_price: -1.89,
+      discount_percent: 0,
+    },
+    {
+      sku: "D1109",
+      name_bg: "Портокалопита",
+      unit: "kg",
+      quantity: -5.6,
+      unit_price: 0.631,
+      total_price: -3.53,
+      discount_percent: 0,
+    },
+  ];
+  const rebateNote = (overrides: Record<string, any> = {}) =>
+    invoiceData(rebateLines, {
+      documentType: "credit_note",
+      relatedInvoiceNumber: "0000000333",
+      relatedInvoiceDate: "2026-10-12",
+      invoice: {
+        invoice_number: "КИ-0000000002",
+        invoice_date: "2026-10-23",
+        total_net: -5.42,
+        total_vat: -1.08,
+        total_gross: -6.5,
+      },
+      ...overrides,
+    });
+
+  it("кредитно известие: количеството без минус, стойността с минус", async () => {
+    const texts = await printedStrings(() => generateInvoicePdf(rebateNote()));
+    expect(texts).toContain("3.000");
+    expect(texts).toContain("5.600");
+    expect(texts).not.toContain("-3.000");
+    expect(texts).not.toContain("-5.600");
+    expect(texts).toContain("-1,89");
+    expect(texts).toContain("-3,53");
+  });
+
+  it("кредитно известие: „Към фактура: 0000000333 от 12.10.2026“", async () => {
+    const texts = await printedStrings(() => generateInvoicePdf(rebateNote()));
+    expect(texts).toContain("Към фактура: 0000000333 от 12.10.2026");
+  });
+
+  it("кредитно известие на английски: „To invoice: … dated …“", async () => {
+    const texts = await printedStrings(() =>
+      generateInvoicePdf(rebateNote({ lang: "en" })),
+    );
+    expect(texts).toContain("To invoice: 0000000333 dated 12.10.2026");
+  });
+
+  it("кредитно известие без дата на фактурата → само номерът (както досега)", async () => {
+    const texts = await printedStrings(() =>
+      generateInvoicePdf(rebateNote({ relatedInvoiceDate: undefined })),
+    );
+    expect(texts).toContain("Към фактура: 0000000333");
+  });
+
   it("стокова разписка: 6.317 (не 6.318)", async () => {
     const texts = await printedStrings(() =>
       generateStockDispatchPdf({
