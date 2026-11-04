@@ -404,6 +404,8 @@ export function IncomingGoods() {
   const [priceAlerts, setPriceAlerts] = useState<PriceChangeAlert[] | null>(
     null,
   );
+  // „Потвърди“ от списъка: доставката се чете преди потвърждението.
+  const [listConfirmingId, setListConfirmingId] = useState<number | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualForm, setManualForm] = useState({
@@ -1452,6 +1454,9 @@ export function IncomingGoods() {
   // да сравним цените с продуктите. Ако четенето не стане, потвърждаваме
   // без съобщението (то не трябва да спира доставката).
   const confirmFromList = async (docId: number) => {
+    // Двоен клик докато четем доставката пращаше две потвърждения.
+    if (listConfirmingId !== null || confirmIncomingMutation.isPending) return;
+    setListConfirmingId(docId);
     let alerts: PriceChangeAlert[] = [];
     if (canSeePurchasePrice) {
       try {
@@ -1477,6 +1482,7 @@ export function IncomingGoods() {
     }
     confirmIncomingMutation.mutate(docId, {
       onSuccess: () => showPriceAlerts(alerts),
+      onSettled: () => setListConfirmingId(null),
     });
   };
 
@@ -2344,7 +2350,10 @@ export function IncomingGoods() {
                                 e.stopPropagation();
                                 void confirmFromList(doc.id);
                               }}
-                              disabled={confirmIncomingMutation.isPending}
+                              disabled={
+                                confirmIncomingMutation.isPending ||
+                                listConfirmingId !== null
+                              }
                             >
                               <CheckCircle className="h-4 w-4" />
                               Потвърди
