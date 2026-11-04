@@ -22,6 +22,7 @@ import {
   Plus,
   Trash2,
   PenLine,
+  Pencil,
   Search,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -33,6 +34,7 @@ import {
 } from "@/lib/incomingDuplicate";
 import type {
   IncomingGoods as IncomingGoodsType,
+  Product,
   ScannedInvoice,
   ScannedInvoiceItem,
   Supplier,
@@ -71,6 +73,18 @@ import {
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
 import { BakaliqLoader } from "@/components/BakaliqLoader";
 import { HighlightMatch } from "@/lib/highlight";
+import { usePermissions } from "@/contexts/PermissionContext";
+import { PERMISSIONS } from "@/lib/permissions";
+import {
+  collectPriceChangeAlerts,
+  computePriceChange,
+  type PriceChange,
+  type PriceChangeAlert,
+  type PriceChangeCandidate,
+} from "@/lib/priceChange";
+import { PriceChangeBadge } from "@/components/incoming/PriceChangeBadge";
+import { PriceChangeAlertDialog } from "@/components/incoming/PriceChangeAlertDialog";
+import { ProductCardDialog } from "@/components/products/ProductCardDialog";
 
 function toNumberOr(value: unknown, fallback = 0): number {
   const num = Number.parseFloat(String(value ?? ""));
@@ -117,6 +131,28 @@ async function fetchManualProductOptions(
       purchase_price: toOptionalNumber(row.purchase_price),
       selling_price: toOptionalNumber(row.selling_price),
     }));
+}
+
+// Полетата на ред от редакцията, нужни за знака „нова доставна цена“.
+interface EditRowPriceFields {
+  product_id?: number | string | null;
+  product_id_db?: number | string | null;
+  unit_price?: number | string | null;
+  unit_price_db?: number | string | null;
+  last_purchase_price?: number | null;
+  isNew?: boolean;
+  toDelete?: boolean;
+  changingProduct?: boolean;
+}
+
+// Ред от GET /incoming/:id — само полетата за сравнението на цените.
+interface IncomingDetailPriceFields {
+  product_id?: number | null;
+  name_bg?: string | null;
+  product_name_raw?: string | null;
+  product_name?: string | null;
+  product_purchase_price?: number | string | null;
+  unit_price?: number | string | null;
 }
 
 function isMatchedForAutoLink(item: ScannedInvoiceItem): boolean {
@@ -354,6 +390,22 @@ const statusVariants: Record<
 export function IncomingGoods() {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+  const { hasPermission } = usePermissions();
+  // ✎ на реда → картата на продукта (същата като в „Продукти“).
+  const canManageProducts = hasPermission(PERMISSIONS.PRODUCTS_MANAGE);
+  // Последната доставна цена е чувствителна — знакът и съобщението само
+  // за тези, които я виждат и в „Продукти“.
+  const canSeePurchasePrice = hasPermission(
+    PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE,
+  );
+  // Отворената карта на продукт (над доставката, без да я затваря).
+  const [productCardId, setProductCardId] = useState<number | null>(null);
+  // Съобщението „Нова доставна цена“ след запис/потвърждение.
+  const [priceAlerts, setPriceAlerts] = useState<PriceChangeAlert[] | null>(
+    null,
+  );
+  // „Потвърди“ от списъка: доставката се чете преди потвърждението.
+  const [listConfirmingId, setListConfirmingId] = useState<number | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualForm, setManualForm] = useState({
@@ -575,6 +627,68 @@ export function IncomingGoods() {
     setRowCreateError({});
   };
 
+  // Записан продукт от ✎ → редовете с него във всички прозорци взимат
+  // новото име, мярка и доставна цена. Въведеното в доставката остава.
+  const applySavedProduct = (saved: Product) => {
+    const savedId = Number(saved.id);
+    const name = saved.name_bg || saved.name_en || saved.sku || "";
+    const unit = saved.unit || "";
+    const purchase = toOptionalNumber(saved.purchase_price);
+    const selling = toOptionalNumber(saved.selling_price);
+
+    setManualItems((current) =>
+      current.map((entry) =>
+        Number(entry.product_id) === savedId
+          ? {
+              ...entry,
+              product_name: name || entry.product_name,
+              unit: unit || entry.unit,
+              original_purchase_price: purchase,
+            }
+          : entry,
+      ),
+    );
+
+    setScanned((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item) => {
+          const linkedId = item.matched_product_id ?? item.product_id ?? null;
+          if (Number(linkedId) !== savedId) return item;
+          return {
+            ...item,
+            matched_product_name: name || item.matched_product_name,
+            matched_product_sku: saved.sku ?? item.matched_product_sku,
+            matched_purchase_price: purchase,
+            matched_selling_price: selling,
+          };
+        }),
+      };
+    });
+
+    setEditItems((current) =>
+      current.map((entry) =>
+        Number(entry.product_id) === savedId && !entry.changingProduct
+          ? {
+              ...entry,
+              product_name: name || entry.product_name,
+              // Мярката вече е в каталога — и снапшотът, за да няма
+              // повторен запис при „Запази промените“.
+              unit: unit || entry.unit,
+              unit_db: unit || entry.unit_db,
+              last_purchase_price: purchase,
+            }
+          : entry,
+      ),
+    );
+  };
+
+  const showPriceAlerts = (alerts: PriceChangeAlert[]) => {
+    if (!canSeePurchasePrice || alerts.length === 0) return;
+    setPriceAlerts(alerts);
+  };
+
   const resetManualEntry = () => {
     setManualForm({
       supplier_id: "",
@@ -628,6 +742,10 @@ export function IncomingGoods() {
                 matched_product_sku: product.sku ?? null,
                 match_confidence: 1,
                 match_source: "manual",
+                // Последните цени са на НОВО избрания продукт — иначе
+                // знакът за нова доставна цена би сравнявал с чуждия.
+                matched_purchase_price: product.purchase_price ?? null,
+                matched_selling_price: product.selling_price ?? null,
                 selling_price:
                   item.selling_price ?? product.selling_price ?? null,
               }
@@ -953,6 +1071,12 @@ export function IncomingGoods() {
           return {
             id: item.id,
             product_id: item.product_id,
+            // Снапшоти за знака „нова доставна цена“ (виж editRowPriceChange).
+            product_id_db: item.product_id,
+            unit_price_db: String(item.unit_price ?? ""),
+            // Последната доставна цена — текущата на продукта. Сървърът я
+            // скрива без право за доставни цени → тогава няма знак.
+            last_purchase_price: toOptionalNumber(item.product_purchase_price),
             product_name:
               item.name_bg ||
               item.product_name_raw ||
@@ -1016,6 +1140,7 @@ export function IncomingGoods() {
         unit: "бр",
         batch_number: "",
         expiry_date: "",
+        last_purchase_price: null,
         dirty: true,
         toDelete: false,
       },
@@ -1211,6 +1336,41 @@ export function IncomingGoods() {
   const docEditable =
     selectedDoc?.status === "pending" || selectedDoc?.status === "confirmed";
 
+  // Нова доставна цена на ред от редакцията. Сравнява с последната цена
+  // на продукта, но само когато записът наистина ще я смени:
+  //  • чакаща доставка — при потвърждението цената влиза в продукта;
+  //  • потвърдена — само ако цената/продуктът на реда са променени или
+  //    редът е нов (иначе доставната на продукта може да е от по-нова
+  //    доставка и сравнението би подвеждало).
+  const editRowPriceChange = (item: EditRowPriceFields): PriceChange | null => {
+    if (!canSeePurchasePrice || !selectedDoc) return null;
+    if (!item?.product_id || item.toDelete || item.changingProduct) return null;
+    if (selectedDoc.status === "confirmed") {
+      const touched =
+        item.isNew ||
+        Number(item.product_id) !== Number(item.product_id_db) ||
+        Math.abs(
+          toNumberOr(item.unit_price) - toNumberOr(item.unit_price_db),
+        ) >= 0.0005;
+      if (!touched) return null;
+    } else if (selectedDoc.status !== "pending") {
+      return null;
+    }
+    return computePriceChange(item.last_purchase_price, item.unit_price);
+  };
+
+  const collectEditPriceAlerts = (): PriceChangeAlert[] =>
+    collectPriceChangeAlerts(
+      editItems
+        .filter((item) => editRowPriceChange(item) != null)
+        .map((item): PriceChangeCandidate => ({
+          productId: Number(item.product_id),
+          productName: item.product_name,
+          oldPrice: item.last_purchase_price,
+          newPrice: item.unit_price,
+        })),
+    );
+
   // Промяна в header-а (доставчик / номер / дата на фактурата) също прави
   // доставката „мръсна". Досега „Запази промените" гледаше САМО редовете,
   // затова редакция на номера или датата не активираше бутона, макар
@@ -1274,6 +1434,8 @@ export function IncomingGoods() {
     if (!selectedDoc) return;
     saveEditChangesMutation.reset();
     cancelIncomingDelivery.reset();
+    // Преди записа — после редовете се презареждат с новите цени.
+    const alerts = collectEditPriceAlerts();
     const hasPendingChanges =
       headerDirty || editItems.some((i) => i.dirty || i.toDelete);
     if (hasPendingChanges) {
@@ -1283,7 +1445,44 @@ export function IncomingGoods() {
     confirmIncomingMutation.mutate(selectedDoc.id, {
       onSuccess: () => {
         closeDetailsModal();
+        showPriceAlerts(alerts);
       },
+    });
+  };
+
+  // „Потвърди“ от списъка: редовете не са заредени — четем доставката, за
+  // да сравним цените с продуктите. Ако четенето не стане, потвърждаваме
+  // без съобщението (то не трябва да спира доставката).
+  const confirmFromList = async (docId: number) => {
+    // Двоен клик докато четем доставката пращаше две потвърждения.
+    if (listConfirmingId !== null || confirmIncomingMutation.isPending) return;
+    setListConfirmingId(docId);
+    let alerts: PriceChangeAlert[] = [];
+    if (canSeePurchasePrice) {
+      try {
+        const res = await api.get(`/incoming/${docId}`);
+        const items = res.data?.items ?? res.data?.data?.items ?? [];
+        alerts = collectPriceChangeAlerts(
+          (Array.isArray(items) ? items : []).map(
+            (item: IncomingDetailPriceFields): PriceChangeCandidate => ({
+              productId: item.product_id,
+              productName:
+                item.name_bg ||
+                item.product_name_raw ||
+                item.product_name ||
+                `#${item.product_id ?? "?"}`,
+              oldPrice: item.product_purchase_price,
+              newPrice: item.unit_price,
+            }),
+          ),
+        );
+      } catch {
+        alerts = [];
+      }
+    }
+    confirmIncomingMutation.mutate(docId, {
+      onSuccess: () => showPriceAlerts(alerts),
+      onSettled: () => setListConfirmingId(null),
     });
   };
 
@@ -1447,6 +1646,18 @@ export function IncomingGoods() {
 
   const confirmMutation = useMutation({
     mutationFn: async () => {
+      // Нови доставни цени на свързаните редове — за съобщението след
+      // записа (потвърждението ги записва в продуктите).
+      const priceAlerts = collectPriceChangeAlerts(
+        (scanned?.items ?? []).map((item, i): PriceChangeCandidate => ({
+          productId: isMatchedForAutoLink(item)
+            ? item.matched_product_id
+            : null,
+          productName: item.matched_product_name || itemDisplayName(item),
+          oldPrice: item.matched_purchase_price,
+          newPrice: itemPrices[i] ?? item.unit_price ?? item.price ?? 0,
+        })),
+      );
       // Create incoming document with editable unit prices
       const doc = await api.post("/incoming", {
         ...confirmData,
@@ -1478,13 +1689,15 @@ export function IncomingGoods() {
           };
         }),
       });
-      return doc.data;
+      return { ...doc.data, priceAlerts };
     },
     onSuccess: async (doc) => {
       // Auto-confirm the delivery so inventory is updated immediately
+      let confirmed = true;
       try {
         await api.put(`/incoming/${doc.id}/confirm`);
       } catch (error) {
+        confirmed = false;
         toast.error(
           getApiErrorMessage(
             error,
@@ -1498,6 +1711,9 @@ export function IncomingGoods() {
       setScanned(null);
       setItemPrices({});
       toast.success("Доставката е записана успешно.");
+      // Без потвърждение цените не са влезли в продуктите — съобщението
+      // ще излезе при потвърждаването от списъка.
+      if (confirmed) showPriceAlerts(doc.priceAlerts);
     },
     onError: (err: any) => {
       const data = err?.response?.data;
@@ -1735,6 +1951,19 @@ export function IncomingGoods() {
         );
       }
 
+      // Нови доставни цени — за съобщението след записа (преди PUT-а
+      // към продукта по-долу, който ги прави „последни“).
+      const priceAlerts = collectPriceChangeAlerts(
+        manualItems
+          .filter((item) => item.product_id && item.product_name.trim())
+          .map((item): PriceChangeCandidate => ({
+            productId: item.product_id,
+            productName: item.product_name.trim(),
+            oldPrice: item.original_purchase_price,
+            newPrice: item.unit_price,
+          })),
+      );
+
       const response = await api.post("/incoming", {
         supplier_id: supplierId,
         invoice_number: manualForm.invoice_number.trim() || undefined,
@@ -1771,16 +2000,17 @@ export function IncomingGoods() {
         await Promise.all(priceUpdates);
       }
 
-      return response.data;
+      return { doc: response.data, priceAlerts };
     },
     onMutate: () => {
       setManualError("");
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["incoming"] });
       qc.invalidateQueries({ queryKey: ["products"] });
       setManualOpen(false);
       resetManualEntry();
+      showPriceAlerts(result.priceAlerts);
     },
     onError: (error) => {
       setManualError(
@@ -2118,9 +2348,12 @@ export function IncomingGoods() {
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                confirmIncomingMutation.mutate(doc.id);
+                                void confirmFromList(doc.id);
                               }}
-                              disabled={confirmIncomingMutation.isPending}
+                              disabled={
+                                confirmIncomingMutation.isPending ||
+                                listConfirmingId !== null
+                              }
                             >
                               <CheckCircle className="h-4 w-4" />
                               Потвърди
@@ -2385,6 +2618,8 @@ export function IncomingGoods() {
                                                       product.selling_price,
                                                     )
                                                   : ""),
+                                              last_purchase_price:
+                                                product.purchase_price ?? null,
                                               dirty: true,
                                             }
                                           : entry,
@@ -2415,6 +2650,9 @@ export function IncomingGoods() {
                                                     product.unit || entry.unit,
                                                   unit_db:
                                                     product.unit || entry.unit,
+                                                  last_purchase_price:
+                                                    product.purchase_price ??
+                                                    null,
                                                   changingProduct: false,
                                                   dirty: true,
                                                 }
@@ -2453,6 +2691,21 @@ export function IncomingGoods() {
                                   <span className="truncate flex-1">
                                     {item.product_name}
                                   </span>
+                                  {item.product_id && canManageProducts && (
+                                    <button
+                                      type="button"
+                                      className="shrink-0 text-gray-400 hover:text-gray-700"
+                                      title="Карта на продукта (доставката остава отворена)"
+                                      aria-label={`Карта на продукта ${item.product_name}`}
+                                      onClick={() =>
+                                        setProductCardId(
+                                          Number(item.product_id),
+                                        )
+                                      }
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </button>
+                                  )}
                                   {!readonly && (
                                     <button
                                       type="button"
@@ -2658,15 +2911,29 @@ export function IncomingGoods() {
                                 </Button>
                               </div>
                             )}
-                            <div className="col-span-12 text-right text-sm text-gray-500">
-                              Ред общо:{" "}
-                              <span className="font-medium text-gray-900">
-                                {formatCurrency(
-                                  computeLineTotal(
-                                    item.quantity,
-                                    item.unit_price,
-                                  ),
-                                )}
+                            <div className="col-span-12 flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-sm text-gray-500">
+                              {(() => {
+                                const change = editRowPriceChange(item);
+                                if (!change) return null;
+                                return (
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className="text-[11px]">
+                                      Доставна цена:
+                                    </span>
+                                    <PriceChangeBadge change={change} />
+                                  </span>
+                                );
+                              })()}
+                              <span>
+                                Ред общо:{" "}
+                                <span className="font-medium text-gray-900">
+                                  {formatCurrency(
+                                    computeLineTotal(
+                                      item.quantity,
+                                      item.unit_price,
+                                    ),
+                                  )}
+                                </span>
                               </span>
                             </div>
                           </div>
@@ -2822,10 +3089,18 @@ export function IncomingGoods() {
               <Button
                 variant="outline"
                 onClick={async () => {
+                  // При потвърдена доставка цената влиза в продукта още
+                  // със записа → съобщението е тук. При чакаща — при
+                  // потвърждението.
+                  const alerts =
+                    selectedDoc?.status === "confirmed"
+                      ? collectEditPriceAlerts()
+                      : [];
                   const ok = await saveEditChanges();
                   if (ok) {
                     // Reload to refresh IDs after deletions
                     if (selectedDoc) void handleRowClick(selectedDoc);
+                    showPriceAlerts(alerts);
                   }
                 }}
                 disabled={
@@ -3239,6 +3514,19 @@ export function IncomingGoods() {
                               <Spinner size="sm" />
                             </div>
                           ) : null}
+                          {item.product_id && canManageProducts ? (
+                            <button
+                              type="button"
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                              title="Карта на продукта (доставката остава отворена)"
+                              aria-label={`Карта на продукта ${item.product_name}`}
+                              onClick={() =>
+                                setProductCardId(Number(item.product_id))
+                              }
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          ) : null}
                         </div>
                         {getManualSearchError(index) &&
                         !getManualSearchLoading(index) &&
@@ -3478,6 +3766,24 @@ export function IncomingGoods() {
                         <Trash2 className="h-4 w-4 text-red-500" />
                       </Button>
                     </div>
+                    {(() => {
+                      const change =
+                        canSeePurchasePrice && item.product_id
+                          ? computePriceChange(
+                              item.original_purchase_price,
+                              item.unit_price,
+                            )
+                          : null;
+                      if (!change) return null;
+                      return (
+                        <div className="md:col-span-full md:order-8 flex items-center justify-end gap-1.5 -mt-1">
+                          <span className="text-[11px] text-gray-500">
+                            Доставна цена:
+                          </span>
+                          <PriceChangeBadge change={change} />
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
@@ -3687,8 +3993,12 @@ export function IncomingGoods() {
                         item.matched_purchase_price != null
                           ? Number(item.matched_purchase_price)
                           : null;
-                      const priceDiff =
-                        dbPrice != null ? unitPrice - dbPrice : null;
+                      // Знакът — само за реда, който наистина ще се свърже
+                      // с продукта (иначе цената му не се пипа).
+                      const priceChange =
+                        canSeePurchasePrice && isMatchedForAutoLink(item)
+                          ? computePriceChange(dbPrice, unitPrice)
+                          : null;
 
                       return (
                         <div
@@ -3741,23 +4051,42 @@ export function IncomingGoods() {
                                     </p>
                                   )}
                                 </div>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    setRowMappingOpen((c) => ({
-                                      ...c,
-                                      [index]: !mappingOpen,
-                                    }))
-                                  }
-                                >
-                                  {mappingOpen
-                                    ? "Скрий избора"
-                                    : unresolved
-                                      ? "Избери продукт"
-                                      : "Смени продукта"}
-                                </Button>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  {linkedProductId != null &&
+                                    canManageProducts && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        title="Карта на продукта (доставката остава отворена)"
+                                        aria-label={`Карта на продукта ${linkedProductName ?? ""}`}
+                                        onClick={() =>
+                                          setProductCardId(
+                                            Number(linkedProductId),
+                                          )
+                                        }
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      setRowMappingOpen((c) => ({
+                                        ...c,
+                                        [index]: !mappingOpen,
+                                      }))
+                                    }
+                                  >
+                                    {mappingOpen
+                                      ? "Скрий избора"
+                                      : unresolved
+                                        ? "Избери продукт"
+                                        : "Смени продукта"}
+                                  </Button>
+                                </div>
                               </div>
                             </div>
 
@@ -3779,24 +4108,20 @@ export function IncomingGoods() {
                                   }
                                   className="w-full"
                                 />
-                                {dbPrice != null && (
+                                {priceChange ? (
+                                  <PriceChangeBadge change={priceChange} />
+                                ) : dbPrice != null ? (
                                   <p className="text-[11px] text-muted-foreground">
                                     База: {fmtPrice3(dbPrice)}€
-                                    {priceDiff != null &&
-                                    Math.abs(priceDiff) >= 0.01 ? (
-                                      <span className="text-violet-600 font-semibold">
-                                        {" "}
-                                        ({priceDiff > 0 ? "+" : ""}
-                                        {fmtPrice3(priceDiff)}€)
-                                      </span>
-                                    ) : (
+                                    {computePriceChange(dbPrice, unitPrice) ==
+                                      null && (
                                       <span className="text-emerald-600">
                                         {" "}
                                         ✓
                                       </span>
                                     )}
                                   </p>
-                                )}
+                                ) : null}
                               </div>
                               <div className="space-y-1">
                                 <Label className="text-xs text-muted-foreground">
@@ -4061,6 +4386,25 @@ export function IncomingGoods() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Съобщение „Нова доставна цена“ — неблокиращо, след записа. */}
+      {priceAlerts && priceAlerts.length > 0 && (
+        <PriceChangeAlertDialog
+          alerts={priceAlerts}
+          onClose={() => setPriceAlerts(null)}
+          onEditProduct={(productId) => setProductCardId(productId)}
+        />
+      )}
+
+      {/* Картата на продукта (✎) — над доставката, без да я затваря. */}
+      {productCardId != null && (
+        <ProductCardDialog
+          key={productCardId}
+          productId={productCardId}
+          onClose={() => setProductCardId(null)}
+          onSaved={applySavedProduct}
+        />
+      )}
     </div>
   );
 }

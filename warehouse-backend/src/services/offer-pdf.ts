@@ -12,7 +12,11 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { formatEurAmount, formatEurUnitPrice } from "../utils/currency.js";
-import { getDisplayLine } from "../lib/line-pricing.js";
+import {
+  documentShowsLineDiscount,
+  formatDiscountPercent,
+  getDisplayLine,
+} from "../lib/line-pricing.js";
 
 function getFontPath(filename: string): string {
   const candidates = [
@@ -74,6 +78,11 @@ export interface OfferPdfData {
   // block prints a "BGN | EUR" two-column layout. Default false →
   // EUR-only, layout unchanged from before.
   showBgn?: boolean;
+  /**
+   * Колона „Т.О. %“ (мигр. 109, orders.print_line_discount): само за
+   * поръчки след 04.11.2026 и ако някой ред има отстъпка.
+   */
+  showLineDiscount?: boolean | null;
 }
 
 const OFFER_EUR_TO_BGN = 1.95583;
@@ -182,11 +191,22 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
     // Per-line "Отст. %" колона е премахната — на печатния документ
     // не се показва per-line отстъпка (виж invoice-pdf.ts за обяснение).
     // Стока абсорбира освободените 60pt.
+    // Мигр. 109: нова поръчка → „Ед. цена“ преди отстъпката + „Т.О. %“.
+    const showDiscount = documentShowsLineDiscount(
+      data.showLineDiscount,
+      data.items,
+    );
+    const discountW = showDiscount ? 44 : 0;
     const cols = [
       { header: "№", w: 24, align: "right" },
-      { header: "Стока", w: pageW - 24 - 50 - 70 - 80, align: "left" },
+      {
+        header: "Стока",
+        w: pageW - 24 - 50 - 70 - discountW - 80,
+        align: "left",
+      },
       { header: "Кол.", w: 50, align: "right" },
       { header: "Ед. цена", w: 70, align: "right" },
+      ...(showDiscount ? [{ header: "Т.О. %", w: discountW, align: "right" }] : []),
       { header: "Сума", w: 80, align: "right" },
     ];
     const headerY = doc.y;
@@ -214,7 +234,12 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
       const qty = toNum(it.quantity);
       // Цената — от цената след отстъпката; стойността — записаната.
       // (Не стойност ÷ количество: 6.317 излизаше 6.318.)
-      const { unitPrice: effectivePrice, lineTotal } = getDisplayLine(it);
+      const {
+        unitPrice: effectivePrice,
+        listPrice,
+        discountPercent,
+        lineTotal,
+      } = getDisplayLine(it);
       const cells = [
         String(idx + 1),
         it.name_bg || "—",
@@ -222,7 +247,8 @@ export async function generateOfferPdf(data: OfferPdfData): Promise<void> {
           minimumFractionDigits: 0,
           maximumFractionDigits: 3,
         }),
-        formatEurUnitPrice(effectivePrice) + " €",
+        formatEurUnitPrice(showDiscount ? listPrice : effectivePrice) + " €",
+        ...(showDiscount ? [formatDiscountPercent(discountPercent)] : []),
         fmtEur(lineTotal),
       ];
       cx = L;

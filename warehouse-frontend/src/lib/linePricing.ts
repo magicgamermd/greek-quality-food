@@ -121,6 +121,11 @@ export interface PricedLine {
 export interface DisplayLine {
   /** Цената за колоната „Цена“ — 3 знака, след отстъпката. */
   unitPrice: number;
+  /**
+   * Цената ПРЕДИ отстъпката — за документ с колона „Т.О. %“ (Цена × Кол.
+   * × (1 − Т.О.) = Стойност, като в Microinvest).
+   */
+  listPrice: number;
   /** Стойността за колоната „Стойност“ — записаната сума на реда. */
   lineTotal: number;
   discountPercent: number;
@@ -149,5 +154,35 @@ export function getDisplayLine(line: PricedLine): DisplayLine {
   const consistent =
     Math.abs(computeLineTotal(line.quantity, unitPrice, 0)) ===
     Math.abs(lineTotal);
-  return { unitPrice, lineTotal, discountPercent, consistent };
+  const listPrice = roundUnitPrice(line.unit_price);
+  return { unitPrice, listPrice, lineTotal, discountPercent, consistent };
+}
+
+/**
+ * Колона „Т.О. %“ на печатния документ (Microinvest, 04.11.2026): само на
+ * документ, издаден след въвеждането ѝ (флаг print_line_discount — вече
+ * издадените се печатат точно както са издадени), и само ако поне един
+ * ред има отстъпка.
+ */
+export function documentShowsLineDiscount(
+  enabled: boolean | null | undefined,
+  lines: PricedLine[],
+): boolean {
+  return (
+    enabled === true &&
+    lines.some((line) => roundDiscountPercent(line.discount_percent) > 0)
+  );
+}
+
+/**
+ * Т.О. % за печат: „10“, „7,5“, „12,35“; празно при 0. Разделителят е
+ * като на цените в документа (стоковата разписка печата с точка).
+ */
+export function formatDiscountPercent(
+  value: Numeric,
+  decimalSeparator: "," | "." = ",",
+): string {
+  const percent = roundDiscountPercent(value);
+  if (percent <= 0) return "";
+  return String(percent).replace(".", decimalSeparator);
 }

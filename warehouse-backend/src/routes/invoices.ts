@@ -819,8 +819,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
            (invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross, include_vat,
             client_display_name, client_display_egn, client_display_address,
-            payment_method, vat_exemption_reason, invoice_note, unit_price_rule)
-         VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'entered')
+            payment_method, vat_exemption_reason, invoice_note, unit_price_rule,
+            print_line_discount)
+         VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'entered', true)
          RETURNING *`,
           [
             invoiceNumber,
@@ -875,6 +876,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         await generateInvoicePdf({
           // Издадените до 23.09.2026 — както са издадени (мигр. 106).
           unitPriceRule: invoice?.unit_price_rule,
+          lineDiscountColumn: invoice?.print_line_discount === true,
           invoice,
           partner: invoicePartner,
           company,
@@ -1113,6 +1115,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         await generateInvoicePdf({
           // Издадените до 23.09.2026 — както са издадени (мигр. 106).
           unitPriceRule: updated?.unit_price_rule,
+          lineDiscountColumn: updated?.print_line_discount === true,
           invoice: updated,
           partner,
           company,
@@ -1515,6 +1518,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             await generateInvoicePdf({
               // Издадените до 23.09.2026 — както са издадени (мигр. 106).
               unitPriceRule: invoice?.unit_price_rule,
+              lineDiscountColumn: invoice?.print_line_discount === true,
               invoice,
               partner,
               company,
@@ -1616,6 +1620,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           await generateInvoicePdf({
             // Издадените до 23.09.2026 — както са издадени (мигр. 106).
             unitPriceRule: invoice?.unit_price_rule,
+            lineDiscountColumn: invoice?.print_line_discount === true,
             invoice,
             partner,
             company,
@@ -1749,6 +1754,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
           await generateInvoicePdf({
             // Издадените до 23.09.2026 — както са издадени (мигр. 106).
             unitPriceRule: invoice?.unit_price_rule,
+            lineDiscountColumn: invoice?.print_line_discount === true,
             invoice,
             partner,
             company,
@@ -2130,8 +2136,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             invoice_number, invoice_date, partner_id,
             total_net, total_vat, total_gross,
             include_vat, document_type, related_invoice_id, credit_note_reason,
-            unit_price_rule
-          ) VALUES ($1, COALESCE($9::date, CURRENT_DATE), $2, $3, $4, $5, $6, 'credit_note', $7, $8, 'entered')
+            unit_price_rule, print_line_discount
+          ) VALUES ($1, COALESCE($9::date, CURRENT_DATE), $2, $3, $4, $5, $6, 'credit_note', $7, $8, 'entered', true)
           RETURNING *`,
           [
             cnNumber,
@@ -2200,6 +2206,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         await generateInvoicePdf({
           // Издадените до 23.09.2026 — както са издадени (мигр. 106).
           unitPriceRule: creditNote?.unit_price_rule,
+          lineDiscountColumn: creditNote?.print_line_discount === true,
           invoice: creditNote,
           partner,
           company,
@@ -2347,9 +2354,9 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               total_net, total_vat, total_gross, include_vat,
               client_display_name, client_display_egn, client_display_address,
               payment_method, vat_exemption_reason, invoice_note,
-              document_type, unit_price_rule)
+              document_type, unit_price_rule, print_line_discount)
            VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7,
-                   $8, $9, $10, $11, $12, $13, 'proforma', 'entered')
+                   $8, $9, $10, $11, $12, $13, 'proforma', 'entered', true)
            RETURNING *`,
           [
             proformaNumber,
@@ -2385,6 +2392,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         await generateInvoicePdf({
           // Издадените до 23.09.2026 — както са издадени (мигр. 106).
           unitPriceRule: proforma?.unit_price_rule,
+          lineDiscountColumn: proforma?.print_line_discount === true,
           invoice: proforma,
           partner,
           company,
@@ -2519,8 +2527,8 @@ export default async function invoiceRoutes(app: FastifyInstance) {
               total_net, total_vat, total_gross, include_vat,
               client_display_name, client_display_egn, client_display_address,
               payment_method, vat_exemption_reason, invoice_note,
-              document_type, proforma_id, unit_price_rule)
-           VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'invoice', $13, 'entered')
+              document_type, proforma_id, unit_price_rule, print_line_discount)
+           VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'invoice', $13, 'entered', true)
            RETURNING *`,
           [
             invoiceNumber,
@@ -2573,6 +2581,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         await generateInvoicePdf({
           // Издадените до 23.09.2026 — както са издадени (мигр. 106).
           unitPriceRule: invoice?.unit_price_rule,
+          lineDiscountColumn: invoice?.print_line_discount === true,
           invoice,
           partner,
           company,

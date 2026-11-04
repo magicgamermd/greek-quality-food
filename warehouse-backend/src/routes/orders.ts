@@ -1652,13 +1652,14 @@ export default async function orderRoutes(app: FastifyInstance) {
            econt_weight, econt_shipping_cost, econt_payer,
            econt_shipment_description, econt_shipment_date,
            below_cost_approved_by, below_cost_approved_at, below_cost_details,
-           status, is_replacement, econt_requested_at, order_number
+           status, is_replacement, econt_requested_at, order_number,
+           print_line_discount
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                  $21, $22,
                  $23, $24, $25,
-                 $26, $27, $28, nextval('order_number_seq'))
+                 $26, $27, $28, nextval('order_number_seq'), true)
          RETURNING *`,
             [
               body.partner_id,
@@ -1716,10 +1717,11 @@ export default async function orderRoutes(app: FastifyInstance) {
             } = await client.query(
               `INSERT INTO orders (
                  partner_id, partner_object_id, object_name, object_code,
-                 status, parent_order_id, source, order_number
+                 status, parent_order_id, source, order_number,
+                 print_line_discount
                )
                VALUES ($1, $2, $3, $4, 'awaiting_stock', $5, $6,
-                       nextval('order_number_seq'))
+                       nextval('order_number_seq'), true)
                RETURNING *`,
               [
                 body.partner_id,
@@ -1900,8 +1902,8 @@ export default async function orderRoutes(app: FastifyInstance) {
         const {
           rows: [order],
         } = await client.query(
-          `INSERT INTO orders (partner_id, delivery_date, notes, source, status, order_date, total_amount)
-         VALUES ($1, $2, $3, 'comarch', 'pending', $4, $5)
+          `INSERT INTO orders (partner_id, delivery_date, notes, source, status, order_date, total_amount, print_line_discount)
+         VALUES ($1, $2, $3, 'comarch', 'pending', $4, $5, true)
          RETURNING *`,
           [
             partnerId,
@@ -3942,6 +3944,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     await generateInvoicePdf({
       // Издадените до 23.09.2026 — както са издадени (мигр. 106).
       unitPriceRule: updatedInvoice?.unit_price_rule,
+      lineDiscountColumn: updatedInvoice?.print_line_discount === true,
       invoice: updatedInvoice,
       partner,
       company,
@@ -4026,6 +4029,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         expiry_date: i.expiry_date,
       })),
       vat_rate: includeVat ? 20 : 0,
+      show_line_discount: order.print_line_discount === true,
       outputPath: stockDispatchPath,
       show_bgn: company.show_bgn_on_invoice === true,
     });
@@ -4350,6 +4354,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         vat_rate: includeVat ? 20 : 0,
         pricing_mode: pricingMode,
         lang: docLang,
+        show_line_discount: order.print_line_discount === true,
         outputPath,
         show_bgn: company.show_bgn_on_invoice === true,
       });
@@ -4713,6 +4718,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         totalVat,
         totalGross,
         vatRate,
+        showLineDiscount: order.print_line_discount === true,
         outputPath,
         showBgn: company.show_bgn_on_invoice === true,
       });
@@ -4986,6 +4992,7 @@ export default async function orderRoutes(app: FastifyInstance) {
           discount_percent: it.discount_percent,
         })),
         totalAmount,
+        showLineDiscount: order.print_line_discount === true,
         outputPath,
         showBgn: company.show_bgn_on_invoice === true,
       });
