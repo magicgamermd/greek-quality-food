@@ -45,6 +45,7 @@ import {
 } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartDateInput } from "@/components/ui/smart-date-input";
 import { Combobox } from "@/components/ui/combobox";
 import { toast } from "@/lib/toast";
 import { confirm } from "@/components/ConfirmDialog";
@@ -2500,17 +2501,17 @@ export function IncomingGoods() {
                             </div>
                             <div className="col-span-6 md:col-span-2 space-y-1.5">
                               <Label>Срок на годност</Label>
-                              <Input
-                                type="date"
+                              <SmartDateInput
                                 value={item.expiry_date ?? ""}
                                 disabled={readonly}
-                                onChange={(e) =>
+                                aria-label="Срок на годност"
+                                onChange={(iso) =>
                                   setEditItems((current) =>
                                     current.map((entry, i) =>
                                       i === index
                                         ? {
                                             ...entry,
-                                            expiry_date: e.target.value,
+                                            expiry_date: iso,
                                             dirty: true,
                                           }
                                         : entry,
@@ -2882,8 +2883,8 @@ export function IncomingGoods() {
                 className="w-32"
               />
               <p className="text-xs text-gray-500">
-                Български доставчик — 20. Гръцки (ВОП) — фактурата е без
-                ДДС, затова махни ставката.
+                Български доставчик — 20. Гръцки (ВОП) — фактурата е без ДДС,
+                затова махни ставката.
               </p>
             </div>
           </div>
@@ -3426,17 +3427,17 @@ export function IncomingGoods() {
                     </div>
                     <div className="space-y-1.5 md:order-3">
                       <Label>Срок на годност</Label>
-                      <Input
-                        type="date"
+                      <SmartDateInput
                         ref={(el) => {
                           rowInputRefs.current[`${index}:expiry_date`] = el;
                         }}
                         value={item.expiry_date}
-                        onChange={(e) =>
+                        aria-label="Срок на годност"
+                        onChange={(iso) =>
                           setManualItems((current) =>
                             current.map((entry, entryIndex) =>
                               entryIndex === index
-                                ? { ...entry, expiry_date: e.target.value }
+                                ? { ...entry, expiry_date: iso }
                                 : entry,
                             ),
                           )
@@ -3854,11 +3855,11 @@ export function IncomingGoods() {
                               <Label className="text-xs text-muted-foreground">
                                 Срок на годност
                               </Label>
-                              <Input
-                                type="date"
+                              <SmartDateInput
                                 value={item.expiry_date ?? ""}
-                                onChange={(e) =>
-                                  updateRowExpiryDate(index, e.target.value)
+                                aria-label="Срок на годност"
+                                onChange={(iso) =>
+                                  updateRowExpiryDate(index, iso)
                                 }
                                 className={
                                   !item.expiry_date

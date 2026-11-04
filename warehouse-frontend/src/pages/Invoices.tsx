@@ -1019,7 +1019,7 @@ export function Invoices() {
                                     <DropdownMenuItem
                                       onClick={() => handlePrint(inv, 2)}
                                     >
-                                      📄📄 2 копия (и двете Оригинал)
+                                      📄📄 Оригинал + копие
                                     </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>

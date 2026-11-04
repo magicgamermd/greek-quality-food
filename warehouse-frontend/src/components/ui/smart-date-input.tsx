@@ -1,106 +1,111 @@
 import * as React from "react";
 import { Input } from "@/components/ui/input";
+import { dottedFromIso, isoFromDottedDate } from "@/lib/dateInput";
 
 /**
- * Smart date input — accepts `DD.MM.YY` or `DD.MM.YYYY` and auto-expands
- * 2-digit year to `20YY`. Emits ISO `YYYY-MM-DD` to parent. Compatible with
- * all keyboard flows (Enter/Tab supported via onKeyDown passthrough).
+ * Дата като ДД.ММ.ГГГГ (срок на годност в доставката) — независимо от
+ * езика на браузъра; родният календар показва мм/дд/гггг на английски
+ * Chrome. Точките се слагат сами, „ДД.ММ.ГГ“ става 20ГГ при излизане.
+ * Нагоре праща ISO `YYYY-MM-DD`; "" при изтрито поле или невъзможна дата
+ * (31.02), която се вижда в червено. Enter/Tab минават през onKeyDown.
  */
 export const SmartDateInput = React.forwardRef<
   HTMLInputElement,
   {
-    value: string; // ISO YYYY-MM-DD or empty
+    value: string; // ISO YYYY-MM-DD (или „18-07-27“ от сканиране) или ""
     onChange: (iso: string) => void;
     onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
     disabled?: boolean;
     className?: string;
     placeholder?: string;
+    "aria-label"?: string;
   }
->(({ value, onChange, onKeyDown, disabled, className, placeholder }, ref) => {
-  const isoToDot = (iso: string): string => {
-    if (!iso) return "";
-    const parts = iso.split("T")[0].split("-");
-    if (parts.length !== 3) return "";
-    return `${parts[2]}.${parts[1]}.${parts[0]}`;
-  };
+>(
+  (
+    {
+      value,
+      onChange,
+      onKeyDown,
+      disabled,
+      className,
+      placeholder,
+      "aria-label": ariaLabel,
+    },
+    ref,
+  ) => {
+    const [display, setDisplay] = React.useState(() => dottedFromIso(value));
+    const innerRef = React.useRef<HTMLInputElement | null>(null);
 
-  const [display, setDisplay] = React.useState(() => isoToDot(value));
-  const innerRef = React.useRef<HTMLInputElement | null>(null);
+    // Стойността отвън (зареждане, сканиране) — само докато не се пише.
+    React.useEffect(() => {
+      const dotted = dottedFromIso(value);
+      if (document.activeElement !== innerRef.current && dotted !== display) {
+        setDisplay(dotted);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value]);
 
-  // Sync from parent when not focused
-  React.useEffect(() => {
-    const dotted = isoToDot(value);
-    if (document.activeElement !== innerRef.current && dotted !== display) {
-      setDisplay(dotted);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+    const digits = display.replace(/\D/g, "");
+    const complete = digits.length === 6 || digits.length === 8;
+    const invalid = complete && isoFromDottedDate(display) === null;
 
-  const parseAndEmit = (text: string) => {
-    const digits = text.replace(/\./g, "").replace(/\D/g, "");
-    // Only emit when we have a complete date (6 or 8 digits).
-    // For partial input (1-5 or 7 digits) do NOT call onChange — avoid
-    // wiping out a previously-valid ISO the parent is holding.
-    if (digits.length !== 6 && digits.length !== 8) {
-      // Emit empty only when user fully clears the field
-      if (digits.length === 0) onChange("");
-      return;
-    }
-    const dd = digits.slice(0, 2);
-    const mm = digits.slice(2, 4);
-    const yyyy =
-      digits.length === 6 ? `20${digits.slice(4, 6)}` : digits.slice(4, 8);
-    const day = parseInt(dd, 10);
-    const mon = parseInt(mm, 10);
-    if (day < 1 || day > 31 || mon < 1 || mon > 12 || !/^\d{4}$/.test(yyyy)) {
-      onChange("");
-      return;
-    }
-    onChange(`${yyyy}-${mm}-${dd}`);
-  };
+    const emit = (text: string) => {
+      const count = text.replace(/\D/g, "").length;
+      if (count === 0) {
+        onChange("");
+        return;
+      }
+      // Непълна дата не трие валидната стойност горе.
+      if (count !== 6 && count !== 8) return;
+      onChange(isoFromDottedDate(text) ?? "");
+    };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-    const digits = raw.replace(/[^\d]/g, "").slice(0, 8);
-    let formatted = "";
-    if (digits.length <= 2) formatted = digits;
-    else if (digits.length <= 4)
-      formatted = `${digits.slice(0, 2)}.${digits.slice(2)}`;
-    else
-      formatted = `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}`;
-    setDisplay(formatted);
-    parseAndEmit(formatted);
-  };
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const typed = e.target.value.replace(/\D/g, "").slice(0, 8);
+      const formatted =
+        typed.length <= 2
+          ? typed
+          : typed.length <= 4
+            ? `${typed.slice(0, 2)}.${typed.slice(2)}`
+            : `${typed.slice(0, 2)}.${typed.slice(2, 4)}.${typed.slice(4)}`;
+      setDisplay(formatted);
+      emit(formatted);
+    };
 
-  const handleBlur = () => {
-    const digits = display.replace(/\./g, "");
-    if (digits.length === 6) {
-      // Expand YY → 20YY both in display AND emit the full ISO
-      const expanded = `${digits.slice(0, 2)}.${digits.slice(2, 4)}.20${digits.slice(4, 6)}`;
-      setDisplay(expanded);
-      parseAndEmit(expanded);
-    }
-  };
+    const handleBlur = () => {
+      // ДД.ММ.ГГ → ДД.ММ.20ГГ и на екрана.
+      if (digits.length === 6) {
+        const expanded = `${digits.slice(0, 2)}.${digits.slice(2, 4)}.20${digits.slice(4, 6)}`;
+        setDisplay(expanded);
+        emit(expanded);
+      }
+    };
 
-  return (
-    <Input
-      ref={(el) => {
-        innerRef.current = el;
-        if (typeof ref === "function") ref(el);
-        else if (ref)
-          (ref as React.MutableRefObject<HTMLInputElement | null>).current = el;
-      }}
-      type="text"
-      inputMode="numeric"
-      value={display}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      onKeyDown={onKeyDown}
-      disabled={disabled}
-      className={className}
-      placeholder={placeholder ?? "ДД.ММ.ГГ"}
-      maxLength={10}
-    />
-  );
-});
+    return (
+      <Input
+        ref={(el) => {
+          innerRef.current = el;
+          if (typeof ref === "function") ref(el);
+          else if (ref)
+            (ref as React.MutableRefObject<HTMLInputElement | null>).current =
+              el;
+        }}
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        value={display}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onKeyDown={onKeyDown}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-invalid={invalid || undefined}
+        title={invalid ? "Невъзможна дата" : undefined}
+        className={`${className ?? ""} ${invalid ? "border-red-500 text-red-600" : ""}`}
+        placeholder={placeholder ?? "ДД.ММ.ГГГГ"}
+        maxLength={10}
+      />
+    );
+  },
+);
 SmartDateInput.displayName = "SmartDateInput";

@@ -30,6 +30,7 @@ import {
 } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartDateInput } from "@/components/ui/smart-date-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -149,11 +150,11 @@ function ProductBatchesPanel({
             </span>
             <span className="text-xs text-gray-500">Срок:</span>
             {canEdit ? (
-              <Input
-                type="date"
+              <SmartDateInput
                 value={draft}
-                onChange={(e) =>
-                  setDrafts((d) => ({ ...d, [batch.id]: e.target.value }))
+                aria-label="Срок на годност"
+                onChange={(iso) =>
+                  setDrafts((d) => ({ ...d, [batch.id]: iso }))
                 }
                 className={`h-8 w-40 text-xs ${
                   expired

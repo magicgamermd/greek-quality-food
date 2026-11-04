@@ -2,7 +2,11 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from "../lib/pagination.js";
 import { z } from "zod";
 import { query } from "../db.js";
-import { partnerCreateSchema, partnerUpdateSchema } from "./partner-schemas.js";
+import {
+  normalizeEik,
+  partnerCreateSchema,
+  partnerUpdateSchema,
+} from "./partner-schemas.js";
 import { requirePermission, PERMISSIONS } from "../lib/permissions.js";
 
 const priceListItemSchema = z.object({
@@ -129,6 +133,23 @@ async function fetchCompanyBook(
     email: c.contacts?.email ?? "",
     phone: c.contacts?.phone ?? "",
   };
+}
+
+const PARTNER_FIELD_NAMES: Record<string, string> = {
+  name: "Наименование",
+  eik: "ЕИК",
+  vat_number: "ДДС номер",
+  email: "Имейл",
+  discount_percent: "Отстъпка %",
+  partner_type: "Вид",
+};
+
+/** Първата грешка от проверката — текст за екрана, не суров JSON. */
+function partnerIssue(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Невалидни данни за партньора";
+  const field = PARTNER_FIELD_NAMES[String(issue.path[0] ?? "")];
+  return field ? `${field}: ${issue.message}` : issue.message;
 }
 
 export default async function partnerRoutes(app: FastifyInstance) {
@@ -344,7 +365,11 @@ export default async function partnerRoutes(app: FastifyInstance) {
     "/",
     { preHandler: partnersManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const body = partnerCreateSchema.parse(request.body);
+      const parsed = partnerCreateSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: partnerIssue(parsed.error) });
+      }
+      const body = parsed.data;
 
       // Individual partners never carry EIK / VAT / bank info even if the
       // client accidentally sent them. Normalise to null so the DB row is clean.
@@ -383,7 +408,25 @@ export default async function partnerRoutes(app: FastifyInstance) {
     { preHandler: partnersManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string };
-      const body = partnerUpdateSchema.parse(request.body);
+      // Непроменен стар ЕИК (от импорта: „2062119169“, „10394675B“) не
+      // спира записа на другите полета — проверява се само нов ЕИК.
+      const input = { ...((request.body ?? {}) as Record<string, unknown>) };
+      if (typeof input.eik === "string") {
+        const {
+          rows: [current],
+        } = await query("SELECT eik FROM partners WHERE id = $1", [id]);
+        if (
+          current &&
+          normalizeEik(input.eik) === normalizeEik(current.eik ?? "")
+        ) {
+          delete input.eik;
+        }
+      }
+      const parsed = partnerUpdateSchema.safeParse(input);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: partnerIssue(parsed.error) });
+      }
+      const body = parsed.data;
 
       // For individuals, force-null EIK/VAT so lingering legacy values don't
       // persist when the client switches partner_type. Use a separate object

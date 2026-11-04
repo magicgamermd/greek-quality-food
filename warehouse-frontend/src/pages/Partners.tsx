@@ -105,13 +105,18 @@ function PartnerModal({
       setEikAutoFilled(false);
       const res = await api.get(`/partners/lookup/${eik.trim()}`);
       const data = res.data;
+      // Нов партньор — попълва от регистъра. Редакция — само празните
+      // полета: досега името и адресът се презаписваха при всяко
+      // излизане от полето за ЕИК.
+      const fill = (current: string, found?: string | null) =>
+        partner ? current || found || "" : found || current;
       setForm((prev) => ({
         ...prev,
-        name: data.name || prev.name,
-        address: data.address || prev.address,
-        city: data.city || prev.city,
-        vat_number: data.vat_number || prev.vat_number,
-        contact_person: data.manager || prev.contact_person,
+        name: fill(prev.name, data.name),
+        address: fill(prev.address, data.address),
+        city: fill(prev.city, data.city),
+        vat_number: fill(prev.vat_number, data.vat_number),
+        contact_person: fill(prev.contact_person, data.manager),
       }));
       setEikAutoFilled(true);
       setTimeout(() => setEikAutoFilled(false), 4000);
@@ -127,17 +132,24 @@ function PartnerModal({
       // Scrub EIK / VAT / bank fields when switching to individual, so the
       // server's superRefine doesn't reject the payload because of lingering
       // values from a previous legal_entity state.
+      const cleaned = {
+        ...form,
+        // „BG 205024473“ / кирилско „ВG…“ в полето за ЕИК → само цифрите.
+        eik: form.eik.replace(/\s+/g, "").replace(/^(BG|ВG|ВГ)(?=\d)/i, ""),
+        // Празно поле „Отстъпка %“ даваше грешка 500 при запис.
+        discount_percent: form.discount_percent.trim() || "0",
+      };
       const payload =
-        form.partner_type === "individual"
+        cleaned.partner_type === "individual"
           ? {
-              ...form,
+              ...cleaned,
               eik: "",
               vat_number: "",
               bank_name: "",
               bic: "",
               iban: "",
             }
-          : form;
+          : cleaned;
       return partner
         ? api.put(`/partners/${partner.id}`, payload)
         : api.post("/partners", payload);
@@ -767,7 +779,9 @@ export function Partners() {
                   <TableHead>Телефон</TableHead>
                   <TableHead>Имейл</TableHead>
                   <TableHead className="text-center">Поръчки</TableHead>
-                  <TableHead className="text-right">Действия</TableHead>
+                  <TableHead className="sticky right-0 bg-white text-right shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)]">
+                    Действия
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -782,7 +796,17 @@ export function Partners() {
                   </TableRow>
                 ) : (
                   partners.map((p) => (
-                    <TableRow key={p.id}>
+                    // Целият ред отваря редакцията — моливчето беше в
+                    // последната колона и на лаптоп оставаше извън екрана.
+                    <TableRow
+                      key={p.id}
+                      className="group cursor-pointer"
+                      title="Отвори за редакция"
+                      onClick={() => {
+                        setEditPartner(p);
+                        setModalOpen(true);
+                      }}
+                    >
                       <TableCell className="font-mono text-sm text-gray-500">
                         {p.microinvest_code ? (
                           <HighlightMatch
@@ -840,14 +864,14 @@ export function Partners() {
                           "—"
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
                         <PriceGroupSelect
                           partnerId={p.id}
                           current={(p as any).price_group}
                         />
                       </TableCell>
                       <TableCell>{p.contact_person ?? "—"}</TableCell>
-                      <TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
                         {p.phone ? (
                           <a
                             href={`tel:${p.phone}`}
@@ -860,7 +884,7 @@ export function Partners() {
                           "—"
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
                         {p.email ? (
                           <a
                             href={`mailto:${p.email}`}
@@ -882,7 +906,10 @@ export function Partners() {
                           <span className="text-gray-300">0</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell
+                        className="sticky right-0 bg-white text-right shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)] group-hover:bg-gray-50"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <div className="flex items-center justify-end gap-2">
                           <Button
                             size="sm"
@@ -916,9 +943,7 @@ export function Partners() {
       {/* Без страници: списъкът е цял на екрана, футърът само отчита броя. */}
       {totalItems > 0 && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-gray-500">
-            Показани всички {totalItems}
-          </p>
+          <p className="text-sm text-gray-500">Показани всички {totalItems}</p>
         </div>
       )}
 
