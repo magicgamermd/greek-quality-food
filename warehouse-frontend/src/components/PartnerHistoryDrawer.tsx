@@ -24,6 +24,8 @@ import {
 export interface PartnerHistoryItem {
   product_id: number;
   product_name: string;
+  /** Код (SKU) — колона „Код“ в поръчката. */
+  sku?: string;
   quantity: number;
   unit: string;
   unit_price: number;
@@ -49,6 +51,7 @@ interface OrderDetailResponse {
     product_id: number;
     name_bg?: string;
     name_en?: string;
+    sku?: string | null;
     unit?: string;
     quantity: number | string;
     unit_price: number | string;
@@ -273,6 +276,7 @@ function OrderCard({
     return detail.items.map((it) => ({
       product_id: it.product_id,
       product_name: it.name_bg || it.name_en || `Продукт #${it.product_id}`,
+      sku: it.sku ?? "",
       quantity: parseNum(it.quantity),
       unit: it.unit || "бр.",
       unit_price: parseNum(it.unit_price),

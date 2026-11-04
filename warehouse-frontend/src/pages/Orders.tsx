@@ -79,6 +79,7 @@ import {
   roundMoney,
 } from "@/lib/linePricing";
 import { creditNoteLine, invoicedCreditPrice } from "@/lib/creditNoteLine";
+import { evaluateQuantityExpression } from "@/lib/quantityExpression";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch, HighlightMultiToken } from "@/lib/highlight";
 import { Button } from "@/components/ui/button";
@@ -250,7 +251,15 @@ interface OrderItemRow {
   row_key: string;
   product_id: string;
   product_name: string;
+  /** Код (SKU) — колона „Код“ във формата. */
+  sku: string;
+  /** Последното валидно количество (число като низ). */
   quantity: string;
+  /**
+   * Написаното в полето, докато се пише — може да е сметка („3*2“).
+   * undefined = полето показва `quantity`. При излизане става число.
+   */
+  quantity_input?: string;
   unit_price: string;
   /** Per-line отстъпка % (0–100). String защото input type=number дава
    *  string; конвертираме при submit. Default "0". */
@@ -294,6 +303,7 @@ const makeOrderItemRow = (
   row_key: `order-item-row-${Date.now()}-${orderItemRowSeq++}`,
   product_id: "",
   product_name: "",
+  sku: "",
   quantity: "",
   unit_price: "",
   discount_percent: "0",
@@ -309,6 +319,40 @@ const makeOrderItemRow = (
 });
 
 const emptyItem = (): OrderItemRow => makeOrderItemRow();
+
+/**
+ * Писане в количеството, като в Microinvest: „3*2“ → 6. Количеството
+ * следва написаното, щом е валидно число или сметка; недописана сметка
+ * („3*“) оставя последното валидно, а празно поле — празно.
+ */
+function withQuantityDraft(row: OrderItemRow, text: string): OrderItemRow {
+  const value = evaluateQuantityExpression(text);
+  return {
+    ...row,
+    quantity_input: text,
+    quantity:
+      value !== null ? String(value) : text.trim() === "" ? "" : row.quantity,
+  };
+}
+
+/** Невалидната сметка в полето за количество (или null). */
+function invalidQuantityDraft(row: OrderItemRow): string | null {
+  const draft = row.quantity_input;
+  if (draft === undefined || draft.trim() === "") return null;
+  return evaluateQuantityExpression(draft) === null ? draft : null;
+}
+
+/** Не пуска запис, докато в някой ред има недописана сметка. */
+function assertQuantityDraftsValid(rows: OrderItemRow[]) {
+  for (const row of rows) {
+    const draft = invalidQuantityDraft(row);
+    if (row.product_id && draft !== null) {
+      throw new Error(
+        `„${row.product_name || "Продукт"}“: „${draft}“ не е валидно количество.`,
+      );
+    }
+  }
+}
 
 function getEffectiveStock(item: OrderItemRow) {
   return item.stock;
@@ -497,6 +541,98 @@ function lineBatchPayload(
 }
 
 /** Колоната „Годност“: при разпределение — всеки срок с количеството си. */
+/**
+ * Полето „Кол.“: число или сметка, като в Microinvest — „3*2“ се пише и
+ * при излизане от полето става 6. Невалидната сметка се вижда в червено,
+ * а при излизане полето се връща на последното валидно количество.
+ */
+function OrderQuantityInput({
+  row,
+  inputRef,
+  onDraft,
+  onCommit,
+  onKeyDown,
+  className = "",
+  disabled,
+}: {
+  row: OrderItemRow;
+  inputRef: (el: HTMLInputElement | null) => void;
+  onDraft: (text: string) => void;
+  onCommit: () => void;
+  onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void;
+  className?: string;
+  disabled?: boolean;
+}) {
+  const invalid = invalidQuantityDraft(row) !== null;
+  return (
+    <Input
+      ref={inputRef}
+      type="text"
+      inputMode="decimal"
+      autoComplete="off"
+      value={row.quantity_input ?? row.quantity}
+      onChange={(e) => onDraft(e.target.value)}
+      onBlur={() => {
+        const bad = invalidQuantityDraft(row);
+        if (bad !== null) {
+          toast.error(`„${bad}“ не е валидно количество — пример: 3*2`);
+        }
+        onCommit();
+      }}
+      onKeyDown={onKeyDown}
+      title="Може и сметка: 3*2 → 6"
+      aria-label="Количество"
+      className={`${className} ${invalid ? "border-red-500 text-red-600" : ""}`}
+      disabled={disabled}
+    />
+  );
+}
+
+/**
+ * Сумите горе вдясно във формата, като в Microinvest: Сума / ДДС / Общо.
+ * Чакащите редове не влизат — както в записаната поръчка.
+ */
+function OrderTotalsSummary({ rows }: { rows: OrderItemRow[] }) {
+  const net = rows
+    .filter((row) => row.line_status !== "awaiting")
+    .reduce(
+      (sum, row) =>
+        roundMoney(
+          sum +
+            computeExactLineTotal(
+              row.quantity,
+              row.unit_price,
+              row.discount_percent,
+            ),
+        ),
+      0,
+    );
+  const vat = roundMoney(net * 0.2);
+  const total = roundMoney(net + vat);
+  return (
+    <div
+      className="flex flex-col items-end text-right leading-tight tabular-nums"
+      aria-label="Суми по поръчката"
+    >
+      <span className="text-xs text-gray-500">
+        Сума:{" "}
+        <span className="font-semibold text-gray-800">
+          {formatCurrency(net)}
+        </span>
+      </span>
+      <span className="text-xs text-gray-500">
+        ДДС 20%:{" "}
+        <span className="font-semibold text-gray-800">
+          {formatCurrency(vat)}
+        </span>
+      </span>
+      <span className="text-base font-bold text-gray-900">
+        Общо: {formatCurrency(total)}
+      </span>
+    </div>
+  );
+}
+
 function RowExpiryCell({ row }: { row: OrderItemRow }) {
   if (row.batch_plan?.length) {
     return (
@@ -1508,9 +1644,9 @@ function OrderDetailModal({
       // is out, hide the field so the next order starts clean.
       setInvoiceDateOverride("");
       invalidateAllOrderRelated();
-      // Auto-open PDF for printing immediately after generation
+      // Издадената фактура излиза веднага за печат: оригинал + копие.
       if (newInvoiceId) {
-        setTimeout(() => void openInvoicePdf(newInvoiceId), 300);
+        setTimeout(() => void openInvoicePdf(newInvoiceId, "both"), 300);
       }
       toast.success("Фактурата е генерирана");
     },
@@ -1580,8 +1716,9 @@ function OrderDetailModal({
       const invoiceId = res.data?.id ?? null;
       setGeneratedInvoiceId(invoiceId);
       invalidateAllOrderRelated();
+      // Фактурата от проформата — също оригинал + копие.
       if (invoiceId) {
-        setTimeout(() => void openInvoicePdf(invoiceId), 300);
+        setTimeout(() => void openInvoicePdf(invoiceId, "both"), 300);
       }
       toast.success(
         `Реална фактура #${res.data?.invoice_number ?? "?"} е издадена от проформата`,
@@ -4666,7 +4803,7 @@ function EditOrderItemsModal({
     }
   };
   type EditCol = "qty" | "kg" | "price" | "discount";
-  const EDIT_COLS: EditCol[] = ["qty", "kg", "price", "discount"];
+  const EDIT_COLS: EditCol[] = ["qty", "price", "discount"];
   const editFocusCell = (rowIdx: number, col: EditCol): boolean => {
     const row = items[rowIdx];
     if (!row) return false;
@@ -4737,6 +4874,7 @@ function EditOrderItemsModal({
         const costNum = rawCost != null ? parseFloat(String(rawCost)) : NaN;
         return makeOrderItemRow({
           product_id: String(item.product_id),
+          sku: item.sku ?? item.product?.sku ?? "",
           product_name:
             item.product?.name_bg ||
             item.product?.name_en ||
@@ -4803,6 +4941,7 @@ function EditOrderItemsModal({
                 ...item,
                 product_id: String(product.id),
                 product_name: product.name_bg || product.name_en || "Без име",
+                sku: product.sku ?? "",
                 quantity: item.quantity || "1",
                 unit_price:
                   item.unit_price || (price != null ? String(price) : ""),
@@ -4878,6 +5017,7 @@ function EditOrderItemsModal({
       const pending: OrderItemRow = makeOrderItemRow({
         product_id: orig.product_id,
         product_name: orig.product_name,
+        sku: orig.sku,
         quantity: String(overage),
         unit_price: orig.unit_price,
         discount_percent: orig.discount_percent,
@@ -4927,6 +5067,7 @@ function EditOrderItemsModal({
       const pending: OrderItemRow = makeOrderItemRow({
         product_id: orig.product_id,
         product_name: orig.product_name,
+        sku: orig.sku,
         quantity: String(overage),
         unit_price: orig.unit_price,
         discount_percent: orig.discount_percent,
@@ -4977,6 +5118,7 @@ function EditOrderItemsModal({
     mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
       // GQF: block lines pointing at an expired batch before persisting.
       // Непипнатите редове не са нова продажба — стоката им вече е изписана.
+      assertQuantityDraftsValid(items);
       assertNoExpiredBatches(validItems.filter((i) => !i.keep_batches));
       assertBatchPlansMatch(validItems);
       const res = await api.put(`/orders/${order.id}`, {
@@ -5077,9 +5219,12 @@ function EditOrderItemsModal({
     <Dialog open={open} onOpenChange={onClose} modal={false}>
       <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col border-2 border-[#6c3dff] shadow-[0_0_0_1px_rgba(249,115,22,0.25)]">
         <DialogHeader className="shrink-0">
-          <DialogTitle>
-            Редакция на поръчка #{order.order_number ?? order.id}
-          </DialogTitle>
+          <div className="flex items-start justify-between gap-3 pr-9">
+            <DialogTitle>
+              Редакция на поръчка #{order.order_number ?? order.id}
+            </DialogTitle>
+            <OrderTotalsSummary rows={validItems} />
+          </div>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
@@ -5250,14 +5395,17 @@ function EditOrderItemsModal({
               <Table className="min-w-[1000px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="min-w-[280px]">Продукт</TableHead>
+                    <TableHead className="w-8">№</TableHead>
+                    <TableHead className="w-24">Код</TableHead>
+                    <TableHead className="min-w-[260px]">Стока</TableHead>
+                    <TableHead className="w-14">Мярка</TableHead>
+                    <TableHead className="w-28">Кол.</TableHead>
+                    <TableHead className="w-24">Наличност</TableHead>
+                    <TableHead className="w-32">Прод. цена</TableHead>
+                    <TableHead className="w-20">Т.О. %</TableHead>
                     <TableHead className="w-32">Партида</TableHead>
                     <TableHead className="w-28">Годност</TableHead>
-                    <TableHead className="w-24">Наличност</TableHead>
-                    <TableHead className="w-28">Количество</TableHead>
-                    <TableHead className="w-32">Ед. цена</TableHead>
-                    <TableHead className="w-20">Отст. %</TableHead>
-                    <TableHead className="w-28">Сума</TableHead>
+                    <TableHead className="w-28">Стойност</TableHead>
                     <TableHead className="w-12"></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -5292,6 +5440,12 @@ function EditOrderItemsModal({
                             : "";
                     return (
                       <TableRow key={item.row_key} className={rowBg}>
+                        <TableCell className="text-xs text-gray-400 tabular-nums">
+                          {i + 1}
+                        </TableCell>
+                        <TableCell className="text-xs font-mono text-gray-600 whitespace-nowrap">
+                          {item.product_id ? item.sku || "—" : ""}
+                        </TableCell>
                         <TableCell>
                           {item.product_id ? (
                             <div className="flex items-center gap-2">
@@ -5309,9 +5463,6 @@ function EditOrderItemsModal({
                                       ⏳ Изчакване
                                     </span>
                                   )}
-                                </div>
-                                <div className="text-xs text-gray-400">
-                                  {item.unit}
                                 </div>
                               </div>
                               <Button
@@ -5334,6 +5485,95 @@ function EditOrderItemsModal({
                               />
                             </ProductSearchBoundary>
                           )}
+                        </TableCell>
+                        <TableCell className="text-xs text-gray-600 whitespace-nowrap">
+                          {item.product_id ? item.unit : ""}
+                        </TableCell>
+                        <TableCell>
+                          <OrderQuantityInput
+                            row={item}
+                            inputRef={(el) => {
+                              editQtyRefs.current[item.row_key] = el;
+                            }}
+                            onDraft={(text) =>
+                              setItems((prev) =>
+                                prev.map((row, rowIdx) =>
+                                  rowIdx === i
+                                    ? withQuantityDraft(row, text)
+                                    : row,
+                                ),
+                              )
+                            }
+                            onCommit={() =>
+                              setItems((prev) =>
+                                prev.map((row) =>
+                                  row.row_key === item.row_key
+                                    ? { ...row, quantity_input: undefined }
+                                    : row,
+                                ),
+                              )
+                            }
+                            onKeyDown={(e) =>
+                              handleEditCellArrowKey(e, i, "qty")
+                            }
+                            className="w-24"
+                            disabled={!item.product_id}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {item.product_id ? (
+                            hasKnownStock ? (
+                              <span
+                                className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
+                              >
+                                {availableStock}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">—</span>
+                            )
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            ref={(el) => {
+                              editPriceRefs.current[item.row_key] = el;
+                            }}
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            value={item.unit_price}
+                            onChange={(e) =>
+                              setItem(i, "unit_price", e.target.value)
+                            }
+                            onKeyDown={(e) =>
+                              handleEditCellArrowKey(e, i, "price")
+                            }
+                            className="w-28"
+                            disabled={!item.product_id}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            ref={(el) => {
+                              editDiscountRefs.current[item.row_key] = el;
+                            }}
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="100"
+                            value={item.discount_percent}
+                            onChange={(e) =>
+                              setItem(i, "discount_percent", e.target.value)
+                            }
+                            onKeyDown={(e) =>
+                              handleEditCellArrowKey(e, i, "discount")
+                            }
+                            disabled={!item.product_id}
+                            placeholder="0"
+                            className={`w-20 ${discount > 0 ? "border-blue-400 text-blue-700" : ""}`}
+                          />
                         </TableCell>
                         {/* GQF: Партида — реален избор + FEFO подсказка */}
                         <TableCell>
@@ -5382,78 +5622,6 @@ function EditOrderItemsModal({
                         {/* GQF: Срок на годност на избраната партида */}
                         <TableCell>
                           <RowExpiryCell row={item} />
-                        </TableCell>
-                        <TableCell>
-                          {item.product_id ? (
-                            hasKnownStock ? (
-                              <span
-                                className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
-                              >
-                                {availableStock}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-gray-400">—</span>
-                            )
-                          ) : (
-                            "—"
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              editQtyRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            min="0.001"
-                            step="0.001"
-                            value={item.quantity}
-                            onChange={(e) =>
-                              setItem(i, "quantity", e.target.value)
-                            }
-                            onKeyDown={(e) =>
-                              handleEditCellArrowKey(e, i, "qty")
-                            }
-                            disabled={!item.product_id}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              editPriceRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            step="0.001"
-                            min="0"
-                            value={item.unit_price}
-                            onChange={(e) =>
-                              setItem(i, "unit_price", e.target.value)
-                            }
-                            onKeyDown={(e) =>
-                              handleEditCellArrowKey(e, i, "price")
-                            }
-                            disabled={!item.product_id}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            ref={(el) => {
-                              editDiscountRefs.current[item.row_key] = el;
-                            }}
-                            type="number"
-                            step="0.1"
-                            min="0"
-                            max="100"
-                            value={item.discount_percent}
-                            onChange={(e) =>
-                              setItem(i, "discount_percent", e.target.value)
-                            }
-                            onKeyDown={(e) =>
-                              handleEditCellArrowKey(e, i, "discount")
-                            }
-                            disabled={!item.product_id}
-                            placeholder="0"
-                            className={`w-20 ${discount > 0 ? "border-blue-400 text-blue-700" : ""}`}
-                          />
                         </TableCell>
                         <TableCell className="font-medium text-sm">
                           {lineTotal > 0 ? formatCurrency(lineTotal) : "—"}
@@ -5993,7 +6161,7 @@ function CreateOrderModal({
   // default за ArrowUp/Down в number input-и (промяна +/- step) се
   // потиска — кешъра не иска stealth промени на quantities/цени.
   type Col = "qty" | "kg" | "price" | "discount";
-  const COLS: Col[] = ["qty", "kg", "price", "discount"];
+  const COLS: Col[] = ["qty", "price", "discount"];
   const cellRefMap = (col: Col) =>
     ({
       qty: qtyRefs,
@@ -6175,6 +6343,7 @@ function CreateOrderModal({
             ...item,
             product_id: String(product.id),
             product_name: product.name_bg || product.name_en || "Без име",
+            sku: product.sku ?? "",
             quantity: item.quantity || "1",
             unit_price: item.unit_price || (price != null ? String(price) : ""),
             unit: product.unit || "бр.",
@@ -6259,6 +6428,7 @@ function CreateOrderModal({
       const pending: OrderItemRow = makeOrderItemRow({
         product_id: orig.product_id,
         product_name: orig.product_name,
+        sku: orig.sku,
         quantity: String(overage),
         unit_price: orig.unit_price,
         discount_percent: orig.discount_percent,
@@ -6296,6 +6466,7 @@ function CreateOrderModal({
             makeOrderItemRow({
               product_id: String(ni.product_id),
               product_name: ni.product_name,
+              sku: ni.sku ?? "",
               quantity: "1",
               unit_price: String(ni.unit_price),
               discount_percent: String(ni.discount_percent),
@@ -6489,6 +6660,7 @@ function CreateOrderModal({
 
       // GQF: block lines that point at an expired batch (back-order lines
       // with no batch are allowed — backend handles those).
+      assertQuantityDraftsValid(items);
       assertNoExpiredBatches(validItems);
       assertBatchPlansMatch(validItems);
 
@@ -6796,6 +6968,11 @@ function CreateOrderModal({
                   </span>
                 )}
               </div>
+              {!isReplacement && (
+                <div className="ml-auto">
+                  <OrderTotalsSummary rows={validItems} />
+                </div>
+              )}
               {canCreateReplacement && replacementEnabled && (
                 <Button
                   type="button"
@@ -7252,16 +7429,17 @@ function CreateOrderModal({
                     <Table className="min-w-[1000px]">
                       <TableHeader>
                         <TableRow>
-                          <TableHead className="min-w-[280px]">
-                            Продукт
-                          </TableHead>
+                          <TableHead className="w-8">№</TableHead>
+                          <TableHead className="w-24">Код</TableHead>
+                          <TableHead className="min-w-[260px]">Стока</TableHead>
+                          <TableHead className="w-14">Мярка</TableHead>
+                          <TableHead className="w-28">Кол.</TableHead>
+                          <TableHead className="w-24">Наличност</TableHead>
+                          <TableHead className="w-32">Прод. цена</TableHead>
+                          <TableHead className="w-20">Т.О. %</TableHead>
                           <TableHead className="w-32">Партида</TableHead>
                           <TableHead className="w-28">Годност</TableHead>
-                          <TableHead className="w-24">Наличност</TableHead>
-                          <TableHead className="w-28">Количество</TableHead>
-                          <TableHead className="w-32">Ед. цена</TableHead>
-                          <TableHead className="w-20">Отст. %</TableHead>
-                          <TableHead className="w-28">Сума</TableHead>
+                          <TableHead className="w-28">Стойност</TableHead>
                           <TableHead className="w-12"></TableHead>
                         </TableRow>
                       </TableHeader>
@@ -7309,6 +7487,12 @@ function CreateOrderModal({
                                         : ""
                               }
                             >
+                              <TableCell className="text-xs text-gray-400 tabular-nums">
+                                {i + 1}
+                              </TableCell>
+                              <TableCell className="text-xs font-mono text-gray-600 whitespace-nowrap">
+                                {item.product_id ? item.sku || "—" : ""}
+                              </TableCell>
                               <TableCell>
                                 {item.product_id ? (
                                   <div className="flex items-center gap-2">
@@ -7327,9 +7511,6 @@ function CreateOrderModal({
                                             ⏳ На изчакване
                                           </span>
                                         )}
-                                      </div>
-                                      <div className="text-xs text-gray-400">
-                                        {item.unit}
                                       </div>
                                     </div>
                                   </div>
@@ -7352,63 +7533,36 @@ function CreateOrderModal({
                                   </ProductSearchBoundary>
                                 )}
                               </TableCell>
-                              {/* GQF: Партида — реален избор + FEFO подсказка */}
+                              <TableCell className="text-xs text-gray-600 whitespace-nowrap">
+                                {item.product_id ? item.unit : ""}
+                              </TableCell>
                               <TableCell>
-                                <BatchSelect
-                                  productId={item.product_id}
-                                  value={item.batch_id}
-                                  plan={item.batch_plan}
-                                  onSplitRequest={() => {
-                                    if (!(Number(item.quantity) > 0)) {
-                                      toast.error("Първо въведете количество.");
-                                      return;
-                                    }
-                                    setSplitRowKey(item.row_key);
+                                <OrderQuantityInput
+                                  row={item}
+                                  inputRef={(el) => {
+                                    qtyRefs.current[item.row_key] = el;
                                   }}
-                                  onChange={(batchId, expiry) => {
+                                  onDraft={(text) => {
                                     setItems((prev) =>
                                       prev.map((row, rowIdx) =>
                                         rowIdx === i
-                                          ? {
-                                              ...row,
-                                              batch_id: batchId,
-                                              expiry_date: expiry,
-                                              batch_plan: undefined,
-                                            }
+                                          ? withQuantityDraft(row, text)
                                           : row,
                                       ),
                                     );
                                     setStockWarnings([]);
                                   }}
-                                />
-                                <BatchPlanMismatchHint row={item} />
-                              </TableCell>
-                              {/* GQF: Срок на годност на избраната партида */}
-                              <TableCell>
-                                <RowExpiryCell row={item} />
-                              </TableCell>
-                              <TableCell>
-                                {item.product_id ? (
-                                  <span
-                                    className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
-                                  >
-                                    {availableStock}
-                                  </span>
-                                ) : (
-                                  "—"
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                <Input
-                                  ref={(el) => {
-                                    qtyRefs.current[item.row_key] = el;
-                                  }}
-                                  type="number"
-                                  min="0.001"
-                                  step="0.001"
-                                  value={item.quantity}
-                                  onChange={(e) =>
-                                    setItem(i, "quantity", e.target.value)
+                                  onCommit={() =>
+                                    setItems((prev) =>
+                                      prev.map((row) =>
+                                        row.row_key === item.row_key
+                                          ? {
+                                              ...row,
+                                              quantity_input: undefined,
+                                            }
+                                          : row,
+                                      ),
+                                    )
                                   }
                                   onKeyDown={(e) => {
                                     if (handleCellArrowKey(e, i, "qty")) return;
@@ -7426,6 +7580,17 @@ function CreateOrderModal({
                                   <div className="text-xs text-red-500 mt-0.5">
                                     max {availableStock}
                                   </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {item.product_id ? (
+                                  <span
+                                    className={`text-sm font-medium ${availableStock > 0 ? "text-green-600" : "text-red-500"}`}
+                                  >
+                                    {availableStock}
+                                  </span>
+                                ) : (
+                                  "—"
                                 )}
                               </TableCell>
                               <TableCell>
@@ -7523,6 +7688,41 @@ function CreateOrderModal({
                                   disabled={!item.product_id}
                                   placeholder="0"
                                 />
+                              </TableCell>
+                              {/* GQF: Партида — реален избор + FEFO подсказка */}
+                              <TableCell>
+                                <BatchSelect
+                                  productId={item.product_id}
+                                  value={item.batch_id}
+                                  plan={item.batch_plan}
+                                  onSplitRequest={() => {
+                                    if (!(Number(item.quantity) > 0)) {
+                                      toast.error("Първо въведете количество.");
+                                      return;
+                                    }
+                                    setSplitRowKey(item.row_key);
+                                  }}
+                                  onChange={(batchId, expiry) => {
+                                    setItems((prev) =>
+                                      prev.map((row, rowIdx) =>
+                                        rowIdx === i
+                                          ? {
+                                              ...row,
+                                              batch_id: batchId,
+                                              expiry_date: expiry,
+                                              batch_plan: undefined,
+                                            }
+                                          : row,
+                                      ),
+                                    );
+                                    setStockWarnings([]);
+                                  }}
+                                />
+                                <BatchPlanMismatchHint row={item} />
+                              </TableCell>
+                              {/* GQF: Срок на годност на избраната партида */}
+                              <TableCell>
+                                <RowExpiryCell row={item} />
                               </TableCell>
                               <TableCell className="font-medium text-sm">
                                 {lineTotal > 0
@@ -7766,15 +7966,6 @@ function CreateOrderModal({
                       {validItems.length} артикул
                       {validItems.length !== 1 ? "а" : ""}
                     </span>
-                    <div className="flex flex-col items-end text-right">
-                      <span className="text-xs text-gray-500">
-                        Сума: {formatCurrency(orderNetTotal)} · ДДС 20%:{" "}
-                        {formatCurrency(orderVat)}
-                      </span>
-                      <span className="text-lg font-bold">
-                        Общо с ДДС: {formatCurrency(orderTotal)}
-                      </span>
-                    </div>
                   </>
                 );
               })()}
