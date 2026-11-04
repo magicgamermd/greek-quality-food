@@ -10,7 +10,11 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { formatEurAmount, formatEurUnitPrice } from "../utils/currency.js";
-import { getDisplayLine } from "../lib/line-pricing.js";
+import {
+  documentShowsLineDiscount,
+  formatDiscountPercent,
+  getDisplayLine,
+} from "../lib/line-pricing.js";
 
 function getFontPath(filename: string): string {
   const candidates = [
@@ -64,6 +68,11 @@ export interface ProtocolData {
   };
   items: ProtocolItem[];
   totalAmount: number;
+  /**
+   * Колона „Т.О. %“ (мигр. 109, orders.print_line_discount): само за
+   * поръчки след 04.11.2026 и ако някой ред има отстъпка.
+   */
+  showLineDiscount?: boolean | null;
   outputPath: string;
   // Settings → Документи toggle (migration 069). When true, the "Общо"
   // line prints both the BGN equivalent and the EUR figure.
@@ -134,13 +143,28 @@ export async function generateProtocolPdf(data: ProtocolData): Promise<void> {
     y += 40;
 
     // Items table
-    const colsX = [L, L + 250, L + 310, L + 380, L + 460];
+    // Мигр. 109: нова поръчка → „Ед.цена“ преди отстъпката + „Т.О. %“.
+    const showDiscount = documentShowsLineDiscount(
+      data.showLineDiscount,
+      data.items,
+    );
+    // Артикул · К-во · Ед. · Ед.цена · [Т.О. %] · Сума — в полето на
+    // страницата (pageW = 495): досега „Сума“ стигаше L+530 и излизаше
+    // вдясно от „Общо“.
+    const colsX = showDiscount
+      ? [L, L + 195, L + 250, L + 295, L + 370, L + 425]
+      : [L, L + 240, L + 295, L + 345, L + 425];
+    const nameW = showDiscount ? 190 : 235;
+    const sumX = colsX[colsX.length - 1];
     doc.font("MainBold").fontSize(9);
     doc.text("Артикул", colsX[0], y);
     doc.text("К-во", colsX[1], y, { width: 50, align: "right" });
-    doc.text("Ед.", colsX[2], y, { width: 50, align: "left" });
+    doc.text("Ед.", colsX[2], y, { width: 40, align: "left" });
     doc.text("Ед.цена", colsX[3], y, { width: 70, align: "right" });
-    doc.text("Сума", colsX[4], y, { width: 70, align: "right" });
+    if (showDiscount) {
+      doc.text("Т.О. %", colsX[4], y, { width: 50, align: "right" });
+    }
+    doc.text("Сума", sumX, y, { width: 70, align: "right" });
     y += 14;
     doc
       .moveTo(L, y)
@@ -152,21 +176,30 @@ export async function generateProtocolPdf(data: ProtocolData): Promise<void> {
       // Цената след отстъпката до записаната стойност — иначе при
       // отстъпка протоколът показваше пълната цена до намалената сума.
       const line = getDisplayLine(item);
-      doc.text(item.name_bg, colsX[0], y, { width: 240 });
+      doc.text(item.name_bg, colsX[0], y, { width: nameW });
       doc.text(String(item.quantity), colsX[1], y, {
         width: 50,
         align: "right",
       });
-      doc.text(item.unit, colsX[2], y, { width: 50, align: "left" });
-      doc.text(formatEurUnitPrice(line.unitPrice), colsX[3], y, {
+      doc.text(item.unit, colsX[2], y, { width: 40, align: "left" });
+      doc.text(
+        formatEurUnitPrice(showDiscount ? line.listPrice : line.unitPrice),
+        colsX[3],
+        y,
+        { width: 70, align: "right" },
+      );
+      if (showDiscount) {
+        doc.text(formatDiscountPercent(line.discountPercent), colsX[4], y, {
+          width: 50,
+          align: "right",
+        });
+      }
+      doc.text(formatEurAmount(line.lineTotal), sumX, y, {
         width: 70,
         align: "right",
       });
-      doc.text(formatEurAmount(line.lineTotal), colsX[4], y, {
-        width: 70,
-        align: "right",
-      });
-      y += 14;
+      // Дълго име на два реда не застъпва следващия ред.
+      y += Math.max(14, doc.heightOfString(item.name_bg, { width: nameW }) + 3);
     }
     doc
       .moveTo(L, y)
@@ -237,7 +270,9 @@ export async function generateProtocolPdf(data: ProtocolData): Promise<void> {
         doc.font("Main").fontSize(9);
         doc.text(label, x, py, { width: labelW, lineBreak: false });
         doc.text(value, x + labelW, py, { width: colW - labelW - 10 });
-        py = doc.y + 2;
+        // Празна стойност не мести курсора — следващият ред („МОЛ:“,
+        // „Представител:“) се печаташе върху „Email:“. Поне един ред.
+        py = Math.max(doc.y, py + doc.currentLineHeight(true)) + 2;
       }
       return py;
     };

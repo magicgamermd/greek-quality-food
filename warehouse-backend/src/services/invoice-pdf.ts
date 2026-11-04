@@ -7,7 +7,11 @@ import {
   toEurAmount,
 } from "../utils/currency.js";
 import { mapUnit, mapUnitEn } from "./units.js";
-import { getDisplayLine } from "../lib/line-pricing.js";
+import {
+  documentShowsLineDiscount,
+  formatDiscountPercent,
+  getDisplayLine,
+} from "../lib/line-pricing.js";
 
 // Resolve font paths — works in both src/ and dist/
 function getFontPath(filename: string): string {
@@ -125,6 +129,12 @@ interface InvoiceData {
    * „entered" (по подразбиране) — въведената цена.
    */
   unitPriceRule?: "legacy_total_div_qty" | "entered" | string | null;
+  /**
+   * Колона „Т.О. %“ (мигр. 109): само документи, издадени след 04.11.2026
+   * (invoices.print_line_discount), и само ако някой ред има отстъпка.
+   * Тогава „Цена“ е цената ПРЕДИ отстъпката.
+   */
+  lineDiscountColumn?: boolean | null;
   invoice: {
     invoice_number: string;
     invoice_date: string;
@@ -772,19 +782,37 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
     // касиерът въвежда "колко лева да сваля", системата разпределя като
     // % per item, но сметката остава едноциф. Стока абсорбира освободения
     // pt range.
+    // Мигр. 109: новите документи показват отстъпката на ред (Microinvest:
+    // „Прод. цена · Т.О. · Стойност“). Издадените — както са издадени.
+    const showDiscount = documentShowsLineDiscount(
+      data.lineDiscountColumn,
+      data.items,
+    );
+    const discountW = showDiscount ? 30 : 0;
+    const discountCol: InvoiceTableColumn[] = showDiscount
+      ? [
+          {
+            header: tr("Т.О. %", "Disc. %"),
+            w: discountW,
+            align: "right",
+            wrap: false,
+          },
+        ]
+      : [];
     const colDefs: InvoiceTableColumn[] = showVat
       ? [
           { header: tr("№", "No"), w: 18, align: "center", wrap: false },
           { header: tr("Код", "Code"), w: 56, align: "left", wrap: false },
           {
             header: tr("Стока", "Description"),
-            w: pageW - 18 - 56 - 42 - 34 - 46 - 42 - 48,
+            w: pageW - 18 - 56 - 42 - 34 - 46 - discountW - 42 - 48,
             align: "left",
             wrap: true,
           },
           { header: tr("Мярка", "Unit"), w: 42, align: "left", wrap: false },
           { header: tr("Кол.", "Qty"), w: 34, align: "right", wrap: false },
           { header: tr("Цена", "Price"), w: 46, align: "right", wrap: false },
+          ...discountCol,
           {
             header: `${tr("ДДС", "VAT")} ${vatRateLabel}%`,
             w: 42,
@@ -803,13 +831,14 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
           { header: tr("Код", "Code"), w: 60, align: "left", wrap: false },
           {
             header: tr("Стока", "Description"),
-            w: pageW - 18 - 60 - 44 - 36 - 50 - 52,
+            w: pageW - 18 - 60 - 44 - 36 - 50 - discountW - 52,
             align: "left",
             wrap: true,
           },
           { header: tr("Мярка", "Unit"), w: 44, align: "left", wrap: false },
           { header: tr("Кол.", "Qty"), w: 36, align: "right", wrap: false },
           { header: tr("Цена", "Price"), w: 50, align: "right", wrap: false },
+          ...discountCol,
           {
             header: tr("Стойност", "Amount"),
             w: 52,
@@ -1047,12 +1076,16 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
         const total = display.lineTotal;
         // Издадена преди поправката → точно както е издадена (стойност ÷
         // кол.; КИ с отрицателно кол. — записаната цена). Мигр. 106.
-        const price =
-          data.unitPriceRule === "legacy_total_div_qty"
+        const price = showDiscount
+          ? display.listPrice
+          : data.unitPriceRule === "legacy_total_div_qty"
             ? qty > 0
               ? toNum(item.total_price) / qty
               : toNum(item.unit_price)
             : display.unitPrice;
+        const discountCells = showDiscount
+          ? [formatDiscountPercent(display.discountPercent)]
+          : [];
         // КИ: количеството без минус — стойността и сумите остават с минус.
         const shownQty = isCreditNote ? Math.abs(qty) : qty;
         const description = en
@@ -1070,6 +1103,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               unit,
               shownQty.toFixed(3),
               formatEurUnitPrice(price, sourceCurrency),
+              ...discountCells,
               `${vatRateLabel}%`,
               formatEur(total, sourceCurrency),
             ]
@@ -1080,6 +1114,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<void> {
               unit,
               shownQty.toFixed(3),
               formatEurUnitPrice(price, sourceCurrency),
+              ...discountCells,
               formatEur(total, sourceCurrency),
             ];
 

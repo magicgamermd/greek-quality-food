@@ -6,6 +6,8 @@ import { formatUnitPricePlain } from "../utils/currency.js";
 import { displayBatchNumber } from "../utils/batch-display.js";
 import {
   computeLineTotal,
+  documentShowsLineDiscount,
+  formatDiscountPercent,
   getDisplayLine,
   roundMoney,
 } from "../lib/line-pricing.js";
@@ -318,6 +320,11 @@ interface StockDispatchData {
   show_bgn?: boolean;
   /** Език на документа — "en" за износ клиенти. */
   lang?: "bg" | "en";
+  /**
+   * Колона „Т.О. %“ (мигр. 109, orders.print_line_discount): само за
+   * поръчки след 04.11.2026 и ако някой ред има отстъпка.
+   */
+  show_line_discount?: boolean | null;
 }
 
 interface CommercialDocData {
@@ -1607,14 +1614,23 @@ export async function generateStockDispatchPdf(
     const vatMultiplier = 1 + data.vat_rate / 100;
     let subtotalEur = 0;
     const rows: string[][] = [];
+    // Мигр. 109: нова поръчка → „Цена“ преди отстъпката + „Т.О. %“.
+    const showDiscount = documentShowsLineDiscount(
+      data.show_line_discount,
+      data.items,
+    );
     for (let idx = 0; idx < data.items.length; idx += 1) {
       const item = data.items[idx];
       const qty = toNum(item.quantity);
       // Цената — от цената след отстъпката; стойността — записаната (вкл.
       // 0 при безплатен ред). Преди цената беше стойност ÷ количество
       // (6.317 → 6.318), а ред със стойност 0 тихо ставаше кол. × цена.
-      const { unitPrice: displayPrice, lineTotal: displayLineTotal } =
-        getDisplayLine(item);
+      const {
+        unitPrice: displayPrice,
+        listPrice,
+        discountPercent,
+        lineTotal: displayLineTotal,
+      } = getDisplayLine(item);
       subtotalEur = roundMoney(subtotalEur + displayLineTotal);
 
       rows.push([
@@ -1624,7 +1640,8 @@ export async function generateStockDispatchPdf(
           "—",
         en ? mapUnitEn(item.unit || "pcs") : mapUnit(item.unit || "бр"),
         formatQty(qty),
-        formatUnitPricePlain(displayPrice),
+        formatUnitPricePlain(showDiscount ? listPrice : displayPrice),
+        ...(showDiscount ? [formatDiscountPercent(discountPercent, ".")] : []),
         (item.currency || "EUR").toUpperCase(),
         formatEUR(displayLineTotal),
       ]);
@@ -1632,18 +1649,28 @@ export async function generateStockDispatchPdf(
 
     // Per-line "Отстъпка" колона е премахната — клиентът вижда само
     // финалната цена. Освободеният pt range (44pt) отива към Стока.
+    const discountWidth = showDiscount ? 32 : 0;
     const columns: TableColumn[] = [
       { header: en ? "No" : "№", width: 22, align: "right" },
       { header: en ? "Code" : "Код", width: 60, align: "left" },
       {
         header: en ? "Description" : "Стока",
-        width: pageWidth - (22 + 60 + 38 + 42 + 50 + 36 + 48),
+        width: pageWidth - (22 + 60 + 38 + 42 + 50 + discountWidth + 36 + 48),
         align: "left",
         wrap: true,
       },
       { header: en ? "Unit" : "Мярка", width: 38, align: "center" },
       { header: en ? "Qty" : "Кол.", width: 42, align: "right" },
       { header: en ? "Price" : "Цена", width: 50, align: "right" },
+      ...(showDiscount
+        ? [
+            {
+              header: en ? "Disc. %" : "Т.О. %",
+              width: discountWidth,
+              align: "right" as const,
+            },
+          ]
+        : []),
       { header: en ? "Curr." : "Валута", width: 36, align: "center" },
       { header: en ? "Amount" : "Ст-ст", width: 48, align: "right" },
     ];
