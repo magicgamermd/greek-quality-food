@@ -80,6 +80,7 @@ import {
 } from "@/lib/linePricing";
 import { creditNoteLine, invoicedCreditPrice } from "@/lib/creditNoteLine";
 import { evaluateQuantityExpression } from "@/lib/quantityExpression";
+import { discountForPickedProduct } from "@/lib/priceGroups";
 import { matchesSearch, matchesAnyField } from "@/lib/translit";
 import { HighlightMatch, HighlightMultiToken } from "@/lib/highlight";
 import { Button } from "@/components/ui/button";
@@ -245,6 +246,11 @@ interface OrderProduct {
   total_stock: number;
   partner_price: number | null;
   low_stock_threshold?: number | null;
+  /**
+   * Отстъпка по подразбиране за нов ред: своята на партньора, иначе на
+   * ценовата му група (Microinvest, 04.11.2026). Може да се смени.
+   */
+  default_discount_percent?: number | null;
 }
 
 interface OrderItemRow {
@@ -4945,6 +4951,7 @@ function EditOrderItemsModal({
                 quantity: item.quantity || "1",
                 unit_price:
                   item.unit_price || (price != null ? String(price) : ""),
+                discount_percent: discountForPickedProduct(item, product),
                 unit: product.unit || "бр.",
                 stock,
                 weight_kg: productWeight != null ? String(productWeight) : "",
@@ -6346,6 +6353,7 @@ function CreateOrderModal({
             sku: product.sku ?? "",
             quantity: item.quantity || "1",
             unit_price: item.unit_price || (price != null ? String(price) : ""),
+            discount_percent: discountForPickedProduct(item, product),
             unit: product.unit || "бр.",
             stock,
             cost_price: Number.isFinite(cost) && cost > 0 ? cost : 0,
