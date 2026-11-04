@@ -9,6 +9,10 @@ import {
   Search,
   Loader2,
   CheckCircle2,
+  FolderInput,
+  FolderTree,
+  Percent,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { SHOW_ALL_LIMIT } from "@/lib/pagination";
@@ -41,6 +45,26 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { LoadingOverlay, ErrorMessage, Spinner } from "@/components/ui/spinner";
+import { PERMISSIONS } from "@/lib/permissions";
+import { usePermissions } from "@/contexts/PermissionContext";
+import { GroupPicker } from "@/components/groups/GroupPicker";
+import { GroupSidebar } from "@/components/groups/GroupSidebar";
+import { MoveToGroupDialog } from "@/components/groups/MoveToGroupDialog";
+import { PriceGroupsDialog } from "@/components/partners/PriceGroupsDialog";
+import {
+  countLabel,
+  GROUP_FILTER_ALL,
+  GROUP_FILTER_NONE,
+  groupFilterParam,
+  useGroupActions,
+  useGroups,
+} from "@/lib/groups";
+import {
+  effectiveDefaultDiscount,
+  formatPercent,
+  priceGroupDiscount,
+  usePriceGroups,
+} from "@/lib/priceGroups";
 
 function PartnerModal({
   open,
@@ -78,10 +102,17 @@ function PartnerModal({
       bic: (p as any)?.bic ?? "",
       iban: (p as any)?.iban ?? "",
       category: p?.category ?? "",
+      partner_group_id: p?.partner_group_id?.toString() ?? "",
     };
   };
 
   const [form, setForm] = useState(buildForm(partner));
+  const { data: priceGroups } = usePriceGroups();
+  const groupDiscount = priceGroupDiscount(priceGroups, form.price_group);
+  const defaultDiscount = effectiveDefaultDiscount(
+    form.discount_percent,
+    groupDiscount,
+  );
 
   // Re-populate form when partner changes (edit mode)
   useEffect(() => {
@@ -138,6 +169,9 @@ function PartnerModal({
         eik: form.eik.replace(/\s+/g, "").replace(/^(BG|ВG|ВГ)(?=\d)/i, ""),
         // Празно поле „Отстъпка %“ даваше грешка 500 при запис.
         discount_percent: form.discount_percent.trim() || "0",
+        partner_group_id: form.partner_group_id
+          ? Number(form.partner_group_id)
+          : null,
       };
       const payload =
         cleaned.partner_type === "individual"
@@ -156,6 +190,8 @@ function PartnerModal({
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["partners"] });
+      qc.invalidateQueries({ queryKey: ["groups", "partner"] });
+      qc.invalidateQueries({ queryKey: ["price-groups"] });
       onClose();
       toast.success(partner ? "Партньорът е обновен" : "Партньорът е създаден");
     },
@@ -258,16 +294,13 @@ function PartnerModal({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Категория</Label>
-              <select
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={form.category}
-                onChange={(e) => set("category", e.target.value)}
-              >
-                <option value="">— Без категория —</option>
-                <option value="Магазин">🏪 Магазин</option>
-                <option value="Ресторант">🍽️ Ресторант</option>
-              </select>
+              <Label htmlFor="partner-group">Група</Label>
+              <GroupPicker
+                id="partner-group"
+                kind="partner"
+                value={form.partner_group_id}
+                onChange={(value) => set("partner_group_id", value)}
+              />
             </div>
           </div>
           {!isIndividual && (
@@ -369,14 +402,30 @@ function PartnerModal({
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Отстъпка %</Label>
+              <Label>Своя отстъпка %</Label>
               <Input
                 type="number"
+                min="0"
+                max="100"
+                step="0.01"
                 value={form.discount_percent}
                 onChange={(e) => set("discount_percent", e.target.value)}
               />
             </div>
           </div>
+          <p className="-mt-2 text-xs text-gray-500">
+            {groupDiscount > 0
+              ? `Ценовата група дава ${formatPercent(groupDiscount)} % отстъпка. `
+              : ""}
+            В новите поръчки редовете тръгват с{" "}
+            <strong>{formatPercent(defaultDiscount)} % отстъпка</strong>
+            {Number(form.discount_percent.replace(",", ".")) > 0
+              ? " (своята на партньора)."
+              : groupDiscount > 0
+                ? " (на ценовата група)."
+                : "."}{" "}
+            Може да се смени на всеки ред.
+          </p>
 
           {!isIndividual && (
             <>
@@ -550,6 +599,13 @@ function PriceListModal({
   );
 }
 
+/** Иконката на старите категории, вече групи. */
+function groupIcon(name: string | null | undefined): string {
+  if (name === "Магазин") return "🏪 ";
+  if (name === "Ресторант") return "🍽️ ";
+  return "";
+}
+
 /**
  * Inline quick-select for a partner's `price_group` — lets the user change
  * the pricing tier directly from the partners table row without opening
@@ -584,6 +640,7 @@ function PriceGroupSelect({
       api.put(`/partners/${partnerId}`, { price_group }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["partners"] });
+      qc.invalidateQueries({ queryKey: ["price-groups"] });
       toast.success("Ценовата група е обновена");
     },
     onError: (err: any) => {
@@ -631,7 +688,7 @@ function PriceGroupSelect({
 // a new object literal each render would cause the memoised `current`
 // state to recompute on every render and the URL→state read race to
 // drop intermediate values (e.g. typing in the search input).
-const PARTNERS_URL_DEFAULTS = { search: "", category: "", page: "1" };
+const PARTNERS_URL_DEFAULTS = { search: "", group: "", page: "1" };
 
 export function Partners() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -642,10 +699,22 @@ export function Partners() {
   // URL-persisted filters so reload / share preserves state
   const [urlFilters, setUrlFilters] = useUrlState(PARTNERS_URL_DEFAULTS);
   const search = urlFilters.search;
-  const category = urlFilters.category;
+  const groupFilter = urlFilters.group;
   const page = Math.max(1, parseInt(urlFilters.page, 10) || 1);
   const setSearch = (v: string) => setUrlFilters({ search: v, page: "1" });
-  const setCategory = (v: string) => setUrlFilters({ category: v, page: "1" });
+  // Групи (Microinvest): филтър + избрани редове за масово местене.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [groupsOpen, setGroupsOpen] = useState(false);
+  const [priceGroupsOpen, setPriceGroupsOpen] = useState(false);
+  const { hasPermission } = usePermissions();
+  const canManagePartners = hasPermission(PERMISSIONS.PARTNERS_MANAGE);
+  const { data: groupsData } = useGroups("partner");
+  const { move: moveToGroup } = useGroupActions("partner");
+  const setGroupFilter = (v: string) => {
+    setSelectedIds(new Set());
+    setUrlFilters({ group: v, page: "1" });
+  };
   const setPage = (v: number | ((p: number) => number)) =>
     setUrlFilters({
       page: String(typeof v === "function" ? v(page) : v),
@@ -660,11 +729,12 @@ export function Partners() {
     isLoading,
     error,
   } = useQuery<{ items: Partner[]; total: number }>({
-    queryKey: ["partners", debouncedSearch, page, category],
+    queryKey: ["partners", debouncedSearch, page, groupFilter],
     queryFn: () => {
       const params = new URLSearchParams();
       if (debouncedSearch) params.set("search", debouncedSearch);
-      if (category) params.set("category", category);
+      const groupParam = groupFilterParam(groupFilter);
+      if (groupParam) params.set("group", groupParam);
       params.set("page", String(page));
       params.set("limit", String(pageSize));
       return api.get(`/partners?${params}`).then((r) => {
@@ -679,6 +749,42 @@ export function Partners() {
 
   const partners = result?.items ?? [];
   const totalItems = result?.total ?? 0;
+  const visibleIds = partners.map((partner) => partner.id);
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const toggleSelected = (id: number) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAllVisible = () =>
+    setSelectedIds((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        visibleIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...visibleIds]);
+    });
+  const groupTabs = [
+    {
+      value: GROUP_FILTER_ALL,
+      label: "Всички",
+      count: groupsData?.total_count,
+    },
+    ...(groupsData?.data ?? []).map((group) => ({
+      value: String(group.id),
+      label: `${groupIcon(group.name)}${group.name}`,
+      count: group.member_count,
+    })),
+    {
+      value: GROUP_FILTER_NONE,
+      label: "Без група",
+      count: groupsData?.ungrouped_count,
+    },
+  ];
 
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["products"],
@@ -702,41 +808,54 @@ export function Partners() {
           <h1 className="text-2xl font-bold text-gray-900">Партньори</h1>
           <p className="text-gray-500 text-sm mt-1">Клиенти и ценови листи</p>
         </div>
-        <Button
-          onClick={() => {
-            setEditPartner(null);
-            setModalOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" />
-          Нов партньор
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {canManagePartners && (
+            <Button variant="outline" onClick={() => setGroupsOpen(true)}>
+              <FolderTree className="h-4 w-4" />
+              Групи
+            </Button>
+          )}
+          <Button variant="outline" onClick={() => setPriceGroupsOpen(true)}>
+            <Percent className="h-4 w-4" />
+            Ценови групи
+          </Button>
+          <Button
+            onClick={() => {
+              setEditPartner(null);
+              setModalOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            Нов партньор
+          </Button>
+        </div>
       </div>
 
-      {/* Category Tabs + Search */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-          {[
-            { value: "", label: "Всички" },
-            { value: "Магазин", label: "🏪 Магазини" },
-            { value: "Ресторант", label: "🍽️ Ресторанти" },
-          ].map((tab) => (
+      {/* Групи (бившите категории Магазин/Ресторант) + търсене */}
+      <div className="flex flex-col lg:flex-row gap-3">
+        <div className="flex flex-wrap gap-1 bg-gray-100 rounded-lg p-1">
+          {groupTabs.map((tab) => (
             <button
-              key={tab.value}
-              // setCategory вече връща page на 1. Допълнителен setPage(1)
+              key={tab.value || "all"}
+              // setGroupFilter вече връща page на 1. Допълнителен setPage(1)
               // тук се състезава с него: и двете пишат в URL-а през
               // setSearchParams в един tick, вторият тръгва от СТАРИТЕ
-              // параметри и презаписва категорията → URL оставаше само
+              // параметри и презаписва групата → URL оставаше само
               // „?page=1" и филтърът никога не стигаше до заявката.
               // (Същият капан е описан и при полето за търсене по-долу.)
-              onClick={() => setCategory(tab.value)}
+              onClick={() => setGroupFilter(tab.value)}
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                category === tab.value
+                groupFilter === tab.value
                   ? "bg-white text-gray-900 shadow-sm"
                   : "text-gray-500 hover:text-gray-700"
-              }`}
+              } ${tab.value === GROUP_FILTER_NONE ? "italic" : ""}`}
             >
               {tab.label}
+              {tab.count !== undefined && (
+                <span className="ml-1.5 text-xs tabular-nums text-gray-400">
+                  {tab.count}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -759,6 +878,25 @@ export function Partners() {
       </div>
 
       <Card>
+        {canManagePartners && selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-[#6c3dff]/20 bg-[#6c3dff]/5 px-4 py-2 text-sm">
+            <span className="font-medium text-gray-800">
+              Избрани: {countLabel("partner", selectedIds.size)}
+            </span>
+            <Button size="sm" onClick={() => setMoveOpen(true)}>
+              <FolderInput className="h-4 w-4" />
+              Премести в група…
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelectedIds(new Set())}
+            >
+              <X className="h-4 w-4" />
+              Откажи избора
+            </Button>
+          </div>
+        )}
         <CardContent className="p-0">
           {isLoading ? (
             <LoadingOverlay />
@@ -770,9 +908,20 @@ export function Partners() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {canManagePartners && (
+                    <TableHead className="w-10 px-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-[#6c3dff]"
+                        checked={allVisibleSelected}
+                        onChange={toggleAllVisible}
+                        aria-label="Избери всички показани"
+                      />
+                    </TableHead>
+                  )}
                   <TableHead>Код</TableHead>
                   <TableHead>Наименование</TableHead>
-                  <TableHead>Категория</TableHead>
+                  <TableHead>Група</TableHead>
                   <TableHead>ЕИК</TableHead>
                   <TableHead>Ценова група</TableHead>
                   <TableHead>Контакт</TableHead>
@@ -788,7 +937,7 @@ export function Partners() {
                 {partners.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={10}
+                      colSpan={canManagePartners ? 11 : 10}
                       className="text-center text-gray-400 py-8"
                     >
                       Няма партньори
@@ -800,13 +949,27 @@ export function Partners() {
                     // последната колона и на лаптоп оставаше извън екрана.
                     <TableRow
                       key={p.id}
-                      className="group cursor-pointer"
+                      className={`group cursor-pointer ${selectedIds.has(p.id) ? "bg-[#f6f3ff]" : ""}`}
                       title="Отвори за редакция"
                       onClick={() => {
                         setEditPartner(p);
                         setModalOpen(true);
                       }}
                     >
+                      {canManagePartners && (
+                        <TableCell
+                          className="w-10 px-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-[#6c3dff]"
+                            checked={selectedIds.has(p.id)}
+                            onChange={() => toggleSelected(p.id)}
+                            aria-label={`Избери ${p.name}`}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell className="font-mono text-sm text-gray-500">
                         {p.microinvest_code ? (
                           <HighlightMatch
@@ -818,7 +981,10 @@ export function Partners() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <div>
+                        {/* Дълъг низ без интервали в името (напр.
+                            „1,2,3,…,M1,M2,M3,H01“) разтягаше колоната до
+                            800 px и таблицата излизаше от екрана. */}
+                        <div className="min-w-[180px] [overflow-wrap:anywhere]">
                           <p className="font-medium text-gray-900">
                             <HighlightMatch
                               text={p.name}
@@ -833,22 +999,18 @@ export function Partners() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {p.category ? (
+                        {p.partner_group_name ? (
                           <span
-                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                              p.category === "Магазин"
+                            className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${
+                              p.partner_group_name === "Магазин"
                                 ? "bg-blue-50 text-blue-700"
-                                : p.category === "Ресторант"
+                                : p.partner_group_name === "Ресторант"
                                   ? "bg-violet-50 text-violet-700"
-                                  : "bg-gray-50 text-gray-600"
+                                  : "bg-gray-100 text-gray-700"
                             }`}
                           >
-                            {p.category === "Магазин"
-                              ? "🏪"
-                              : p.category === "Ресторант"
-                                ? "🍽️"
-                                : ""}{" "}
-                            {p.category}
+                            {groupIcon(p.partner_group_name)}
+                            {p.partner_group_name}
                           </span>
                         ) : (
                           <span className="text-gray-300">—</span>
@@ -907,7 +1069,11 @@ export function Partners() {
                         )}
                       </TableCell>
                       <TableCell
-                        className="sticky right-0 bg-white text-right shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)] group-hover:bg-gray-50"
+                        className={`sticky right-0 text-right shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)] ${
+                          selectedIds.has(p.id)
+                            ? "bg-[#f6f3ff]"
+                            : "bg-white group-hover:bg-gray-50"
+                        }`}
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-end gap-2">
@@ -951,6 +1117,47 @@ export function Partners() {
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         partner={editPartner}
+      />
+
+      <MoveToGroupDialog
+        kind="partner"
+        open={moveOpen}
+        onClose={() => setMoveOpen(false)}
+        title="Премести в група"
+        description={`${countLabel("partner", selectedIds.size)} отиват в избраната група.`}
+        confirmText="Премести"
+        onConfirm={async (groupId) => {
+          const moved = await moveToGroup.mutateAsync({
+            ids: [...selectedIds],
+            groupId,
+          });
+          toast.success(`Преместени: ${countLabel("partner", moved)}`);
+          setSelectedIds(new Set());
+        }}
+      />
+
+      <Dialog open={groupsOpen} onOpenChange={setGroupsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Групи на партньорите</DialogTitle>
+            <DialogDescription>
+              Нова група, преименуване, преместване на цяла група в друга и
+              изтриване. Партньор се слага в група от картата му или с отметки в
+              списъка → „Премести в група“.
+            </DialogDescription>
+          </DialogHeader>
+          <GroupSidebar
+            kind="partner"
+            canManage={canManagePartners}
+            className="max-h-[55vh] overflow-y-auto"
+          />
+        </DialogContent>
+      </Dialog>
+
+      <PriceGroupsDialog
+        open={priceGroupsOpen}
+        onClose={() => setPriceGroupsOpen(false)}
+        canManage={canManagePartners}
       />
 
       {priceListPartner && (

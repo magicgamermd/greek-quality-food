@@ -20,6 +20,11 @@ import invoiceRoutes from "./routes/invoices.js";
 import paymentRoutes from "./routes/payments.js";
 import analyticsRoutes from "./routes/analytics.js";
 import categoriesRoutes from "./routes/categories.js";
+import {
+  groupRoutes,
+  PARTNER_GROUPS,
+  PRODUCT_GROUPS,
+} from "./routes/groups.js";
 import suppliersRoutes from "./routes/suppliers.js";
 import usersRoutes from "./routes/users.js";
 import settingsRoutes from "./routes/settings.js";
@@ -258,6 +263,12 @@ export async function build() {
   await app.register(paymentRoutes, { prefix: "/payments" });
   await app.register(analyticsRoutes, { prefix: "/analytics" });
   await app.register(categoriesRoutes, { prefix: "/categories" });
+  await app.register(groupRoutes(PRODUCT_GROUPS), {
+    prefix: "/product-groups",
+  });
+  await app.register(groupRoutes(PARTNER_GROUPS), {
+    prefix: "/partner-groups",
+  });
   await app.register(suppliersRoutes, { prefix: "/suppliers" });
   await app.register(usersRoutes, { prefix: "/users" });
   await app.register(permissionsRoutes, { prefix: "/permissions" });

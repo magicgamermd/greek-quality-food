@@ -26,6 +26,9 @@ export interface Product {
   category?: Category;
   category_name_bg?: string;
   category_name_en?: string;
+  /** Група (като в Microinvest), напр. по доставчик. */
+  product_group_id?: number | null;
+  product_group_name?: string | null;
   unit: string;
   description?: string;
   image_url?: string;
@@ -116,6 +119,9 @@ export interface Partner {
   bic?: string;
   iban?: string;
   category?: string;
+  /** Група на партньора (досегашната „Категория“ Магазин/Ресторант). */
+  partner_group_id?: number | null;
+  partner_group_name?: string | null;
 }
 
 export interface PriceList {

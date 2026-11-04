@@ -13,6 +13,13 @@ const createProductSchema = z.object({
   name_en: z.string().min(1),
   sku: z.string().min(1),
   category_id: z.coerce.number().int().optional().nullable(),
+  // Група (като в Microinvest): "" / null = без група.
+  product_group_id: z
+    .preprocess(
+      (val) => (val === "" ? null : val),
+      z.coerce.number().int().positive().nullable(),
+    )
+    .optional(),
   unit: z.string().default("pcs"),
   description: z.string().optional().nullable(),
   image_url: z.string().url().optional().nullable(),
@@ -221,6 +228,7 @@ export default async function productRoutes(app: FastifyInstance) {
 
     const {
       category,
+      group,
       brand,
       low_stock,
       no_selling_price,
@@ -253,6 +261,14 @@ export default async function productRoutes(app: FastifyInstance) {
     if (category) {
       where += ` AND p.category_id = $${paramIdx++}`;
       params.push(parseInt(category));
+    }
+
+    // Група: "none" = без група, число = тази група.
+    if (group === "none") {
+      where += " AND p.product_group_id IS NULL";
+    } else if (group && /^\d+$/.test(String(group))) {
+      where += ` AND p.product_group_id = $${paramIdx++}`;
+      params.push(parseInt(String(group), 10));
     }
 
     if (brand) {
@@ -369,12 +385,14 @@ export default async function productRoutes(app: FastifyInstance) {
 
     const sql = `
       SELECT p.*, c.name_bg AS category_name_bg, c.name_en AS category_name_en,
+             pg.name AS product_group_name,
              COALESCE(SUM(inv.quantity), 0)::numeric AS total_stock
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN product_groups pg ON pg.id = p.product_group_id
       LEFT JOIN inventory inv ON inv.product_id = p.id
       ${where}
-      GROUP BY p.id, c.name_bg, c.name_en
+      GROUP BY p.id, c.name_bg, c.name_en, pg.name
       ${havingClause}
       ${orderBy}
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
@@ -462,9 +480,11 @@ export default async function productRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
 
     const { rows } = await query(
-      `SELECT p.*, c.name_bg AS category_name_bg, c.name_en AS category_name_en
+      `SELECT p.*, c.name_bg AS category_name_bg, c.name_en AS category_name_en,
+              pg.name AS product_group_name
        FROM products p
        LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN product_groups pg ON pg.id = p.product_group_id
        WHERE p.id = $1`,
       [id],
     );
@@ -528,9 +548,10 @@ export default async function productRoutes(app: FastifyInstance) {
       try {
         const { rows } = await query(
           `INSERT INTO products (name_bg, name_en, sku, category_id, unit, description, image_url, low_stock_threshold, brand, purchase_price, selling_price,
-          retail_price, price_group_1, price_group_2, price_group_3, price_group_4, price_group_5, price_group_6, price_group_7, price_group_8, weight_kg)
+          retail_price, price_group_1, price_group_2, price_group_3, price_group_4, price_group_5, price_group_6, price_group_7, price_group_8, weight_kg,
+          product_group_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-          $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+          $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
          RETURNING *`,
           [
             body.name_bg,
@@ -554,11 +575,17 @@ export default async function productRoutes(app: FastifyInstance) {
             body.price_group_7 ?? null,
             body.price_group_8 ?? null,
             body.weight_kg ?? null,
+            body.product_group_id ?? null,
           ],
         );
 
         return reply.status(201).send(rows[0]);
       } catch (error: any) {
+        if (error?.code === "23503") {
+          return reply
+            .status(400)
+            .send({ error: "Групата не съществува — изберете друга" });
+        }
         if (error?.code === "23505") {
           return reply.status(409).send({
             error: "duplicate_sku",
@@ -615,6 +642,11 @@ export default async function productRoutes(app: FastifyInstance) {
         );
         rows = result.rows;
       } catch (error: any) {
+        if (error?.code === "23503") {
+          return reply
+            .status(400)
+            .send({ error: "Групата не съществува — изберете друга" });
+        }
         if (error?.code === "23505" && body.sku) {
           return reply.status(409).send({
             error: "duplicate_sku",
