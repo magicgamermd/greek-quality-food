@@ -37,6 +37,7 @@ import {
   roundQuantity,
   roundUnitPrice,
 } from "../lib/line-pricing.js";
+import { pickDefaultDiscount } from "../lib/partner-discount.js";
 import {
   type BatchPlanEntry,
   type KeptBudget,
@@ -609,15 +610,27 @@ export default async function orderRoutes(app: FastifyInstance) {
       // Get partner's price_list_id and price_group
       let priceListId: number | null = null;
       let partnerPriceGroup: string | null = null;
+      // Отстъпка по подразбиране за новите редове: своята на партньора,
+      // иначе тази на ценовата му група (Microinvest, 04.11.2026).
+      let defaultDiscountPercent = 0;
       if (partner_id) {
         const {
           rows: [partner],
         } = await query(
-          "SELECT price_list_id, price_group FROM partners WHERE id = $1",
+          `SELECT p.price_list_id, p.price_group,
+                  p.discount_percent::float AS own_discount,
+                  d.discount_percent::float AS group_discount
+             FROM partners p
+             LEFT JOIN price_group_discounts d ON d.price_group = p.price_group
+            WHERE p.id = $1`,
           [partner_id],
         );
         priceListId = partner?.price_list_id ?? null;
         partnerPriceGroup = partner?.price_group ?? null;
+        defaultDiscountPercent = pickDefaultDiscount(
+          partner?.own_discount,
+          partner?.group_discount,
+        );
       }
 
       // Map partner's price group to the product column name
@@ -675,7 +688,12 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       // MERT-M: no per-batch enrichment. Stock is tracked per product only.
 
-      return { data: rows };
+      return {
+        data: rows.map((row) => ({
+          ...row,
+          default_discount_percent: defaultDiscountPercent,
+        })),
+      };
     },
   );
 

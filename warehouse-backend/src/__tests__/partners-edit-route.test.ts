@@ -106,3 +106,128 @@ describe("PUT /partners/:id — редакция", () => {
     expect(empty.success && empty.data.discount_percent).toBe(0);
   });
 });
+
+async function post(payload: Record<string, unknown>) {
+  const app = Fastify();
+  app.addHook("onRequest", async (request) => {
+    (request as any).user = { id: "u-admin", email: "a@t", role: "admin" };
+    (request as any).jwtVerify = async () => (request as any).user;
+  });
+  await app.register(partnerRoutes, { prefix: "/partners" });
+  try {
+    return await app.inject({ method: "POST", url: "/partners", payload });
+  } finally {
+    await app.close();
+  }
+}
+
+describe("POST /partners — нов партньор пази всички полета", () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  it("ценова група, отстъпка, група и банкови данни влизат в INSERT-а", async () => {
+    const calls: Array<{ sql: string; params: any[] }> = [];
+    mockQuery.mockImplementation(async (sql: any, params: any = []) => {
+      calls.push({ sql: String(sql), params });
+      return rows([{ id: 900, name: "Нов ЕООД" }]);
+    });
+    const res = await post({
+      name: "Нов ЕООД",
+      eik: "",
+      partner_type: "legal_entity",
+      price_group: "Ценова група 2",
+      discount_percent: "7,5",
+      partner_group_id: "2",
+      bank_name: "УниКредит",
+      iban: "BG80BNBG96611020345678",
+      address: "",
+    });
+    expect(res.statusCode).toBe(201);
+    const insert = calls.find((c) => /INSERT INTO partners/.test(c.sql))!;
+    const columns = insert.sql
+      .match(/INSERT INTO partners \(([^)]+)\)/)![1]
+      .split(",")
+      .map((c) => c.trim());
+    const value = (column: string) => insert.params[columns.indexOf(column)];
+    expect(value("price_group")).toBe("Ценова група 2");
+    expect(value("discount_percent")).toBe(7.5);
+    expect(value("partner_group_id")).toBe(2);
+    expect(value("bank_name")).toBe("УниКредит");
+    expect(value("iban")).toBe("BG80BNBG96611020345678");
+    // празен текст → NULL, не „“
+    expect(value("eik")).toBeNull();
+    expect(value("address")).toBeNull();
+  });
+
+  it("физическо лице: без ЕИК и ДДС номер дори да са пратени", async () => {
+    const calls: Array<{ sql: string; params: any[] }> = [];
+    mockQuery.mockImplementation(async (sql: any, params: any = []) => {
+      calls.push({ sql: String(sql), params });
+      return rows([{ id: 901 }]);
+    });
+    const res = await post({
+      name: "Иван Петров",
+      partner_type: "individual",
+      vat_number: "BG123",
+    });
+    expect(res.statusCode).toBe(201);
+    const insert = calls.find((c) => /INSERT INTO partners/.test(c.sql))!;
+    const columns = insert.sql
+      .match(/INSERT INTO partners \(([^)]+)\)/)![1]
+      .split(",")
+      .map((c) => c.trim());
+    expect(insert.params[columns.indexOf("vat_number")]).toBeNull();
+  });
+});
+
+describe("ценови групи — отстъпка на група", () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  async function putPriceGroup(payload: Record<string, unknown>) {
+    const app = Fastify();
+    app.addHook("onRequest", async (request) => {
+      (request as any).user = { id: "u-admin", email: "a@t", role: "admin" };
+      (request as any).jwtVerify = async () => (request as any).user;
+    });
+    await app.register(partnerRoutes, { prefix: "/partners" });
+    try {
+      return await app.inject({
+        method: "PUT",
+        url: "/partners/price-groups",
+        payload,
+      });
+    } finally {
+      await app.close();
+    }
+  }
+
+  it("„2,5“ → 2.5 за „Цена на едро“ (не се бърка с /partners/:id)", async () => {
+    const calls: Array<{ sql: string; params: any[] }> = [];
+    mockQuery.mockImplementation(async (sql: any, params: any = []) => {
+      calls.push({ sql: String(sql), params });
+      return rows([{ price_group: "Цена на едро", discount_percent: 2.5 }]);
+    });
+    const res = await putPriceGroup({
+      price_group: "Цена на едро",
+      discount_percent: "2,5",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toMatch(/UPDATE price_group_discounts/);
+    expect(calls[0].params).toEqual(["Цена на едро", 2.5]);
+  });
+
+  it("над 100 % → 400; непозната група → 404", async () => {
+    mockQuery.mockImplementation(async () => rows([]));
+    const tooMuch = await putPriceGroup({
+      price_group: "Цена на едро",
+      discount_percent: "120",
+    });
+    expect(tooMuch.statusCode).toBe(400);
+    expect(tooMuch.json().error).toBe("Отстъпката трябва да е между 0 и 100 %");
+    const unknown = await putPriceGroup({
+      price_group: "Няма такава",
+      discount_percent: 1,
+    });
+    expect(unknown.statusCode).toBe(404);
+  });
+});

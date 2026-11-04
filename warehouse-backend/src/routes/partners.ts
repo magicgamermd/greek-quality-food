@@ -3,6 +3,7 @@ import { MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from "../lib/pagination.js";
 import { z } from "zod";
 import { query } from "../db.js";
 import {
+  discountPercentSchema,
   normalizeEik,
   partnerCreateSchema,
   partnerUpdateSchema,
@@ -142,6 +143,7 @@ const PARTNER_FIELD_NAMES: Record<string, string> = {
   email: "Имейл",
   discount_percent: "Отстъпка %",
   partner_type: "Вид",
+  partner_group_id: "Група",
 };
 
 /** Първата грешка от проверката — текст за екрана, не суров JSON. */
@@ -210,7 +212,8 @@ export default async function partnerRoutes(app: FastifyInstance) {
   app.get("/", async (request: FastifyRequest, reply: FastifyReply) => {
     await requireAuth(request, reply);
 
-    const { search, page, limit, category, catalog } = request.query as any;
+    const { search, page, limit, category, group, catalog } =
+      request.query as any;
     const pageNum = Math.max(1, parseInt(page) || 1);
     // Allow larger page size when catalog=true so dropdown consumers
     // (Orders, Invoices, Partners list) can fetch the full partner
@@ -247,6 +250,15 @@ export default async function partnerRoutes(app: FastifyInstance) {
       paramIdx++;
     }
 
+    // Група: "none" = без група, число = тази група.
+    if (group === "none") {
+      conditions.push("p.partner_group_id IS NULL");
+    } else if (group && /^\d+$/.test(String(group))) {
+      conditions.push(`p.partner_group_id = $${paramIdx}`);
+      params.push(parseInt(String(group), 10));
+      paramIdx++;
+    }
+
     const where =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -263,9 +275,11 @@ export default async function partnerRoutes(app: FastifyInstance) {
     }
 
     const sql = `
-      SELECT p.*, pl.name AS price_list_name
+      SELECT p.*, pl.name AS price_list_name,
+             pg.name AS partner_group_name
       FROM partners p
       LEFT JOIN price_lists pl ON pl.id = p.price_list_id
+      LEFT JOIN partner_groups pg ON pg.id = p.partner_group_id
       ${where}
       ${orderClause}
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
@@ -341,6 +355,66 @@ export default async function partnerRoutes(app: FastifyInstance) {
     },
   );
 
+  // GET /partners/price-groups — ценовите групи с отстъпката им и броя
+  // партньори. Отстъпката влиза по подразбиране в новите редове на
+  // поръчка, освен ако партньорът има своя (Microinvest, 04.11.2026).
+  app.get(
+    "/price-groups",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      await requireAuth(request, reply);
+      const { rows } = await query(
+        `SELECT d.price_group,
+                d.discount_percent::float AS discount_percent,
+                COUNT(p.id)::int AS partner_count
+           FROM price_group_discounts d
+           LEFT JOIN partners p ON p.price_group = d.price_group
+          GROUP BY d.price_group, d.discount_percent
+          ORDER BY CASE d.price_group
+                     WHEN 'Цена на едро' THEN 0
+                     WHEN 'Цена на дребно' THEN 1
+                     ELSE 2
+                   END,
+                   d.price_group`,
+      );
+      return reply.send({ data: rows });
+    },
+  );
+
+  // PUT /partners/price-groups — отстъпка % на една ценова група
+  const priceGroupDiscountSchema = z.object({
+    price_group: z
+      .string({ required_error: "Изберете ценова група" })
+      .trim()
+      .min(1, "Изберете ценова група")
+      .max(50),
+    discount_percent: discountPercentSchema,
+  });
+  app.put(
+    "/price-groups",
+    { preHandler: partnersManagePreHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const parsed = priceGroupDiscountSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply
+          .status(400)
+          .send({
+            error: parsed.error.issues[0]?.message ?? "Невалидни данни",
+          });
+      }
+      const { rows } = await query(
+        `UPDATE price_group_discounts
+            SET discount_percent = $2, updated_at = NOW()
+          WHERE price_group = $1
+          RETURNING price_group, discount_percent::float AS discount_percent`,
+        [parsed.data.price_group, parsed.data.discount_percent],
+      );
+      if (!rows[0]) {
+        return reply.status(404).send({ error: "Няма такава ценова група" });
+      }
+      return reply.send({ data: rows[0] });
+    },
+  );
+
   // GET /partners/:id
   app.get("/:id", async (request: FastifyRequest, reply: FastifyReply) => {
     await requireAuth(request, reply);
@@ -348,9 +422,11 @@ export default async function partnerRoutes(app: FastifyInstance) {
     const {
       rows: [partner],
     } = await query(
-      `SELECT p.*, pl.name AS price_list_name
+      `SELECT p.*, pl.name AS price_list_name,
+              pg.name AS partner_group_name
        FROM partners p
        LEFT JOIN price_lists pl ON pl.id = p.price_list_id
+       LEFT JOIN partner_groups pg ON pg.id = p.partner_group_id
        WHERE p.id = $1`,
       [id],
     );
@@ -374,31 +450,40 @@ export default async function partnerRoutes(app: FastifyInstance) {
       // Individual partners never carry EIK / VAT / bank info even if the
       // client accidentally sent them. Normalise to null so the DB row is clean.
       const isIndividual = body.partner_type === "individual";
-      const eik = isIndividual ? null : body.eik || null;
-      const vatNumber = isIndividual ? null : body.vat_number || null;
 
-      const { rows } = await query(
-        `INSERT INTO partners
-         (name, eik, vat_number, address, contact_person, phone, email,
-          price_list_id, city, print_name, partner_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *`,
-        [
-          body.name,
-          eik,
-          vatNumber,
-          body.address || null,
-          body.contact_person || null,
-          body.phone || null,
-          body.email || null,
-          body.price_list_id ?? null,
-          body.city || null,
-          body.print_name || null,
-          body.partner_type,
-        ],
-      );
+      // Записват се ВСИЧКИ полета от формата. Досега INSERT-ът пазеше само
+      // част от тях и при нов партньор се губеха ценовата група,
+      // отстъпката, категорията и банковите данни (04.11.2026). Ключовете
+      // са от схемата (zod изрязва непознатите), празен текст → NULL.
+      const payload: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(body)) {
+        if (val === undefined) continue;
+        payload[key] =
+          typeof val === "string" && val.trim() === "" ? null : val;
+      }
+      if (isIndividual) {
+        payload.eik = null;
+        payload.vat_number = null;
+      }
+      const columns = Object.keys(payload);
+      const placeholders = columns.map((_, i) => `$${i + 1}`);
 
-      return reply.status(201).send(rows[0]);
+      try {
+        const { rows } = await query(
+          `INSERT INTO partners (${columns.join(", ")})
+           VALUES (${placeholders.join(", ")})
+           RETURNING *`,
+          columns.map((column) => payload[column]),
+        );
+        return reply.status(201).send(rows[0]);
+      } catch (error: any) {
+        if (error?.code === "23503") {
+          return reply
+            .status(400)
+            .send({ error: "Групата не съществува — изберете друга" });
+        }
+        throw error;
+      }
     },
   );
 
@@ -455,10 +540,20 @@ export default async function partnerRoutes(app: FastifyInstance) {
       fields.push("updated_at = NOW()");
       values.push(id);
 
-      const { rows } = await query(
-        `UPDATE partners SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
-        values,
-      );
+      let rows;
+      try {
+        ({ rows } = await query(
+          `UPDATE partners SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+          values,
+        ));
+      } catch (error: any) {
+        if (error?.code === "23503") {
+          return reply
+            .status(400)
+            .send({ error: "Групата не съществува — изберете друга" });
+        }
+        throw error;
+      }
 
       if (rows.length === 0) {
         return reply.status(404).send({ error: "Partner not found" });

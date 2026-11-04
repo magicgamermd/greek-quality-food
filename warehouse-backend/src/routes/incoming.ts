@@ -31,6 +31,7 @@ import {
 } from "../utils/invoice-normalization.js";
 import { generateIncomingStockReceiptPdf } from "../services/document-pdf.js";
 import { normalizeExpiryInput } from "../utils/expiry-input.js";
+import { assignSupplierGroup } from "../lib/product-groups.js";
 
 // Length caps on free-form strings prevent both accidental DB bloat and
 // malicious payloads — e.g. a 100KB supplier_name ending up as an alias
@@ -2407,6 +2408,13 @@ export default async function incomingRoutes(app: FastifyInstance) {
           }
         }
 
+        // Групи по доставчик: продуктите без група → групата на доставчика.
+        await assignSupplierGroup(
+          client,
+          confirmedRows[0].supplier_id,
+          items.map((item: any) => item.product_id),
+        );
+
         // Create notification
         await client.query(
           `INSERT INTO notifications (type, message)
@@ -2775,7 +2783,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
 
       return await transaction(async (client) => {
         const { rows: docRows } = await client.query(
-          "SELECT id, status FROM incoming_goods WHERE id = $1 FOR UPDATE",
+          "SELECT id, status, supplier_id FROM incoming_goods WHERE id = $1 FOR UPDATE",
           [id],
         );
         if (!docRows[0]) {
@@ -2951,6 +2959,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
                   [fresh.unit_price, fresh.product_id],
                 );
               }
+              await assignSupplierGroup(client, docRows[0].supplier_id, [
+                fresh.product_id,
+              ]);
             }
           }
         }
@@ -2983,7 +2994,7 @@ export default async function incomingRoutes(app: FastifyInstance) {
 
       return await transaction(async (client) => {
         const { rows: docRows } = await client.query(
-          "SELECT id, status FROM incoming_goods WHERE id = $1 FOR UPDATE",
+          "SELECT id, status, supplier_id FROM incoming_goods WHERE id = $1 FOR UPDATE",
           [id],
         );
         if (!docRows[0]) {
@@ -3041,6 +3052,9 @@ export default async function incomingRoutes(app: FastifyInstance) {
               [body.unit_price, body.product_id],
             );
           }
+          await assignSupplierGroup(client, docRows[0].supplier_id, [
+            body.product_id,
+          ]);
         }
 
         // Header сумата следва редовете.

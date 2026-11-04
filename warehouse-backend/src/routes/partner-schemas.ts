@@ -11,7 +11,7 @@ export function normalizeEik(value: string): string {
 }
 
 /** „Отстъпка %“: празно поле = 0; 0–100, с точка или запетая. */
-const discountPercentSchema = z
+export const discountPercentSchema = z
   .union([z.string(), z.number()])
   .transform((value, ctx) => {
     if (typeof value === "string" && value.trim() === "") return 0;
@@ -47,6 +47,13 @@ const basePartnerObject = z.object({
   bic: z.string().optional(),
   iban: z.string().optional(),
   category: z.string().optional().nullable(),
+  // Група на партньора: "" / null = без група.
+  partner_group_id: z
+    .preprocess(
+      (val) => (val === "" ? null : val),
+      z.coerce.number().int().positive().nullable(),
+    )
+    .optional(),
   partner_type: z
     .enum(["legal_entity", "individual", "customer", "supplier"])
     .optional(),
