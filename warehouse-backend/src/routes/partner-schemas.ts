@@ -2,11 +2,36 @@ import { z } from "zod";
 
 const EIK_REGEX = /^\d{9}$|^\d{13}$/;
 
+/**
+ * ЕИК без интервали и без „BG“ отпред — в базата има и „ВG205024473“ (с
+ * кирилско В) и „BG201872808“, т.е. ДДС номер в полето за ЕИК.
+ */
+export function normalizeEik(value: string): string {
+  return value.replace(/\s+/g, "").replace(/^(BG|ВG|ВГ)(?=\d)/i, "");
+}
+
+/** „Отстъпка %“: празно поле = 0; 0–100, с точка или запетая. */
+const discountPercentSchema = z
+  .union([z.string(), z.number()])
+  .transform((value, ctx) => {
+    if (typeof value === "string" && value.trim() === "") return 0;
+    const parsed =
+      typeof value === "number" ? value : Number(value.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Отстъпката трябва да е между 0 и 100 %",
+      });
+      return z.NEVER;
+    }
+    return parsed;
+  });
+
 // Base schema — all fields optional here; create/update add their own requirements.
 const basePartnerObject = z.object({
   name: z.string().min(1),
   microinvest_code: z.string().optional(),
-  eik: z.string().optional(),
+  eik: z.string().transform(normalizeEik).optional(),
   vat_number: z.string().optional(),
   address: z.string().optional(),
   contact_person: z.string().optional(),
@@ -17,7 +42,7 @@ const basePartnerObject = z.object({
   print_name: z.string().optional(),
   client_type: z.string().optional(),
   price_group: z.string().optional(),
-  discount_percent: z.union([z.string(), z.number()]).optional(),
+  discount_percent: discountPercentSchema.optional(),
   bank_name: z.string().optional(),
   bic: z.string().optional(),
   iban: z.string().optional(),
