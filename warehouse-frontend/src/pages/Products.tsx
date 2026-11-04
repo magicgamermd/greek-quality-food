@@ -8,6 +8,9 @@ import {
   Package,
   ChevronLeft,
   ChevronRight,
+  FolderInput,
+  FolderTree,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { SHOW_ALL_LIMIT } from "@/lib/pagination";
@@ -49,6 +52,19 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { HighlightMatch } from "@/lib/highlight";
 import { Can } from "@/components/Can";
 import { PERMISSIONS } from "@/lib/permissions";
+import { usePermissions } from "@/contexts/PermissionContext";
+import { GroupPicker } from "@/components/groups/GroupPicker";
+import { GroupSidebar } from "@/components/groups/GroupSidebar";
+import { MoveToGroupDialog } from "@/components/groups/MoveToGroupDialog";
+import {
+  countLabel,
+  GROUP_FILTER_ALL,
+  GROUP_FILTER_NONE,
+  groupFilterParam,
+  useGroupActions,
+  useGroups,
+  type GroupFilter,
+} from "@/lib/groups";
 
 const PRICE_GROUP_FIELDS = [
   { key: "purchase_price", label: "Доставна цена" },
@@ -77,12 +93,17 @@ function formatPrice(v: number | null | undefined): string {
 
 function buildFormState(
   product?: (Product & { weight_kg?: number | null }) | null,
+  defaultGroupId?: string,
 ) {
   return {
     name_bg: product?.name_bg ?? "",
     name_en: product?.name_en ?? "",
     sku: product?.sku ?? "",
     category_id: product?.category_id?.toString() ?? "",
+    // Нов продукт, докато е избрана група вляво → в нея.
+    product_group_id: product
+      ? (product.product_group_id?.toString() ?? "")
+      : (defaultGroupId ?? ""),
     unit: product?.unit ?? "",
     description: product?.description ?? "",
     brand: product?.brand ?? "",
@@ -107,23 +128,27 @@ function ProductModal({
   product,
   categories,
   brands,
+  defaultGroupId,
 }: {
   open: boolean;
   onClose: () => void;
   product?: Product | null;
   categories: Category[];
   brands: string[];
+  /** Избраната вляво група — за нов продукт. */
+  defaultGroupId?: string;
 }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState(buildFormState(product));
+  const [form, setForm] = useState(buildFormState(product, defaultGroupId));
   const [showAllPrices, setShowAllPrices] = useState(false);
   const [confirmBelowCost, setConfirmBelowCost] = useState(false);
 
   useEffect(() => {
-    setForm(buildFormState(product));
+    setForm(buildFormState(product, defaultGroupId));
     setShowAllPrices(false);
     setConfirmBelowCost(false);
-  }, [product?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id, open]);
 
   // Below-cost guard: any selling-price field (selling, retail, group 1–8)
   // that's non-zero and BELOW purchase_price. Mirrors the order-level guard
@@ -147,6 +172,9 @@ function ProductModal({
       const payload = {
         ...form,
         category_id: form.category_id ? Number(form.category_id) : null,
+        product_group_id: form.product_group_id
+          ? Number(form.product_group_id)
+          : null,
         purchase_price: toNum(form.purchase_price),
         selling_price: toNum(form.selling_price),
         retail_price: toNum(form.retail_price),
@@ -167,6 +195,7 @@ function ProductModal({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["brands"] });
+      qc.invalidateQueries({ queryKey: ["groups", "product"] });
       onClose();
       toast.success(product ? "Продуктът е обновен" : "Продуктът е създаден");
     },
@@ -267,6 +296,19 @@ function ProductModal({
                 <option value="pack">пакет</option>
               </Select>
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="product-group">Група</Label>
+            <GroupPicker
+              id="product-group"
+              kind="product"
+              value={form.product_group_id}
+              onChange={(value) => set("product_group_id", value)}
+            />
+            <p className="text-xs text-gray-400">
+              Като групите в Microinvest — напр. по доставчик. „+ Нова група…“ я
+              създава веднага.
+            </p>
           </div>
           <div className="grid grid-cols-[2fr_1fr_1fr] gap-4">
             <div className="space-y-1.5">
@@ -600,6 +642,8 @@ type PriceFilter =
   "with_price" | "all" | "no_price" | "zero_stock" | "negative_stock";
 type StockTab = "active" | "catalog";
 
+const GROUPS_PANEL_KEY = "gqf.products.groupsPanel";
+
 export function Products() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
@@ -612,6 +656,39 @@ export function Products() {
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
+  // Групи (Microinvest): филтър вляво + избрани редове за масово местене.
+  const [groupFilter, setGroupFilter] = useState<GroupFilter>(GROUP_FILTER_ALL);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [moveOpen, setMoveOpen] = useState(false);
+  // Списъкът с групите вляво: сам отворен на широк екран; на 1366 px
+  // таблицата иначе не се събира. Изборът се помни в браузъра.
+  const [showGroups, setShowGroups] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(GROUPS_PANEL_KEY);
+      if (saved === "1" || saved === "0") return saved === "1";
+    } catch {
+      // няма достъп до localStorage — по ширината
+    }
+    return typeof window !== "undefined" && window.innerWidth >= 1600;
+  });
+  const toggleGroups = () =>
+    setShowGroups((prev) => {
+      try {
+        localStorage.setItem(GROUPS_PANEL_KEY, prev ? "0" : "1");
+      } catch {
+        // само за удобство
+      }
+      return !prev;
+    });
+  const { hasPermission } = usePermissions();
+  const canManageProducts = hasPermission(PERMISSIONS.PRODUCTS_MANAGE);
+  const { data: groupsData } = useGroups("product");
+  const { move: moveToGroup } = useGroupActions("product");
+  const selectGroup = (filter: GroupFilter) => {
+    setGroupFilter(filter);
+    setSelectedIds(new Set());
+    setPage(1);
+  };
   // Без страници — целият каталог се показва на екрана.
   const pageSize = SHOW_ALL_LIMIT;
 
@@ -629,6 +706,7 @@ export function Products() {
       "products",
       debouncedSearch,
       categoryFilter,
+      groupFilter,
       brandFilter,
       priceFilter,
       stockTab,
@@ -638,6 +716,8 @@ export function Products() {
       const params = new URLSearchParams();
       if (debouncedSearch) params.set("search", debouncedSearch);
       if (categoryFilter) params.set("category", categoryFilter);
+      const groupParam = groupFilterParam(groupFilter);
+      if (groupParam) params.set("group", groupParam);
       if (brandFilter) params.set("brand", brandFilter);
       if (priceFilter === "no_price") params.set("no_selling_price", "true");
       if (priceFilter === "with_price") params.set("has_price", "true");
@@ -686,6 +766,30 @@ export function Products() {
   const uncategorizedCount = products.filter(
     (product) => !product.category_id,
   ).length;
+  const visibleIds = products.map((product) => product.id);
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const toggleSelected = (id: number) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAllVisible = () =>
+    setSelectedIds((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        visibleIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...visibleIds]);
+    });
+  const selectedGroupName =
+    groupFilter === GROUP_FILTER_NONE
+      ? "Без група"
+      : (groupsData?.data.find((group) => String(group.id) === groupFilter)
+          ?.name ?? "");
 
   const { data: categories = [] } = useQuery<Category[]>({
     queryKey: ["categories"],
@@ -747,6 +851,16 @@ export function Products() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant={showGroups ? "default" : "outline"}
+            className={showGroups ? "" : "hidden lg:inline-flex"}
+            onClick={toggleGroups}
+            aria-pressed={showGroups}
+            title={showGroups ? "Скрий групите вляво" : "Покажи групите вляво"}
+          >
+            <FolderTree className="h-4 w-4" />
+            Групи
+          </Button>
           <Button variant="outline" onClick={() => setCategoryModalOpen(true)}>
             Категории
           </Button>
@@ -801,313 +915,425 @@ export function Products() {
         </Card>
       </div>
 
-      {/* Stock tabs: Налични / Каталог */}
-      <div className="flex gap-4 border-b border-gray-200">
-        <button
-          onClick={() => {
-            setStockTab("active");
-            setPage(1);
-          }}
-          className={`px-4 py-2 font-medium border-b-2 transition-colors ${
-            stockTab === "active"
-              ? "border-[#6c3dff] text-[#6c3dff]"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          Налични
-          <span
-            className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
-              stockTab === "active"
-                ? "bg-[#6c3dff]/10 text-[#6c3dff]"
-                : "bg-gray-100 text-gray-500"
-            }`}
-          >
-            {activeCount}
-          </span>
-        </button>
-        <button
-          onClick={() => {
-            setStockTab("catalog");
-            setPage(1);
-          }}
-          className={`px-4 py-2 font-medium border-b-2 transition-colors ${
-            stockTab === "catalog"
-              ? "border-[#6c3dff] text-[#6c3dff]"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          Каталог
-          <span
-            className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
-              stockTab === "catalog"
-                ? "bg-[#6c3dff]/10 text-[#6c3dff]"
-                : "bg-gray-100 text-gray-500"
-            }`}
-          >
-            {catalogCount}
-          </span>
-        </button>
-      </div>
-
-      {/* Filters */}
-      <Card>
-        <CardContent className="p-4 space-y-3">
-          <div className="flex flex-wrap gap-3">
-            <div className="relative flex-1 min-w-48">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                placeholder="Търси по име, SKU или марка..."
-                className="pl-9"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-              />
-            </div>
-            <Select
-              value={categoryFilter}
-              onChange={(e) => {
-                setCategoryFilter(e.target.value);
+      <div className="flex items-start gap-4">
+        <GroupSidebar
+          kind="product"
+          selected={groupFilter}
+          onSelect={selectGroup}
+          canManage={canManageProducts}
+          className={`sticky top-4 hidden w-56 shrink-0 rounded-lg border border-gray-200 bg-white p-3 max-h-[calc(100vh-2rem)] overflow-y-auto ${showGroups ? "lg:block" : ""}`}
+        />
+        <div className="min-w-0 flex-1 space-y-6">
+          {/* Stock tabs: Налични / Каталог */}
+          <div className="flex gap-4 border-b border-gray-200">
+            <button
+              onClick={() => {
+                setStockTab("active");
                 setPage(1);
               }}
-              className="w-48"
+              className={`px-4 py-2 font-medium border-b-2 transition-colors ${
+                stockTab === "active"
+                  ? "border-[#6c3dff] text-[#6c3dff]"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
             >
-              <option value="">Всички категории</option>
-              {categories.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.name_bg}
-                </option>
-              ))}
-            </Select>
-            <Select
-              value={brandFilter}
-              onChange={(e) => {
-                setBrandFilter(e.target.value);
-                setPage(1);
-              }}
-              className="w-48"
-            >
-              <option value="">Всички марки</option>
-              {brands.map((brand) => (
-                <option key={brand} value={brand}>
-                  {brand}
-                </option>
-              ))}
-            </Select>
-            {(search ||
-              categoryFilter ||
-              brandFilter ||
-              priceFilter !== "with_price") && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setSearch("");
-                  setCategoryFilter("");
-                  setBrandFilter("");
-                  setPriceFilter("with_price");
-                  setPage(1);
-                }}
-              >
-                Изчисти филтрите
-              </Button>
-            )}
-          </div>
-          {/* Price filter tabs */}
-          <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
-            {priceFilterTabs.map((tab) => (
-              <button
-                key={tab.value}
-                onClick={() => {
-                  setPriceFilter(tab.value);
-                  setPage(1);
-                }}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  priceFilter === tab.value
-                    ? "bg-white text-gray-900 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
+              Налични
+              <span
+                className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                  stockTab === "active"
+                    ? "bg-[#6c3dff]/10 text-[#6c3dff]"
+                    : "bg-gray-100 text-gray-500"
                 }`}
               >
-                {tab.label}
-              </button>
-            ))}
+                {activeCount}
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                setStockTab("catalog");
+                setPage(1);
+              }}
+              className={`px-4 py-2 font-medium border-b-2 transition-colors ${
+                stockTab === "catalog"
+                  ? "border-[#6c3dff] text-[#6c3dff]"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Каталог
+              <span
+                className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                  stockTab === "catalog"
+                    ? "bg-[#6c3dff]/10 text-[#6c3dff]"
+                    : "bg-gray-100 text-gray-500"
+                }`}
+              >
+                {catalogCount}
+              </span>
+            </button>
           </div>
-        </CardContent>
-      </Card>
 
-      {/* Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5 text-[#6c3dff]" />
-            {pagination.total} продукта
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <LoadingOverlay />
-          ) : error ? (
-            <div className="p-4">
-              <ErrorMessage message="Грешка при зареждане" />
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Наименование</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Мярка</TableHead>
-                  <TableHead>Категория</TableHead>
-                  <Can permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}>
-                    <TableHead>Доставна цена</TableHead>
-                  </Can>
-                  <TableHead>Цена на едро</TableHead>
-                  <Can permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}>
-                    <TableHead>Марж</TableHead>
-                  </Can>
-                  <TableHead>Наличност</TableHead>
-                  <TableHead className="text-right">Действия</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {products.map((p) => {
-                  const purchaseNum = Number(p.purchase_price) || 0;
-                  const sellingNum = Number(p.selling_price) || 0;
-                  const margin =
-                    purchaseNum > 0 && sellingNum > 0
-                      ? ((sellingNum - purchaseNum) / purchaseNum) * 100
-                      : null;
-                  const marginColor =
-                    margin === null
-                      ? "text-gray-400"
-                      : margin > 20
-                        ? "text-green-600"
-                        : margin >= 10
-                          ? "text-yellow-600"
-                          : "text-red-600";
+          {/* Filters */}
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div className="flex flex-wrap gap-3">
+                <div className="relative flex-1 min-w-48">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <Input
+                    placeholder="Търси по име, SKU или марка..."
+                    className="pl-9"
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </div>
+                <Select
+                  value={groupFilter}
+                  onChange={(e) => selectGroup(e.target.value)}
+                  className={`w-48 ${showGroups ? "lg:hidden" : ""}`}
+                  aria-label="Група"
+                >
+                  <option value={GROUP_FILTER_ALL}>Всички групи</option>
+                  <option value={GROUP_FILTER_NONE}>Без група</option>
+                  {(groupsData?.data ?? []).map((group) => (
+                    <option key={group.id} value={String(group.id)}>
+                      {group.name}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  value={categoryFilter}
+                  onChange={(e) => {
+                    setCategoryFilter(e.target.value);
+                    setPage(1);
+                  }}
+                  className="w-48"
+                >
+                  <option value="">Всички категории</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name_bg}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  value={brandFilter}
+                  onChange={(e) => {
+                    setBrandFilter(e.target.value);
+                    setPage(1);
+                  }}
+                  className="w-48"
+                >
+                  <option value="">Всички марки</option>
+                  {brands.map((brand) => (
+                    <option key={brand} value={brand}>
+                      {brand}
+                    </option>
+                  ))}
+                </Select>
+                {(search ||
+                  categoryFilter ||
+                  groupFilter ||
+                  brandFilter ||
+                  priceFilter !== "with_price") && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSearch("");
+                      setCategoryFilter("");
+                      setGroupFilter(GROUP_FILTER_ALL);
+                      setSelectedIds(new Set());
+                      setBrandFilter("");
+                      setPriceFilter("with_price");
+                      setPage(1);
+                    }}
+                  >
+                    Изчисти филтрите
+                  </Button>
+                )}
+              </div>
+              {/* Price filter tabs */}
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+                {priceFilterTabs.map((tab) => (
+                  <button
+                    key={tab.value}
+                    onClick={() => {
+                      setPriceFilter(tab.value);
+                      setPage(1);
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      priceFilter === tab.value
+                        ? "bg-white text-gray-900 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
 
-                  const hasStock = parseFloat(String(p.total_stock ?? 0)) > 0;
-                  const rowOpacity =
-                    stockTab === "catalog" && !hasStock ? "opacity-50" : "";
+          {/* Table */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Package className="h-5 w-5 text-[#6c3dff]" />
+                {pagination.total} продукта
+                {selectedGroupName && (
+                  <span className="font-normal text-gray-500">
+                    в „{selectedGroupName}“
+                  </span>
+                )}
+              </CardTitle>
+            </CardHeader>
+            {canManageProducts && selectedIds.size > 0 && (
+              <div className="flex flex-wrap items-center gap-2 border-y border-[#6c3dff]/20 bg-[#6c3dff]/5 px-4 py-2 text-sm">
+                <span className="font-medium text-gray-800">
+                  Избрани: {countLabel("product", selectedIds.size)}
+                </span>
+                <Button size="sm" onClick={() => setMoveOpen(true)}>
+                  <FolderInput className="h-4 w-4" />
+                  Премести в група…
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSelectedIds(new Set())}
+                >
+                  <X className="h-4 w-4" />
+                  Откажи избора
+                </Button>
+              </div>
+            )}
+            <CardContent className="p-0">
+              {isLoading ? (
+                <LoadingOverlay />
+              ) : error ? (
+                <div className="p-4">
+                  <ErrorMessage message="Грешка при зареждане" />
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {canManageProducts && (
+                        <TableHead className="w-10 px-2">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-[#6c3dff]"
+                            checked={allVisibleSelected}
+                            onChange={toggleAllVisible}
+                            aria-label="Избери всички показани"
+                          />
+                        </TableHead>
+                      )}
+                      <TableHead>Наименование</TableHead>
+                      <TableHead>SKU</TableHead>
+                      <TableHead>Мярка</TableHead>
+                      <TableHead>Категория</TableHead>
+                      <Can
+                        permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}
+                      >
+                        <TableHead>Доставна цена</TableHead>
+                      </Can>
+                      <TableHead>Цена на едро</TableHead>
+                      <Can
+                        permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}
+                      >
+                        <TableHead>Марж</TableHead>
+                      </Can>
+                      <TableHead>Наличност</TableHead>
+                      <TableHead className="sticky right-0 bg-white text-right shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)]">
+                        Действия
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {products.map((p) => {
+                      const purchaseNum = Number(p.purchase_price) || 0;
+                      const sellingNum = Number(p.selling_price) || 0;
+                      const margin =
+                        purchaseNum > 0 && sellingNum > 0
+                          ? ((sellingNum - purchaseNum) / purchaseNum) * 100
+                          : null;
+                      const marginColor =
+                        margin === null
+                          ? "text-gray-400"
+                          : margin > 20
+                            ? "text-green-600"
+                            : margin >= 10
+                              ? "text-yellow-600"
+                              : "text-red-600";
 
-                  return (
-                    <TableRow key={p.id} className={rowOpacity}>
-                      <TableCell>
-                        <div>
-                          <p className="font-medium text-gray-900">
+                      const hasStock =
+                        parseFloat(String(p.total_stock ?? 0)) > 0;
+                      const rowOpacity =
+                        stockTab === "catalog" && !hasStock ? "opacity-50" : "";
+
+                      return (
+                        <TableRow
+                          key={p.id}
+                          className={`group ${rowOpacity} ${selectedIds.has(p.id) ? "bg-[#f6f3ff]" : ""}`}
+                        >
+                          {canManageProducts && (
+                            <TableCell className="w-10 px-2">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-[#6c3dff]"
+                                checked={selectedIds.has(p.id)}
+                                onChange={() => toggleSelected(p.id)}
+                                aria-label={`Избери ${p.name_bg}`}
+                              />
+                            </TableCell>
+                          )}
+                          <TableCell>
+                            <div>
+                              <p className="font-medium text-gray-900">
+                                <HighlightMatch
+                                  text={p.name_bg}
+                                  query={debouncedSearch}
+                                />
+                              </p>
+                              {p.name_en && (
+                                <p className="text-xs text-gray-400">
+                                  <HighlightMatch
+                                    text={p.name_en}
+                                    query={debouncedSearch}
+                                  />
+                                </p>
+                              )}
+                              {p.product_group_name &&
+                                groupFilter !== String(p.product_group_id) && (
+                                  <button
+                                    type="button"
+                                    className="mt-0.5 inline-block max-w-full rounded bg-gray-100 px-1.5 py-0.5 text-left text-[11px] leading-tight text-gray-600 [overflow-wrap:anywhere] hover:bg-[#6c3dff]/10 hover:text-[#6c3dff]"
+                                    title={`Група „${p.product_group_name}“ — покажи само нея`}
+                                    onClick={() =>
+                                      selectGroup(
+                                        String(p.product_group_id ?? ""),
+                                      )
+                                    }
+                                  >
+                                    {p.product_group_name}
+                                  </button>
+                                )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">
                             <HighlightMatch
-                              text={p.name_bg}
+                              text={p.sku}
                               query={debouncedSearch}
                             />
-                          </p>
-                          {p.name_en && (
-                            <p className="text-xs text-gray-400">
-                              <HighlightMatch
-                                text={p.name_en}
-                                query={debouncedSearch}
-                              />
-                            </p>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        <HighlightMatch text={p.sku} query={debouncedSearch} />
-                      </TableCell>
-                      <TableCell>{formatUnit(p.unit)}</TableCell>
-                      <TableCell>
-                        {p.category_name_bg ? (
-                          <Badge variant="secondary">
-                            {p.category_name_bg}
-                          </Badge>
-                        ) : (
-                          "—"
-                        )}
-                      </TableCell>
-                      <Can
-                        permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}
-                      >
-                        <TableCell>
-                          {p.purchase_price
-                            ? formatUnitPrice(p.purchase_price)
-                            : "—"}
-                        </TableCell>
-                      </Can>
-                      <TableCell>
-                        {p.selling_price
-                          ? formatUnitPrice(p.selling_price)
-                          : "—"}
-                      </TableCell>
-                      <Can
-                        permission={PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE}
-                      >
-                        <TableCell className={marginColor}>
-                          {margin !== null ? `${margin.toFixed(1)}%` : "—"}
-                        </TableCell>
-                      </Can>
-                      <TableCell>
-                        {p.total_stock !== null &&
-                        p.total_stock !== undefined ? (
-                          <span
-                            className={stockColorClass(
-                              parseFloat(String(p.total_stock || 0)),
-                              p.low_stock_threshold,
+                          </TableCell>
+                          <TableCell>{formatUnit(p.unit)}</TableCell>
+                          <TableCell>
+                            {p.category_name_bg ? (
+                              <Badge variant="secondary">
+                                {p.category_name_bg}
+                              </Badge>
+                            ) : (
+                              "—"
                             )}
+                          </TableCell>
+                          <Can
+                            permission={
+                              PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE
+                            }
                           >
-                            {parseFloat(String(p.total_stock))}{" "}
-                            {formatUnit(String(p.unit))}
-                          </span>
-                        ) : (
-                          <span className="text-gray-400">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <Can permission={PERMISSIONS.PRODUCTS_MANAGE}>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              aria-label="Редактирай продукт"
-                              onClick={() => openEdit(p)}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                            <TableCell>
+                              {p.purchase_price
+                                ? formatUnitPrice(p.purchase_price)
+                                : "—"}
+                            </TableCell>
                           </Can>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label="Изтрий продукт"
-                            className="text-red-500 hover:text-red-600"
-                            onClick={async () => {
-                              const ok = await confirm({
-                                title: "Изтриване на продукт",
-                                description: `Сигурни ли сте, че искате да изтриете "${p.name_bg}"? Действието не може да бъде отменено.`,
-                                confirmText: "Изтрий",
-                                variant: "danger",
-                              });
-                              if (ok) deleteMutation.mutate(p.id);
-                            }}
+                          <TableCell>
+                            {p.selling_price
+                              ? formatUnitPrice(p.selling_price)
+                              : "—"}
+                          </TableCell>
+                          <Can
+                            permission={
+                              PERMISSIONS.INVENTORY_VIEW_PURCHASE_PRICE
+                            }
                           >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-        {/* Без страници: каталогът е цял на екрана, футърът отчита броя. */}
-        {pagination.total > 0 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t">
-            <p className="text-sm text-gray-500">
-              Показани всички {pagination.total}
-            </p>
-          </div>
-        )}
-      </Card>
+                            <TableCell className={marginColor}>
+                              {margin !== null ? `${margin.toFixed(1)}%` : "—"}
+                            </TableCell>
+                          </Can>
+                          <TableCell>
+                            {p.total_stock !== null &&
+                            p.total_stock !== undefined ? (
+                              <span
+                                className={stockColorClass(
+                                  parseFloat(String(p.total_stock || 0)),
+                                  p.low_stock_threshold,
+                                )}
+                              >
+                                {parseFloat(String(p.total_stock))}{" "}
+                                {formatUnit(String(p.unit))}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell
+                            className={`sticky right-0 text-right shadow-[-6px_0_6px_-6px_rgba(0,0,0,0.15)] ${
+                              selectedIds.has(p.id)
+                                ? "bg-[#f6f3ff]"
+                                : "bg-white group-hover:bg-gray-50"
+                            }`}
+                          >
+                            <div className="flex items-center justify-end gap-2">
+                              <Can permission={PERMISSIONS.PRODUCTS_MANAGE}>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  aria-label="Редактирай продукт"
+                                  onClick={() => openEdit(p)}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              </Can>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                aria-label="Изтрий продукт"
+                                className="text-red-500 hover:text-red-600"
+                                onClick={async () => {
+                                  const ok = await confirm({
+                                    title: "Изтриване на продукт",
+                                    description: `Сигурни ли сте, че искате да изтриете "${p.name_bg}"? Действието не може да бъде отменено.`,
+                                    confirmText: "Изтрий",
+                                    variant: "danger",
+                                  });
+                                  if (ok) deleteMutation.mutate(p.id);
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+            {/* Без страници: каталогът е цял на екрана, футърът отчита броя. */}
+            {pagination.total > 0 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t">
+                <p className="text-sm text-gray-500">
+                  Показани всички {pagination.total}
+                </p>
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
 
       <ProductModal
         open={modalOpen}
@@ -1115,6 +1341,23 @@ export function Products() {
         product={editProduct}
         categories={categories}
         brands={brands}
+        defaultGroupId={/^\d+$/.test(groupFilter) ? groupFilter : ""}
+      />
+      <MoveToGroupDialog
+        kind="product"
+        open={moveOpen}
+        onClose={() => setMoveOpen(false)}
+        title="Премести в група"
+        description={`${countLabel("product", selectedIds.size)} отиват в избраната група.`}
+        confirmText="Премести"
+        onConfirm={async (groupId) => {
+          const moved = await moveToGroup.mutateAsync({
+            ids: [...selectedIds],
+            groupId,
+          });
+          toast.success(`Преместени: ${countLabel("product", moved)}`);
+          setSelectedIds(new Set());
+        }}
       />
       <CategoryManagerModal
         open={categoryModalOpen}
