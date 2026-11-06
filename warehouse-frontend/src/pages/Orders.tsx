@@ -595,7 +595,9 @@ function OrderQuantityInput({
 }
 
 /**
- * Сумите горе вдясно във формата, като в Microinvest: Сума / ДДС / Общо.
+ * Сумите на поръчката, като в Microinvest: Сума / ДДС / Общо. Стоят
+ * вдясно на реда с „Приложи на всички“, точно над таблицата с
+ * артикулите (magic, 06.11.2026: „не горе, а на Приложи на всички“).
  * Чакащите редове не влизат — както в записаната поръчка.
  */
 function OrderTotalsSummary({ rows }: { rows: OrderItemRow[] }) {
@@ -5226,15 +5228,12 @@ function EditOrderItemsModal({
     <Dialog open={open} onOpenChange={onClose} modal={false}>
       <DialogContent className="sm:max-w-[98vw] lg:max-w-[1680px] max-h-[92vh] flex flex-col border-2 border-[#6c3dff] shadow-[0_0_0_1px_rgba(249,115,22,0.25)]">
         <DialogHeader className="shrink-0">
-          <div className="flex items-start justify-between gap-3 pr-9">
-            <DialogTitle>
-              Редакция на поръчка #{order.order_number ?? order.id}
-            </DialogTitle>
-            <OrderTotalsSummary rows={validItems} />
-          </div>
+          <DialogTitle>
+            Редакция на поръчка #{order.order_number ?? order.id}
+          </DialogTitle>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
+        <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1 scroll-pt-16">
           {order.status === "invoiced" && (
             <div className="text-sm bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-amber-800">
               След запазване системата автоматично регенерира фактура, стокова
@@ -5265,7 +5264,10 @@ function EditOrderItemsModal({
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
+            {/* Закрепен: при дълга поръчка сумите остават пред очите.
+                -9px = py-2 на скрол-областта + 1px заради дробното центриране
+                на диалога, иначе редовете прозират в пролука над него. */}
+            <div className="sticky -top-[9px] z-20 flex items-center justify-between gap-3 flex-wrap bg-white py-1">
               <Label>Артикули</Label>
               <div className="flex items-center gap-2">
                 <Label
@@ -5396,6 +5398,9 @@ function EditOrderItemsModal({
                 >
                   Приложи на всички
                 </Button>
+                <div className="ml-2 border-l border-gray-200 pl-4">
+                  <OrderTotalsSummary rows={validItems} />
+                </div>
               </div>
             </div>
             <div className="border rounded-lg overflow-x-auto">
@@ -6976,11 +6981,6 @@ function CreateOrderModal({
                   </span>
                 )}
               </div>
-              {!isReplacement && (
-                <div className="ml-auto">
-                  <OrderTotalsSummary rows={validItems} />
-                </div>
-              )}
               {canCreateReplacement && replacementEnabled && (
                 <Button
                   type="button"
@@ -7015,7 +7015,7 @@ function CreateOrderModal({
               Tab/Enter между полетата · Ctrl+Enter за създаване
             </p>
           </DialogHeader>
-          <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
+          <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1 scroll-pt-16">
             {/* Тип клиент (сегмент) */}
             <div className="flex flex-wrap items-center gap-2">
               <Label className="mr-2">Тип клиент:</Label>
@@ -7285,7 +7285,11 @@ function CreateOrderModal({
             ) : (
               <>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                  {/* Закрепен: при дълга поръчка сумите остават пред очите.
+                      -9px = py-2 на скрол-областта + 1px заради дробното
+                      центриране на диалога, иначе редовете прозират в пролука
+                      над него. */}
+                  <div className="sticky -top-[9px] z-20 flex items-center justify-between gap-3 flex-wrap bg-white py-1">
                     <Label>Артикули</Label>
                     <div className="flex items-center gap-2">
                       <Label
@@ -7431,6 +7435,9 @@ function CreateOrderModal({
                       >
                         Приложи на всички
                       </Button>
+                      <div className="ml-2 border-l border-gray-200 pl-4">
+                        <OrderTotalsSummary rows={validItems} />
+                      </div>
                     </div>
                   </div>
                   <div className="border rounded-lg overflow-x-auto">
