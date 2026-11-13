@@ -232,6 +232,11 @@ interface BatchSelectProps {
    * на „Автоматично“, а редът пазеше партидата (№453).
    */
   savedPlan?: SavedBatchPart[];
+  /**
+   * Потребител с право orders.stock_override: може да избере и изтекла
+   * партида (сървърът пита за потвърждение при запис).
+   */
+  allowExpired?: boolean;
   /** „Разпредели по партиди…“ — родителят отваря прозореца. */
   onSplitRequest?: () => void;
 }
@@ -254,6 +259,7 @@ export function BatchSelect({
   keptAllocations,
   plan,
   savedPlan,
+  allowExpired,
   onSplitRequest,
 }: BatchSelectProps) {
   const hasKept = !!keptAllocations && keptAllocations.length > 0;
@@ -373,7 +379,7 @@ export function BatchSelect({
           <option
             key={batch.id}
             value={String(batch.id)}
-            disabled={expired}
+            disabled={expired && !allowExpired}
             className={
               expired
                 ? "text-red-600"

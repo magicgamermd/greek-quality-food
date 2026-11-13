@@ -41,6 +41,7 @@ export const PERMISSIONS = {
   // Sales overrides (admin-only by default)
   BELOW_COST_OVERRIDE: "orders.below_cost_override",
   ORDERS_EDIT_AFTER_FULFILL: "orders.edit_after_fulfill",
+  ORDERS_STOCK_OVERRIDE: "orders.stock_override",
   // Procurement (admin-only by default — no role grants this)
   PURCHASE_ORDERS_MANAGE: "purchase_orders.manage",
 } as const;
@@ -155,6 +156,13 @@ export const PERMISSION_REGISTRY: Array<{
     group: "Продажби",
     label: "Продажба под доставна цена",
     description: "Одобрение на поръчки с артикули под cost (admin override)",
+  },
+  {
+    permission: PERMISSIONS.ORDERS_STOCK_OVERRIDE,
+    group: "Продажби",
+    label: "Продажба въпреки склада",
+    description:
+      "Записва и изпълнява поръчки въпреки недостиг или изтекъл срок (admin override)",
   },
   {
     permission: PERMISSIONS.ORDERS_EDIT_AFTER_FULFILL,

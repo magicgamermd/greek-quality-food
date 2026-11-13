@@ -101,6 +101,99 @@ function planFromItem(item: {
 }
 
 /**
+ * Надделяване на проверките за наличност и срок („дай им свобода“ — magic,
+ * 13.11.2026). Потребител с правото orders.stock_override (администраторите)
+ * не се спира от склада:
+ *   • отказ БЕЗ изрично „да“ → същият отказ + can_override_stock, за да му
+ *     предложи формата „Продължи въпреки това“ (offerStockOverride);
+ *   • „да“ (allow_stock_override) без право → 403 (denyStockOverride);
+ *   • „да“ с право → проверките не отказват, а записват в `notes` какво е
+ *     надделяно; то се връща в отговора и остава в известията
+ *     (recordStockOverride).
+ * Правото се проверява само при нужда — обикновеният запис няма нови заявки.
+ */
+interface StockOverride {
+  notes: string[];
+}
+
+/**
+ * Отказ заради склада — недостиг или изтекъл срок. Белязан, за да може
+ * потребител с правото да продължи въпреки него.
+ */
+function stockBlock(message: string, statusCode: 400 | 409): Error {
+  return Object.assign(new Error(message), { statusCode, stockBlock: true });
+}
+
+const mayOverrideStock = (request: FastifyRequest) =>
+  hasPermission(
+    request.user as { id: string; role: string },
+    PERMISSIONS.ORDERS_STOCK_OVERRIDE,
+  );
+
+/** Изричното „да“ от заявката → обект за бележките; без право → null. */
+async function claimStockOverride(
+  request: FastifyRequest,
+): Promise<StockOverride | null> {
+  return (await mayOverrideStock(request)) ? { notes: [] } : null;
+}
+
+function denyStockOverride(reply: FastifyReply) {
+  return reply.status(403).send({
+    error: "Forbidden",
+    message: "Само admin може да продължи въпреки проверката на склада.",
+    required_permission: PERMISSIONS.ORDERS_STOCK_OVERRIDE,
+  });
+}
+
+/**
+ * Отказ заради склада: на потребител с правото се изпраща същият отказ с
+ * предложение да продължи. Връща true, ако отговорът е изпратен.
+ */
+async function offerStockOverride(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  err: any,
+  override: StockOverride | undefined,
+): Promise<boolean> {
+  if (!err?.stockBlock || override) return false;
+  if (!(await mayOverrideStock(request))) return false;
+  reply.status(err.statusCode).send({
+    error: err.message,
+    message: err.message,
+    can_override_stock: true,
+  });
+  return true;
+}
+
+/**
+ * След успешен запис: ако нещо е надделяно, остава в известията (кой, по
+ * коя поръчка, какво) и се връща в отговора като stock_override_notes.
+ */
+async function recordStockOverride<T extends object>(
+  request: FastifyRequest,
+  result: T,
+  override: StockOverride | undefined,
+  orderLabel: string,
+): Promise<T> {
+  if (!override || override.notes.length === 0) return result;
+  const user = request.user as { id: string; email?: string };
+  try {
+    await query(
+      `INSERT INTO notifications (type, message, payload)
+       VALUES ('stock_override', $1, $2::jsonb)`,
+      [
+        `${orderLabel}: ${user.email ?? "администратор"} продължи въпреки проверката на склада — ${override.notes.join(" ")}`,
+        JSON.stringify({ user_id: user.id, notes: override.notes }),
+      ],
+    );
+  } catch (err) {
+    // Известието е следа, не условие — записът вече е минал.
+    request.log.error(err);
+  }
+  return { ...result, stock_override_notes: override.notes };
+}
+
+/**
  * Проверява избраните разпределения по партиди на поръчка ПРЕДИ запис:
  * сумата = количеството, партидата е от продукта и не е изтекла, а
  * наличността в склад 1 стига — сборно за всички редове, които я взимат.
@@ -114,6 +207,9 @@ function planFromItem(item: {
  * междувременно беше изписана от друга поръчка и записът отказваше. Вместо
  * отказ се връща бележка за склада; над досегашното количество или за
  * друга партида проверката е пълна, както при създаване.
+ *
+ * `override`: потребителят надделява склада — и новото количество минава,
+ * а какво е надделяно се записва в `override.notes`.
  */
 async function validateOrderBatchPlans(
   client: { query: (text: string, params?: any[]) => Promise<any> },
@@ -125,6 +221,7 @@ async function validateOrderBatchPlans(
     allowBackorder: boolean;
   }>,
   alreadyPlanned?: KeptBudget,
+  override?: StockOverride,
 ): Promise<string[]> {
   const planned = lines.filter((line) => line.plan && line.plan.length > 0);
   if (planned.length === 0) return [];
@@ -187,19 +284,15 @@ async function validateOrderBatchPlans(
         entry.quantity,
       );
       if (isExpiredOn(expiry, today)) {
-        if (fresh > 0) {
-          throw Object.assign(
-            new Error(
-              `Партида ${batchLabel(batch.batch_number)} на „${line.productName}“ е с изтекъл срок на годност (${bgDate(expiry)}). Изберете друга партида.`,
-            ),
-            { statusCode: 400 },
-          );
+        const expired = `Партида ${batchLabel(batch.batch_number)} на „${line.productName}“ е с изтекъл срок на годност (${bgDate(expiry)}).`;
+        if (fresh > 0 && !override) {
+          throw stockBlock(`${expired} Изберете друга партида.`, 400);
         }
         if (!lapsed.has(entry.batch_id)) {
           lapsed.add(entry.batch_id);
-          notes.push(
-            `Партида ${batchLabel(batch.batch_number)} на „${line.productName}“ е с изтекъл срок на годност (${bgDate(expiry)}). Преди изпълнение изберете друга партида.`,
-          );
+          if (fresh > 0) override!.notes.push(expired);
+          else
+            notes.push(`${expired} Преди изпълнение изберете друга партида.`);
         }
       }
       const previous = demand.get(entry.batch_id) ?? {
@@ -227,7 +320,9 @@ async function validateOrderBatchPlans(
       : null;
     const shortage = `„${need.productName}“ — партида ${batchLabel(batch.batch_number)} (${bgDate(expiry)}): налични ${available}, избрани ${need.quantity}.`;
     if (need.fresh > 0) {
-      throw Object.assign(new Error(shortage), { statusCode: 409 });
+      if (!override) throw stockBlock(shortage, 409);
+      override.notes.push(shortage);
+      continue;
     }
     // Нищо ново не се иска от партидата → записът минава; за изтеклата
     // бележката вече е дадена.
@@ -426,6 +521,9 @@ const createOrderSchema = z.object({
   // are priced below products.purchase_price. Backend re-validates and
   // hard-rejects when this flag is omitted but lines are below cost.
   allow_below_cost: z.boolean().optional().default(false),
+  // Изрично „да“ за запис въпреки недостиг или изтекъл срок — само с право
+  // orders.stock_override (администраторите).
+  allow_stock_override: z.boolean().optional().default(false),
   // Initial status — only "pending" (default) or "quoted" allowed at create
   // time. Quoted orders skip stock validation and never deduct inventory
   // until they're moved to pending → confirmed.
@@ -481,7 +579,13 @@ const updateOrderSchema = z.object({
 
   items: z.array(orderItemSchema).min(1).optional(),
   allow_below_cost: z.boolean().optional().default(false),
+  allow_stock_override: z.boolean().optional().default(false),
 });
+
+// Изпълнение и потвърждаване на чакащ ред: тяло няма, освен изричното „да“.
+const stockOverrideBodySchema = z
+  .object({ allow_stock_override: z.boolean().optional().default(false) })
+  .default({ allow_stock_override: false });
 
 const STOCK_DISPATCH_NUMBER_SQL = `('SR-' || LPAD(COALESCE(o.order_number, o.id)::text, 7, '0'))`;
 const COMMERCIAL_DOC_NUMBER_SQL = `('TD-' || LPAD(COALESCE(o.order_number, o.id)::text, 7, '0'))`;
@@ -1387,6 +1491,11 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       let oversell_items: OversellInfo[] = [];
 
+      const stockOverride = body.allow_stock_override
+        ? await claimStockOverride(request)
+        : undefined;
+      if (stockOverride === null) return denyStockOverride(reply);
+
       let result;
       try {
         result = await transaction(async (client) => {
@@ -1612,6 +1721,8 @@ export default async function orderRoutes(app: FastifyInstance) {
                 plan: planFromItem(item),
                 allowBackorder: item.line_status === "paid_not_taken",
               })),
+            undefined,
+            stockOverride,
           );
 
           // Insert helper — used twice: once for the main order and once
@@ -1868,6 +1979,9 @@ export default async function orderRoutes(app: FastifyInstance) {
         if (err && err.payload && typeof err.statusCode === "number") {
           return reply.status(err.statusCode).send(err.payload);
         }
+        if (await offerStockOverride(request, reply, err, stockOverride)) {
+          return reply;
+        }
         throw err;
       }
 
@@ -1875,7 +1989,16 @@ export default async function orderRoutes(app: FastifyInstance) {
       if (oversell_items.length > 0) {
         response.warnings = { oversell: oversell_items };
       }
-      return reply.status(201).send(response);
+      return reply
+        .status(201)
+        .send(
+          await recordStockOverride(
+            request,
+            response,
+            stockOverride,
+            `Поръчка #${response.order_number ?? response.id}`,
+          ),
+        );
     },
   );
 
@@ -2136,6 +2259,11 @@ export default async function orderRoutes(app: FastifyInstance) {
 
       const orderId = Number(id);
 
+      const stockOverride = body.allow_stock_override
+        ? await claimStockOverride(request)
+        : undefined;
+      if (stockOverride === null) return denyStockOverride(reply);
+
       let result;
       try {
         result = await transaction(async (client) => {
@@ -2363,6 +2491,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                     allowBackorder: item.line_status === "paid_not_taken",
                   })),
                 await loadPlannedBudget(client, id),
+                stockOverride,
               );
             }
 
@@ -2467,7 +2596,11 @@ export default async function orderRoutes(app: FastifyInstance) {
                     lineStatus === "paid_not_taken",
                     undefined,
                     linePlan,
-                    { keptBudget, productLabel: snap.name_bg },
+                    {
+                      keptBudget,
+                      productLabel: snap.name_bg,
+                      override: stockOverride,
+                    },
                   );
                   expiryWarnings.push(...deduction.warnings);
                   const firstBatch = deduction.allocations[0]?.batch_id ?? null;
@@ -2570,10 +2703,18 @@ export default async function orderRoutes(app: FastifyInstance) {
         if (err && err.payload && typeof err.statusCode === "number") {
           return reply.status(err.statusCode).send(err.payload);
         }
+        if (await offerStockOverride(request, reply, err, stockOverride)) {
+          return reply;
+        }
         throw err;
       }
 
-      return result;
+      return recordStockOverride(
+        request,
+        result,
+        stockOverride,
+        `Поръчка #${order.order_number ?? order.id}`,
+      );
     },
   );
 
@@ -2705,6 +2846,13 @@ export default async function orderRoutes(app: FastifyInstance) {
     { preHandler: ordersManagePreHandler },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string };
+      const { allow_stock_override: overrideRequested } =
+        stockOverrideBodySchema.parse(request.body ?? undefined);
+      const stockOverride = overrideRequested
+        ? await claimStockOverride(request)
+        : undefined;
+      if (stockOverride === null) return denyStockOverride(reply);
+      let orderRef: string | number = id;
 
       const result = await transaction(async (client) => {
         const {
@@ -2719,6 +2867,7 @@ export default async function orderRoutes(app: FastifyInstance) {
             statusCode: 404,
           });
         }
+        orderRef = order.order_number ?? order.id;
         if (order.status === "fulfilled") {
           throw Object.assign(new Error("Order already fulfilled"), {
             statusCode: 400,
@@ -2817,7 +2966,10 @@ export default async function orderRoutes(app: FastifyInstance) {
               item.line_status === "paid_not_taken",
               plannedBatches ? undefined : (item.batch_id ?? undefined),
               plannedBatches,
-              { productLabel: item.name_bg_snapshot ?? undefined },
+              {
+                productLabel: item.name_bg_snapshot ?? undefined,
+                override: stockOverride,
+              },
             );
             expiryWarnings.push(...deduction.warnings);
             const qtyNum = parseFloat(item.quantity);
@@ -2853,7 +3005,14 @@ export default async function orderRoutes(app: FastifyInstance) {
           order_id: parseInt(id),
           warnings: expiryWarnings,
         };
+      }).catch(async (err) => {
+        if (await offerStockOverride(request, reply, err, stockOverride)) {
+          return null;
+        }
+        throw err;
       });
+      // Отказ с предложение да се продължи — отговорът вече е изпратен.
+      if (result === null) return reply;
 
       // Auto-print fiscal receipt if enabled (non-blocking)
       try {
@@ -2869,7 +3028,12 @@ export default async function orderRoutes(app: FastifyInstance) {
         // Fiscal printer module not available — skip
       }
 
-      return result;
+      return recordStockOverride(
+        request,
+        result,
+        stockOverride,
+        `Поръчка #${orderRef}`,
+      );
     },
   );
 
@@ -3041,7 +3205,14 @@ export default async function orderRoutes(app: FastifyInstance) {
         id: string;
         itemId: string;
       };
-      return await transaction(async (client) => {
+      const { allow_stock_override: overrideRequested } =
+        stockOverrideBodySchema.parse(request.body ?? undefined);
+      const stockOverride = overrideRequested
+        ? await claimStockOverride(request)
+        : undefined;
+      if (stockOverride === null) return denyStockOverride(reply);
+
+      const confirmed = await transaction(async (client) => {
         const {
           rows: [item],
         } = await client.query(
@@ -3075,7 +3246,10 @@ export default async function orderRoutes(app: FastifyInstance) {
             item.line_status === "paid_not_taken",
             plannedBatches ? undefined : (item.batch_id ?? undefined),
             plannedBatches,
-            { productLabel: item.name_bg_snapshot ?? undefined },
+            {
+              productLabel: item.name_bg_snapshot ?? undefined,
+              override: stockOverride,
+            },
           );
         } catch (err) {
           throw asStockHttpError(err);
@@ -3098,7 +3272,21 @@ export default async function orderRoutes(app: FastifyInstance) {
           ...updated,
           warnings: deduction.warnings,
         };
+      }).catch(async (err) => {
+        if (await offerStockOverride(request, reply, err, stockOverride)) {
+          return null;
+        }
+        throw err;
       });
+      // Отказ с предложение да се продължи — отговорът вече е изпратен.
+      if (confirmed === null) return reply;
+
+      return recordStockOverride(
+        request,
+        confirmed,
+        stockOverride,
+        `Поръчка #${id}`,
+      );
     },
   );
 
@@ -3669,6 +3857,7 @@ export default async function orderRoutes(app: FastifyInstance) {
     requested: { batch_id: number; quantity: number }[],
     keptBudget?: KeptBudget,
     productLabel?: string,
+    override?: StockOverride,
   ): Promise<{
     allocations: { batch_id: number; quantity: number; unit_cost: number }[];
     warnings: string[];
@@ -3714,12 +3903,11 @@ export default async function orderRoutes(app: FastifyInstance) {
         partQty,
       );
       if (newPortion > 0 && isExpiredOn(expiry, today)) {
-        throw Object.assign(
-          new Error(
-            `Партида ${label}${productLabel ? ` на „${productLabel}“` : ""} е с изтекъл срок на годност (${bgDate(expiry)}). Изберете друга партида.`,
-          ),
-          { statusCode: 400 },
-        );
+        const expired = `Партида ${label}${productLabel ? ` на „${productLabel}“` : ""} е с изтекъл срок на годност (${bgDate(expiry)}).`;
+        if (!override) {
+          throw stockBlock(`${expired} Изберете друга партида.`, 400);
+        }
+        override.notes.push(expired);
       }
 
       // Заключваме реда за наличност, както ръчният и FEFO пътят.
@@ -3732,12 +3920,15 @@ export default async function orderRoutes(app: FastifyInstance) {
       const available = parseFloat(stockRows[0]?.quantity ?? "0");
       const isOpening = row.batch_number === "НАЧАЛНО";
       if (!(isOpening && allowBackorder) && available < partQty - 0.0005) {
-        throw Object.assign(
-          new Error(
-            `${productLabel ? `„${productLabel}“ — ` : ""}партида ${label}${expiry ? ` (${bgDate(expiry)})` : ""}: налични ${available}, избрани ${partQty}. Отворете поръчката и изберете партидите наново.`,
-          ),
-          { statusCode: 409 },
-        );
+        const shortage = `${productLabel ? `„${productLabel}“ — ` : ""}партида ${label}${expiry ? ` (${bgDate(expiry)})` : ""}: налични ${available}, избрани ${partQty}.`;
+        if (!override) {
+          throw stockBlock(
+            `${shortage} Отворете поръчката и изберете партидите наново.`,
+            409,
+          );
+        }
+        // Надделяно: партидата се изписва докрай и влиза в минус.
+        override.notes.push(`${shortage} Партидата влиза в минус.`);
       }
       allocations.push({
         batch_id: batchId,
@@ -3777,7 +3968,12 @@ export default async function orderRoutes(app: FastifyInstance) {
     allowBackorder: boolean,
     manualBatchId?: number,
     exactAllocations?: { batch_id: number; quantity: number }[] | null,
-    exactOptions: { keptBudget?: KeptBudget; productLabel?: string } = {},
+    exactOptions: {
+      keptBudget?: KeptBudget;
+      productLabel?: string;
+      /** Потребителят надделява склада — недостиг и срок не спират. */
+      override?: StockOverride;
+    } = {},
   ): Promise<{
     cost: number;
     warnings: string[];
@@ -3789,6 +3985,10 @@ export default async function orderRoutes(app: FastifyInstance) {
       unit_cost: number;
     }[];
     let warnings: string[] = [];
+    const override = exactOptions.override;
+    const productName = exactOptions.productLabel
+      ? `„${exactOptions.productLabel}“`
+      : `продукт ${productId}`;
 
     if (exactAllocations && exactAllocations.length > 0) {
       const exact = await takeExactAllocations(
@@ -3800,6 +4000,7 @@ export default async function orderRoutes(app: FastifyInstance) {
         exactAllocations,
         exactOptions.keptBudget,
         exactOptions.productLabel,
+        override,
       );
       allocations = exact.allocations;
       warnings = exact.warnings;
@@ -3813,28 +4014,35 @@ export default async function orderRoutes(app: FastifyInstance) {
           FOR UPDATE`,
         [productId, warehouseId, manualBatchId],
       );
-      const row = rows[0];
+      let row = rows[0];
       const today = new Date().toISOString().slice(0, 10);
       if (!row) {
-        throw Object.assign(
-          new Error(`Няма наличност за партида ${manualBatchId}`),
-          { statusCode: 400 },
+        if (!override) {
+          throw stockBlock(`Няма наличност за партида ${manualBatchId}`, 400);
+        }
+        // Надделяно: партидата няма ред в склада → изписва се от нула.
+        const { rows: bare } = await client.query(
+          "SELECT batch_number, expiry_date, purchase_price FROM batches WHERE id = $1 AND product_id = $2",
+          [manualBatchId, productId],
         );
+        if (!bare[0]) {
+          throw Object.assign(
+            new Error(`Партида ${manualBatchId} не е от този продукт`),
+            { statusCode: 400 },
+          );
+        }
+        row = { ...bare[0], batch_id: manualBatchId, available: "0" };
       }
       if (row.expiry_date && String(row.expiry_date).slice(0, 10) < today) {
-        throw Object.assign(
-          new Error(
-            `Партида ${row.batch_number ?? manualBatchId} е с изтекъл срок на годност`,
-          ),
-          { statusCode: 400 },
-        );
+        const expired = `Партида ${row.batch_number ?? manualBatchId} е с изтекъл срок на годност`;
+        if (!override) throw stockBlock(expired, 400);
+        override.notes.push(`${productName}: ${expired}.`);
       }
       if (parseFloat(row.available) < qty) {
-        throw Object.assign(
-          new Error(
-            `Недостатъчна наличност за партида ${row.batch_number ?? manualBatchId}: налични ${parseFloat(row.available)}, искани ${qty}`,
-          ),
-          { statusCode: 409 },
+        const shortage = `Недостатъчна наличност за партида ${row.batch_number ?? manualBatchId}: налични ${parseFloat(row.available)}, искани ${qty}`;
+        if (!override) throw stockBlock(shortage, 409);
+        override.notes.push(
+          `${productName}: ${shortage}. Партидата влиза в минус.`,
         );
       }
       allocations = [
@@ -3847,10 +4055,16 @@ export default async function orderRoutes(app: FastifyInstance) {
     } else {
       const res = await allocateFefo(client, productId, warehouseId, qty, {
         warnDays: 30,
-        allowShortfall: allowBackorder,
+        allowShortfall: allowBackorder || !!override,
       });
       allocations = res.allocations;
       warnings = res.warnings;
+      if (res.shortfall > 0 && !allowBackorder) {
+        // Само надделяването пуска недостиг на обикновен ред.
+        override!.notes.push(
+          `${productName}: недостиг ${roundQuantity(res.shortfall)} — изписан в минус.`,
+        );
+      }
 
       // Back-order: остатъкът се изписва в МИНУС срещу откриващата партида,
       // за да остане наличността по партида одитируема (платени поръчки).
@@ -3907,7 +4121,7 @@ export default async function orderRoutes(app: FastifyInstance) {
   // подходящ HTTP статус вместо 500.
   function asStockHttpError(err: unknown): unknown {
     if (err instanceof InsufficientStockError) {
-      return Object.assign(new Error(err.message), { statusCode: 400 });
+      return stockBlock(err.message, 400);
     }
     return err;
   }

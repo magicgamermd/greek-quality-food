@@ -85,6 +85,7 @@ function world({
     ],
   ]);
   const insertedLines: any[] = [];
+  const notifications: { type: string; message: string }[] = [];
   const order = {
     id: ORDER,
     order_number: 453,
@@ -149,16 +150,25 @@ function world({
       return rows([row]);
     }
     if (q.includes("SUM(")) return rows([{ total: "21.32" }]);
+    // Правата на не-админ: само тези на ролята му, без добавени.
+    if (q.includes("FROM users u") && q.includes("user_permission_overrides"))
+      return rows([{ role: "warehouse", overrides: [] }]);
+    if (q.includes("INSERT INTO notifications")) {
+      // Видът е в самата заявка: VALUES ('stock_override', $1, …).
+      const type = /VALUES \('([a-z_]+)'/.exec(q)?.[1] ?? "";
+      notifications.push({ type, message: String(params[0]) });
+      return rows([]);
+    }
     return rows([]);
   });
 
-  return { handler, stock, batches, insertedLines };
+  return { handler, stock, batches, insertedLines, notifications };
 }
 
-async function buildApp(): Promise<FastifyInstance> {
+async function buildApp(role = "admin"): Promise<FastifyInstance> {
   const app = Fastify();
   app.addHook("onRequest", async (req) => {
-    (req as any).user = { id: "u-admin", email: "a@b", role: "admin" };
+    (req as any).user = { id: `u-${role}`, email: "a@b", role };
     (req as any).jwtVerify = async () => (req as any).user;
   });
   await app.register(ordersRoutes, { prefix: "/orders" });
@@ -319,5 +329,112 @@ describe("редакция на неизпълнена поръчка с изч�
     const res = await save([line({ batch_id: undefined })]);
     expect(res.statusCode).toBe(200);
     expect(w.insertedLines[0].batch_plan).toBeNull();
+  });
+});
+
+// „Дай им свобода“ (magic, 13.11.2026): администраторът не бива да бъде
+// спиран от проверките за наличност и срок. Сървърът му предлага да продължи
+// (can_override_stock), а с изричното „да“ (allow_stock_override) записва.
+// Останалите роли се спират както досега.
+describe("редакция: администраторът продължава въпреки склада", () => {
+  let app: FastifyInstance;
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  function wire(w: ReturnType<typeof world>) {
+    mockQuery.mockImplementation(w.handler as any);
+    mockTx.mockImplementation(async (cb: any) => cb({ query: w.handler }));
+  }
+
+  const save = (items: unknown[], extra: Record<string, unknown> = {}) =>
+    app.inject({
+      method: "PUT",
+      url: `/orders/${ORDER}`,
+      payload: { items, ...extra },
+    });
+
+  it("недостиг без изрично „да“ → отказ, но с предложение да продължи", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp();
+    const res = await save([line({ quantity: 3 })]);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().can_override_stock).toBe(true);
+    expect(res.json().error).toContain("налични 0.18, избрани 3");
+    expect(w.insertedLines).toHaveLength(0);
+  });
+
+  it("с изрично „да“ → записва се и казва какво е надделяно", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp();
+    const res = await save([line({ quantity: 3 })], {
+      allow_stock_override: true,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(w.insertedLines).toHaveLength(1);
+    expect(w.insertedLines[0].quantity).toBe("3");
+    const notes: string[] = res.json().stock_override_notes ?? [];
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("налични 0.18, избрани 3");
+  });
+
+  it("надделяването остава записано в известията", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp();
+    await save([line({ quantity: 3 })], { allow_stock_override: true });
+    const audit = w.notifications.filter((n) => n.type === "stock_override");
+    expect(audit).toHaveLength(1);
+    expect(audit[0].message).toContain("453");
+    expect(audit[0].message).toContain("налични 0.18, избрани 3");
+  });
+
+  it("изтекла партида с изрично „да“ → записва се", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp();
+    const res = await save([line({ quantity: 2, batch_id: LAPSED })], {
+      allow_stock_override: true,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().stock_override_notes[0]).toContain("изтекъл срок");
+  });
+
+  it("„да“ без нужда → обикновен запис, без бележки и без известие", async () => {
+    const w = world();
+    w.stock.set(PLANNED, 10);
+    wire(w);
+    app = await buildApp();
+    const res = await save([line()], { allow_stock_override: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().stock_override_notes).toBeUndefined();
+    expect(
+      w.notifications.filter((n) => n.type === "stock_override"),
+    ).toHaveLength(0);
+  });
+
+  it("склададжия: отказ както досега, без предложение", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp("warehouse");
+    const res = await save([line({ quantity: 3 })]);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().can_override_stock).toBeUndefined();
+    expect(res.json().message).toContain("налични 0.18, избрани 3");
+  });
+
+  it("склададжия с „да“ в заявката → 403, нищо не се записва", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp("warehouse");
+    const res = await save([line({ quantity: 3 })], {
+      allow_stock_override: true,
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().required_permission).toBe("orders.stock_override");
+    expect(w.insertedLines).toHaveLength(0);
   });
 });
