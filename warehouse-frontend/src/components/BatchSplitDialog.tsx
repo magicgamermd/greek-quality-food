@@ -41,6 +41,11 @@ interface BatchSplitDialogProps {
    * връща в склада, затова се брои като налично за реда.
    */
   keptAllocations?: KeptBatchAllocation[];
+  /**
+   * Потребител с право orders.stock_override: може да разпредели и над
+   * наличното, и от изтекла партида (сървърът пита при запис).
+   */
+  allowStockOverride?: boolean;
   /** Празен списък = „автоматично“. */
   onSave: (plan: PlannedBatch[]) => void;
   onClose: () => void;
@@ -70,6 +75,7 @@ export function BatchSplitDialog({
   quantity,
   initialPlan,
   keptAllocations,
+  allowStockOverride,
   onSave,
   onClose,
 }: BatchSplitDialogProps) {
@@ -138,9 +144,9 @@ export function BatchSplitDialog({
   );
   const canSave =
     exact &&
-    overAvailable.length === 0 &&
-    usesExpired.length === 0 &&
-    !isLoading;
+    !isLoading &&
+    (allowStockOverride ||
+      (overAvailable.length === 0 && usesExpired.length === 0));
 
   const fillRest = (row: SplitRow) => {
     const others = round3(total - parseQty(entered[row.batch_id]));
@@ -217,7 +223,8 @@ export function BatchSplitDialog({
                   {rows.map((row) => {
                     const value = entered[row.batch_id] ?? "";
                     const tooMuch = parseQty(value) > row.available + 0.0005;
-                    const locked = row.expired && !row.kept;
+                    const locked =
+                      row.expired && !row.kept && !allowStockOverride;
                     const name =
                       displayBatchNumber(row.batch_number) ?? "без номер";
                     return (

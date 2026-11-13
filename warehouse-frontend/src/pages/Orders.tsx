@@ -60,6 +60,7 @@ import {
   savedPlanOf,
   type SavedBatchPart,
 } from "@/lib/savedBatchPlan";
+import { stockOverrideNotes, withStockOverride } from "@/lib/stockOverride";
 import { BatchSplitDialog } from "@/components/BatchSplitDialog";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
@@ -391,6 +392,30 @@ function assertNoExpiredBatches(rows: OrderItemRow[]) {
         "Изберете партида с валиден срок на годност.",
     );
   }
+}
+
+/**
+ * „Дай им свобода“ (magic, 13.11.2026): сървърът е отказал заради склада
+ * (недостиг или изтекъл срок), но потребителят има право да продължи.
+ */
+function askStockOverride(message: string): Promise<boolean> {
+  return confirm({
+    title: "Складът не позволява това",
+    description: `${message} Искате ли да продължите въпреки това? Остава записано в известията.`,
+    confirmText: "Продължи въпреки това",
+    cancelText: "Отказ",
+    variant: "danger",
+  });
+}
+
+/** След запис: какво е надделяно. */
+function toastStockOverride(payload: unknown) {
+  const notes = stockOverrideNotes(payload);
+  if (notes.length === 0) return;
+  toast.warning("Продължено въпреки склада.", {
+    description: notes.join(" "),
+    duration: 15000,
+  });
 }
 
 /**
@@ -1450,10 +1475,15 @@ function OrderDetailModal({
   };
 
   const fulfillMutation = useMutation({
-    mutationFn: (id: number) => api.post(`/orders/${id}/fulfill`),
-    onSuccess: () => {
+    mutationFn: (id: number) =>
+      withStockOverride(
+        (flag) => api.post(`/orders/${id}/fulfill`, flag),
+        askStockOverride,
+      ),
+    onSuccess: (res) => {
       invalidateAllOrderRelated();
       toast.success("Поръчката е изпълнена");
+      toastStockOverride(res.data);
     },
     onError: (err: any) => {
       toast.error(
@@ -1818,10 +1848,18 @@ function OrderDetailModal({
   });
   const confirmAwaitingMutation = useMutation({
     mutationFn: ({ orderId, itemId }: { orderId: number; itemId: number }) =>
-      api.post(`/orders/${orderId}/items/${itemId}/confirm-from-awaiting`),
-    onSuccess: () => {
+      withStockOverride(
+        (flag) =>
+          api.post(
+            `/orders/${orderId}/items/${itemId}/confirm-from-awaiting`,
+            flag,
+          ),
+        askStockOverride,
+      ),
+    onSuccess: (res) => {
       invalidateAllOrderRelated();
       toast.success("Артикулът е потвърден");
+      toastStockOverride(res.data);
     },
     onError: (err: any) => {
       toast.error(
@@ -4759,6 +4797,8 @@ function EditOrderItemsModal({
   const qc = useQueryClient();
   const { hasPermission } = usePermissions();
   const canOverrideBelowCost = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
+  // Право да продължи въпреки склада (недостиг, изтекъл срок).
+  const canOverrideStock = hasPermission(PERMISSIONS.ORDERS_STOCK_OVERRIDE);
   const [deliveryDate, setDeliveryDate] = useState("");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<OrderItemRow[]>([emptyItem()]);
@@ -5125,25 +5165,34 @@ function EditOrderItemsModal({
       // Непипнатите редове не са нова продажба — стоката им вече е изписана
       // (изпълнена поръчка) или изборът им е записаният (неизпълнена, №453).
       assertQuantityDraftsValid(items);
-      assertNoExpiredBatches(
-        validItems.filter((i) => !i.keep_batches && !keepsSavedPlan(i)),
-      );
+      // С право да продължи въпреки склада срокът се пита от сървъра.
+      if (!canOverrideStock) {
+        assertNoExpiredBatches(
+          validItems.filter((i) => !i.keep_batches && !keepsSavedPlan(i)),
+        );
+      }
       assertBatchPlansMatch(validItems);
-      const res = await api.put(`/orders/${order.id}`, {
-        delivery_date: deliveryDate || undefined,
-        notes: notes || undefined,
-        items: validItems.map((i) => ({
-          product_id: Number(i.product_id),
-          quantity: Number(i.quantity),
-          unit_price: Number(i.unit_price),
-          discount_percent: Number(i.discount_percent) || 0,
-          // Batch F1 — only send when not the default; spares the wire
-          // and lets the backend's column DEFAULT 'normal' handle it.
-          line_status: i.line_status !== "normal" ? i.line_status : undefined,
-          ...lineBatchPayload(i),
-        })),
-        allow_below_cost: vars.allow_below_cost === true ? true : undefined,
-      });
+      const res = await withStockOverride(
+        (flag) =>
+          api.put(`/orders/${order.id}`, {
+            delivery_date: deliveryDate || undefined,
+            notes: notes || undefined,
+            items: validItems.map((i) => ({
+              product_id: Number(i.product_id),
+              quantity: Number(i.quantity),
+              unit_price: Number(i.unit_price),
+              discount_percent: Number(i.discount_percent) || 0,
+              // Batch F1 — only send when not the default; spares the wire
+              // and lets the backend's column DEFAULT 'normal' handle it.
+              line_status:
+                i.line_status !== "normal" ? i.line_status : undefined,
+              ...lineBatchPayload(i),
+            })),
+            allow_below_cost: vars.allow_below_cost === true ? true : undefined,
+            ...flag,
+          }),
+        askStockOverride,
+      );
 
       // Persist edited weights back to the product catalog.
       const weightUpdates = validItems
@@ -5193,6 +5242,7 @@ function EditOrderItemsModal({
           duration: 15000,
         });
       }
+      toastStockOverride(payload);
 
       setTimeout(() => onClose(), 700);
     },
@@ -5209,7 +5259,9 @@ function EditOrderItemsModal({
   });
 
   const canSubmit =
-    validItems.length > 0 && !mutation.isPending && !hasStockIssues;
+    validItems.length > 0 &&
+    !mutation.isPending &&
+    (!hasStockIssues || canOverrideStock);
 
   const submitEdit = async () => {
     setErrorMsg("");
@@ -5607,6 +5659,7 @@ function EditOrderItemsModal({
                             keptAllocations={item.kept_allocations}
                             plan={item.batch_plan}
                             savedPlan={item.saved_plan}
+                            allowExpired={canOverrideStock}
                             onSplitRequest={() => {
                               if (!(Number(item.quantity) > 0)) {
                                 toast.error("Първо въведете количество.");
@@ -5775,6 +5828,12 @@ function EditOrderItemsModal({
             <div className="font-medium">
               ⚠ Има артикули над наличността. Избери действие за всеки ред:
             </div>
+            {canOverrideStock && (
+              <div className="text-xs">
+                Имате право да запазите и така — при изпълнение наличността ще
+                влезе в минус.
+              </div>
+            )}
             <ul className="space-y-1.5">
               {oversellNormalItems.map((i) => {
                 const available = getEffectiveStock(i);
@@ -5896,6 +5955,7 @@ function EditOrderItemsModal({
             quantity={Number(splitRow.quantity) || 0}
             initialPlan={splitRowInitialPlan(splitRow)}
             keptAllocations={splitRow.kept_allocations}
+            allowStockOverride={canOverrideStock}
             onSave={(plan) => {
               setItems((prev) =>
                 prev.map((row) =>
@@ -5931,6 +5991,8 @@ function CreateOrderModal({
   const qc = useQueryClient();
   const { hasPermission } = usePermissions();
   const canOverrideBelowCost = hasPermission(PERMISSIONS.BELOW_COST_OVERRIDE);
+  // Право да продължи въпреки склада (недостиг, изтекъл срок).
+  const canOverrideStock = hasPermission(PERMISSIONS.ORDERS_STOCK_OVERRIDE);
   const canCreateReplacement = hasPermission(PERMISSIONS.REPLACEMENT_CREATE);
   const today = isoDateToday();
   const anonymousIndividual = partners.find(
@@ -6683,55 +6745,59 @@ function CreateOrderModal({
       // GQF: block lines that point at an expired batch (back-order lines
       // with no batch are allowed — backend handles those).
       assertQuantityDraftsValid(items);
-      assertNoExpiredBatches(validItems);
+      // С право да продължи въпреки склада срокът се пита от сървъра.
+      if (!canOverrideStock) assertNoExpiredBatches(validItems);
       assertBatchPlansMatch(validItems);
 
-      const res = await api.post("/orders", {
-        partner_id: Number(form.partner_id),
-        delivery_date: form.delivery_date || undefined,
-        notes: form.notes || undefined,
-        request_number: form.request_number.trim() || undefined,
-        partner_object_id: form.partner_object_id
-          ? Number(form.partner_object_id)
-          : undefined,
-        object_name: form.object_name.trim() || undefined,
-        object_code: form.object_code.trim() || undefined,
-        econt_receiver_name: form.econt_receiver_name.trim() || undefined,
-        econt_receiver_phone: form.econt_receiver_phone.trim() || undefined,
-        econt_delivery_type: form.econt_city
-          ? form.econt_delivery_type
-          : undefined,
-        econt_city: form.econt_city.trim() || undefined,
-        econt_office_code: form.econt_office_code || undefined,
-        econt_office_name: form.econt_office_name || undefined,
-        econt_street: form.econt_street.trim() || undefined,
-        econt_street_num: form.econt_street_num.trim() || undefined,
-        econt_weight: form.econt_weight || undefined,
-        econt_cod_amount:
-          form.econt_has_cod && form.econt_cod_amount
-            ? form.econt_cod_amount
+      const sendOrder = (flag: { allow_stock_override?: true }) =>
+        api.post("/orders", {
+          ...flag,
+          partner_id: Number(form.partner_id),
+          delivery_date: form.delivery_date || undefined,
+          notes: form.notes || undefined,
+          request_number: form.request_number.trim() || undefined,
+          partner_object_id: form.partner_object_id
+            ? Number(form.partner_object_id)
             : undefined,
-        econt_payer: form.econt_city ? form.econt_payer : undefined,
-        econt_shipment_description:
-          form.econt_shipment_description?.trim() || undefined,
-        econt_shipment_date: form.econt_shipment_date || undefined,
-        // Флаг "за Еконт доставка" — касиерски чекбокс. true → поръчката
-        // влиза в опашката на Еконт работника (/econt) веднага при създаване.
-        econt_requested: form.econt_requested || undefined,
-        items: validItems.map((i) => ({
-          product_id: Number(i.product_id),
-          quantity: Number(i.quantity),
-          unit_price: Number(i.unit_price) || undefined,
-          discount_percent: Number(i.discount_percent) || 0,
-          // Batch F1 — tunnel through the line state set by split-on-oversell
-          line_status: (i as any).line_status ?? undefined,
-          // GQF: избрана партида или разпределение по партиди; без избор
-          // backend изписва по FEFO при изпълнение.
-          ...lineBatchPayload(i),
-        })),
-        allow_below_cost: vars.allow_below_cost === true ? true : undefined,
-        status: vars.asQuoted ? "quoted" : undefined,
-      });
+          object_name: form.object_name.trim() || undefined,
+          object_code: form.object_code.trim() || undefined,
+          econt_receiver_name: form.econt_receiver_name.trim() || undefined,
+          econt_receiver_phone: form.econt_receiver_phone.trim() || undefined,
+          econt_delivery_type: form.econt_city
+            ? form.econt_delivery_type
+            : undefined,
+          econt_city: form.econt_city.trim() || undefined,
+          econt_office_code: form.econt_office_code || undefined,
+          econt_office_name: form.econt_office_name || undefined,
+          econt_street: form.econt_street.trim() || undefined,
+          econt_street_num: form.econt_street_num.trim() || undefined,
+          econt_weight: form.econt_weight || undefined,
+          econt_cod_amount:
+            form.econt_has_cod && form.econt_cod_amount
+              ? form.econt_cod_amount
+              : undefined,
+          econt_payer: form.econt_city ? form.econt_payer : undefined,
+          econt_shipment_description:
+            form.econt_shipment_description?.trim() || undefined,
+          econt_shipment_date: form.econt_shipment_date || undefined,
+          // Флаг "за Еконт доставка" — касиерски чекбокс. true → поръчката
+          // влиза в опашката на Еконт работника (/econt) веднага при създаване.
+          econt_requested: form.econt_requested || undefined,
+          items: validItems.map((i) => ({
+            product_id: Number(i.product_id),
+            quantity: Number(i.quantity),
+            unit_price: Number(i.unit_price) || undefined,
+            discount_percent: Number(i.discount_percent) || 0,
+            // Batch F1 — tunnel through the line state set by split-on-oversell
+            line_status: (i as any).line_status ?? undefined,
+            // GQF: избрана партида или разпределение по партиди; без избор
+            // backend изписва по FEFO при изпълнение.
+            ...lineBatchPayload(i),
+          })),
+          allow_below_cost: vars.allow_below_cost === true ? true : undefined,
+          status: vars.asQuoted ? "quoted" : undefined,
+        });
+      const res = await withStockOverride(sendOrder, askStockOverride);
 
       // Persist any edited weights back to the product catalog so
       // future orders inherit the corrected weight automatically.
@@ -6767,6 +6833,7 @@ function CreateOrderModal({
           `Поръчката е записана, но ${oversell.length} ${oversell.length === 1 ? "артикул ще влезе" : "артикула ще влязат"} в минус при изпълнение.`,
         );
       }
+      toastStockOverride(res.data);
       const createdOrder: Order | undefined =
         res?.data?.data ?? res?.data ?? undefined;
       // If saved as quoted, fetch the offer PDF as a blob (auth headers are
@@ -7719,6 +7786,7 @@ function CreateOrderModal({
                                   productId={item.product_id}
                                   value={item.batch_id}
                                   plan={item.batch_plan}
+                                  allowExpired={canOverrideStock}
                                   onSplitRequest={() => {
                                     if (!(Number(item.quantity) > 0)) {
                                       toast.error("Първо въведете количество.");
@@ -8174,6 +8242,7 @@ function CreateOrderModal({
               unit={splitRow.unit}
               quantity={Number(splitRow.quantity) || 0}
               initialPlan={splitRowInitialPlan(splitRow)}
+              allowStockOverride={canOverrideStock}
               onSave={(plan) => {
                 setItems((prev) =>
                   prev.map((row) =>
@@ -8593,10 +8662,15 @@ export function Orders() {
   const hasActiveTextFilters = Object.values(filters).some((v) => v.trim());
 
   const fulfillMutation = useMutation({
-    mutationFn: (id: number) => api.post(`/orders/${id}/fulfill`),
-    onSuccess: () => {
+    mutationFn: (id: number) =>
+      withStockOverride(
+        (flag) => api.post(`/orders/${id}/fulfill`, flag),
+        askStockOverride,
+      ),
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
       toast.success("Поръчката е изпълнена");
+      toastStockOverride(res.data);
     },
     onError: (err: any) => {
       toast.error(

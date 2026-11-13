@@ -19,6 +19,7 @@ export const PERMISSIONS = {
   SETTINGS_MANAGE: "settings.manage",
   BELOW_COST_OVERRIDE: "orders.below_cost_override",
   ORDERS_EDIT_AFTER_FULFILL: "orders.edit_after_fulfill",
+  ORDERS_STOCK_OVERRIDE: "orders.stock_override",
   PURCHASE_ORDERS_MANAGE: "purchase_orders.manage",
 } as const;
 

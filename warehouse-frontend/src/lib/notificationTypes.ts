@@ -16,6 +16,8 @@ export const NOTIFICATION_GROUPS: Record<string, string> = {
   low_stock: "Склад",
   expiring: "Склад",
   stock_in: "Склад",
+  // Администратор е продължил въпреки недостиг или изтекъл срок.
+  stock_override: "Склад",
   // Общи – fallback (no entry needed)
 };
 

@@ -556,3 +556,181 @@ describe("търговски документ преди изпълнение", 
     expect(mockTx).not.toHaveBeenCalled();
   });
 });
+
+// „Дай им свобода“ (magic, 13.11.2026): администраторът не се спира от
+// наличност и срок. Без изрично „да“ сървърът отказва, но му предлага да
+// продължи (can_override_stock); с allow_stock_override изписва — избраната
+// партида може да влезе в минус, а недостигът при „Автоматично“ отива в
+// минус срещу откриващата партида, както при платените невзети.
+describe("администраторът продължава въпреки склада", () => {
+  let app: FastifyInstance;
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockTx.mockReset();
+  });
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  function wire(w: ReturnType<typeof world>) {
+    mockQuery.mockImplementation(w.handler as any);
+    mockTx.mockImplementation(async (cb: any) => cb({ query: w.handler }));
+  }
+
+  const storedLine = (overrides: Record<string, unknown> = {}) => ({
+    id: 3001,
+    order_id: 501,
+    product_id: PRODUCT,
+    quantity: "5.000",
+    line_status: "normal",
+    is_returning: false,
+    batch_id: OLDER,
+    batch_plan: [{ batch_id: OLDER, quantity: 5 }],
+    name_bg_snapshot: "Портокалопита",
+    ...overrides,
+  });
+
+  const twoLinesFromOlder = {
+    partner_id: 1,
+    items: [
+      { product_id: PRODUCT, quantity: 2, unit_price: 6.317, batch_id: OLDER },
+      { product_id: PRODUCT, quantity: 2, unit_price: 6.317, batch_id: OLDER },
+    ],
+  };
+
+  it("нова поръчка над наличното → отказ с предложение да продължи", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders",
+      payload: twoLinesFromOlder,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().can_override_stock).toBe(true);
+    expect(res.json().error).toContain("налични 2.8, избрани 4");
+    expect(w.insertedLines).toHaveLength(0);
+  });
+
+  it("нова поръчка с изрично „да“ → създава се", async () => {
+    const w = world();
+    wire(w);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders",
+      payload: { ...twoLinesFromOlder, allow_stock_override: true },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(w.insertedLines).toHaveLength(2);
+    expect(res.json().stock_override_notes[0]).toContain(
+      "налични 2.8, избрани 4",
+    );
+  });
+
+  it("изпълнение: избраната партида не стига → отказ с предложение", async () => {
+    const w = world();
+    w.setStoredLines([storedLine()]);
+    wire(w);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/501/fulfill",
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().can_override_stock).toBe(true);
+    expect(res.json().error).toContain("налични 2.8, избрани 5");
+    expect(w.deducted).toHaveLength(0);
+  });
+
+  it("изпълнение с изрично „да“ → изписва избраната партида в минус", async () => {
+    const w = world();
+    w.setStoredLines([storedLine()]);
+    wire(w);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/501/fulfill",
+      payload: { allow_stock_override: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(w.deducted.map((d) => [d.batch_id, d.quantity])).toEqual([
+      [OLDER, 5],
+    ]);
+    expect(w.stock.get(OLDER)).toBeCloseTo(-2.2, 6);
+    expect(res.json().stock_override_notes[0]).toContain(
+      "налични 2.8, избрани 5",
+    );
+    expect(fefoCalled(w.handler)).toBe(false);
+  });
+
+  it("изпълнение от изтекла партида: отказ → с „да“ се изписва", async () => {
+    const expiredLine = storedLine({
+      quantity: "2.000",
+      batch_id: EXPIRED,
+      batch_plan: [{ batch_id: EXPIRED, quantity: 2 }],
+    });
+    const w = world();
+    w.setStoredLines([expiredLine]);
+    wire(w);
+    app = await buildApp();
+    const refused = await app.inject({
+      method: "POST",
+      url: "/orders/501/fulfill",
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json().can_override_stock).toBe(true);
+    expect(refused.json().error).toContain("изтекъл срок");
+
+    const forced = await app.inject({
+      method: "POST",
+      url: "/orders/501/fulfill",
+      payload: { allow_stock_override: true },
+    });
+    expect(forced.statusCode).toBe(200);
+    expect(w.deducted.map((d) => [d.batch_id, d.quantity])).toEqual([
+      [EXPIRED, 2],
+    ]);
+    expect(forced.json().stock_override_notes[0]).toContain("изтекъл срок");
+  });
+
+  it("„Автоматично“ без наличност: отказ → с „да“ недостигът отива в минус", async () => {
+    const autoLine = storedLine({ batch_id: null, batch_plan: null });
+    const w = world();
+    w.setStoredLines([autoLine]);
+    wire(w);
+    app = await buildApp();
+    const refused = await app.inject({
+      method: "POST",
+      url: "/orders/501/fulfill",
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json().can_override_stock).toBe(true);
+
+    const forced = await app.inject({
+      method: "POST",
+      url: "/orders/501/fulfill",
+      payload: { allow_stock_override: true },
+    });
+    expect(forced.statusCode).toBe(200);
+    expect(w.deducted).toHaveLength(1);
+    expect(w.deducted[0].quantity).toBe(5);
+    expect(forced.json().stock_override_notes[0]).toContain("в минус");
+  });
+
+  it("изпълнение без проблем → без бележки, и с „да“", async () => {
+    const w = world({ [OLDER]: 6 });
+    w.setStoredLines([storedLine()]);
+    wire(w);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders/501/fulfill",
+      payload: { allow_stock_override: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().stock_override_notes).toBeUndefined();
+    expect(w.stock.get(OLDER)).toBeCloseTo(1, 6);
+  });
+});
