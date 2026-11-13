@@ -55,6 +55,11 @@ import {
   type KeptBatchAllocation,
   type PlannedBatch,
 } from "@/components/BatchSelect";
+import {
+  keepsSavedPlan,
+  savedPlanOf,
+  type SavedBatchPart,
+} from "@/lib/savedBatchPlan";
 import { BatchSplitDialog } from "@/components/BatchSplitDialog";
 import { EcontShippingPicker } from "@/components/EcontShippingPicker";
 import { EcontShipmentActions } from "@/components/EcontShipmentActions";
@@ -299,6 +304,12 @@ interface OrderItemRow {
    * (5 кг с 15.12 + 5 кг с 08.12). Една партида се пази в batch_id.
    */
   batch_plan?: PlannedBatch[];
+  /**
+   * Редакция на неизпълнена поръчка: изборът на партиди, записан в
+   * поръчката (1+ партиди, с номер и срок). Менюто го показва и когато
+   * партидата е изчерпана; непипнат, не се проверява наново (№453).
+   */
+  saved_plan?: SavedBatchPart[];
 }
 
 let orderItemRowSeq = 0;
@@ -421,25 +432,7 @@ function keptBatchFields(
  * от GET /orders/:id (planned_batches). Една партида идва и в batch_id.
  */
 function plannedBatchesOf(item: unknown): PlannedBatch[] | undefined {
-  const raw = (item as { planned_batches?: unknown }).planned_batches;
-  const plan: PlannedBatch[] = Array.isArray(raw)
-    ? raw
-        .map((entry: Record<string, unknown> | null) => ({
-          batch_id: Number(entry?.batch_id),
-          quantity: Number(entry?.quantity),
-          batch_number:
-            entry?.batch_number != null ? String(entry.batch_number) : null,
-          expiry_date: entry?.expiry_date
-            ? String(entry.expiry_date).slice(0, 10)
-            : null,
-        }))
-        .filter(
-          (entry) =>
-            Number.isInteger(entry.batch_id) &&
-            entry.batch_id > 0 &&
-            entry.quantity > 0,
-        )
-    : [];
+  const plan: PlannedBatch[] = savedPlanOf(item);
   return plan.length >= 2 ? plan : undefined;
 }
 
@@ -4911,6 +4904,8 @@ function EditOrderItemsModal({
               ? String((item as any).expiry_date).slice(0, 10)
               : "",
           batch_plan: plan,
+          // Неизпълнена поръчка: записаният избор (и от една партида).
+          saved_plan: kept.keep_batches ? undefined : savedPlanOf(item),
           // Реалното изписване на реда (може да е от няколко партиди) —
           // без пипане при запис се изписва пак така.
           ...kept,
@@ -4966,6 +4961,7 @@ function EditOrderItemsModal({
                 keep_batches: false,
                 kept_allocations: undefined,
                 batch_plan: undefined,
+                saved_plan: undefined,
               }
             : item,
         ),
@@ -5126,9 +5122,12 @@ function EditOrderItemsModal({
   const mutation = useMutation({
     mutationFn: async (vars: { allow_below_cost?: boolean } = {}) => {
       // GQF: block lines pointing at an expired batch before persisting.
-      // Непипнатите редове не са нова продажба — стоката им вече е изписана.
+      // Непипнатите редове не са нова продажба — стоката им вече е изписана
+      // (изпълнена поръчка) или изборът им е записаният (неизпълнена, №453).
       assertQuantityDraftsValid(items);
-      assertNoExpiredBatches(validItems.filter((i) => !i.keep_batches));
+      assertNoExpiredBatches(
+        validItems.filter((i) => !i.keep_batches && !keepsSavedPlan(i)),
+      );
       assertBatchPlansMatch(validItems);
       const res = await api.put(`/orders/${order.id}`, {
         delivery_date: deliveryDate || undefined,
@@ -5184,6 +5183,15 @@ function EditOrderItemsModal({
         );
       } else {
         setSuccessMsg("Промените са записани.");
+      }
+      // Записаната партида вече не стига или е изтекла — записът минава,
+      // но складът трябва да я избере наново преди изпълнение.
+      const batchNotes: unknown = payload?.warnings?.batch_plan;
+      if (Array.isArray(batchNotes) && batchNotes.length > 0) {
+        toast.warning("Записано. Партидата иска нов избор преди изпълнение.", {
+          description: batchNotes.join(" "),
+          duration: 15000,
+        });
       }
 
       setTimeout(() => onClose(), 700);
@@ -5598,6 +5606,7 @@ function EditOrderItemsModal({
                             }
                             keptAllocations={item.kept_allocations}
                             plan={item.batch_plan}
+                            savedPlan={item.saved_plan}
                             onSplitRequest={() => {
                               if (!(Number(item.quantity) > 0)) {
                                 toast.error("Първо въведете количество.");

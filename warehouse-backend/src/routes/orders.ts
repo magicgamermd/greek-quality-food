@@ -106,6 +106,14 @@ function planFromItem(item: {
  * наличността в склад 1 стига — сборно за всички редове, които я взимат.
  * Нищо не се изписва: изписването е при изпълнение и там се проверява
  * наново (резервации няма). Без избрани партиди → нито една заявка.
+ *
+ * `alreadyPlanned` (редакция на неизпълнена поръчка): колко от всяка партида
+ * поръчката вече е имала избрано. До това количество нищо ново не се иска
+ * от склада, затова нито срокът, нито наличността се проверяват наново —
+ * поръчка №453 (13.11.2026): само цената беше сменена, а партидата
+ * междувременно беше изписана от друга поръчка и записът отказваше. Вместо
+ * отказ се връща бележка за склада; над досегашното количество или за
+ * друга партида проверката е пълна, както при създаване.
  */
 async function validateOrderBatchPlans(
   client: { query: (text: string, params?: any[]) => Promise<any> },
@@ -116,9 +124,10 @@ async function validateOrderBatchPlans(
     plan: BatchPlanEntry[] | null;
     allowBackorder: boolean;
   }>,
-): Promise<void> {
+  alreadyPlanned?: KeptBudget,
+): Promise<string[]> {
   const planned = lines.filter((line) => line.plan && line.plan.length > 0);
-  if (planned.length === 0) return;
+  if (planned.length === 0) return [];
 
   for (const line of planned) {
     if (!planMatchesQuantity(line.plan!, line.quantity)) {
@@ -149,9 +158,13 @@ async function validateOrderBatchPlans(
     rows.map((row: any) => [Number(row.id), row]),
   );
   const today = todayInSofia();
+  // Копие: бюджетът се изразходва ред по ред, а подаденият не се пипа.
+  const budget = alreadyPlanned ? new Map(alreadyPlanned) : undefined;
+  const notes: string[] = [];
+  const lapsed = new Set<number>();
   const demand = new Map<
     number,
-    { quantity: number; backorder: boolean; productName: string }
+    { quantity: number; fresh: number; backorder: boolean; productName: string }
   >();
 
   for (const line of planned) {
@@ -166,20 +179,37 @@ async function validateOrderBatchPlans(
       const expiry = batch.expiry_date
         ? String(batch.expiry_date).slice(0, 10)
         : null;
+      // Колко от това е над досегашното в поръчката (без бюджет — всичко).
+      const fresh = takeFromBudget(
+        budget,
+        line.productId,
+        entry.batch_id,
+        entry.quantity,
+      );
       if (isExpiredOn(expiry, today)) {
-        throw Object.assign(
-          new Error(
-            `Партида ${batchLabel(batch.batch_number)} на „${line.productName}“ е с изтекъл срок на годност (${bgDate(expiry)}). Изберете друга партида.`,
-          ),
-          { statusCode: 400 },
-        );
+        if (fresh > 0) {
+          throw Object.assign(
+            new Error(
+              `Партида ${batchLabel(batch.batch_number)} на „${line.productName}“ е с изтекъл срок на годност (${bgDate(expiry)}). Изберете друга партида.`,
+            ),
+            { statusCode: 400 },
+          );
+        }
+        if (!lapsed.has(entry.batch_id)) {
+          lapsed.add(entry.batch_id);
+          notes.push(
+            `Партида ${batchLabel(batch.batch_number)} на „${line.productName}“ е с изтекъл срок на годност (${bgDate(expiry)}). Преди изпълнение изберете друга партида.`,
+          );
+        }
       }
       const previous = demand.get(entry.batch_id) ?? {
         quantity: 0,
+        fresh: 0,
         backorder: false,
         productName: line.productName,
       };
       previous.quantity = roundQuantity(previous.quantity + entry.quantity);
+      previous.fresh = roundQuantity(previous.fresh + fresh);
       previous.backorder = previous.backorder || line.allowBackorder;
       demand.set(entry.batch_id, previous);
     }
@@ -189,18 +219,48 @@ async function validateOrderBatchPlans(
     const batch = byId.get(batchId);
     const available = parseFloat(batch.available ?? "0");
     const isOpening = batch.batch_number === "НАЧАЛНО";
-    if (!(isOpening && need.backorder) && available < need.quantity - 0.0005) {
-      const expiry = batch.expiry_date
-        ? String(batch.expiry_date).slice(0, 10)
-        : null;
-      throw Object.assign(
-        new Error(
-          `„${need.productName}“ — партида ${batchLabel(batch.batch_number)} (${bgDate(expiry)}): налични ${available}, избрани ${need.quantity}.`,
-        ),
-        { statusCode: 409 },
-      );
+    if ((isOpening && need.backorder) || available >= need.quantity - 0.0005) {
+      continue;
+    }
+    const expiry = batch.expiry_date
+      ? String(batch.expiry_date).slice(0, 10)
+      : null;
+    const shortage = `„${need.productName}“ — партида ${batchLabel(batch.batch_number)} (${bgDate(expiry)}): налични ${available}, избрани ${need.quantity}.`;
+    if (need.fresh > 0) {
+      throw Object.assign(new Error(shortage), { statusCode: 409 });
+    }
+    // Нищо ново не се иска от партидата → записът минава; за изтеклата
+    // бележката вече е дадена.
+    if (!lapsed.has(batchId)) {
+      notes.push(`${shortage} Преди изпълнение изберете партидите наново.`);
     }
   }
+  return notes;
+}
+
+/**
+ * Какво поръчката вече има избрано по партиди (order_items.batch_plan) —
+ * ключ продукт + партида. Чете се ПРЕДИ редовете да се изтрият при редакция.
+ */
+async function loadPlannedBudget(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  orderId: number | string,
+): Promise<KeptBudget> {
+  const { rows } = await client.query(
+    `SELECT product_id, batch_plan
+       FROM order_items
+      WHERE order_id = $1
+        AND batch_plan IS NOT NULL`,
+    [orderId],
+  );
+  const budget: KeptBudget = new Map();
+  for (const row of rows) {
+    for (const entry of storedPlan(row.batch_plan) ?? []) {
+      const key = budgetKey(Number(row.product_id), entry.batch_id);
+      budget.set(key, roundQuantity((budget.get(key) ?? 0) + entry.quantity));
+    }
+  }
+  return budget;
 }
 
 /** order_items.batch_plan от базата (JSONB) → проверен списък или null. */
@@ -2264,6 +2324,7 @@ export default async function orderRoutes(app: FastifyInstance) {
             // До това количество стоката е продадена и срокът ѝ не се гледа
             // при повторното изписване; над него е нова продажба (lib/batch-plan).
             let keptBudget: KeptBudget | undefined;
+            let batchPlanNotes: string[] = [];
             if (mustReconcileStock) {
               const { rows: previous } = await client.query(
                 `SELECT oi.product_id, oib.batch_id, SUM(oib.quantity) AS quantity
@@ -2282,8 +2343,10 @@ export default async function orderRoutes(app: FastifyInstance) {
               await restoreOrderItemsToInventory(client, orderId);
             } else {
               // Неизпълнена: нищо не се изписва сега — само проверка, че
-              // избраните партиди са валидни и стигат.
-              await validateOrderBatchPlans(
+              // избраните партиди са валидни и стигат. Досегашното
+              // разпределение на поръчката не се проверява наново (№453):
+              // цена, отстъпка и бележки се сменят винаги.
+              batchPlanNotes = await validateOrderBatchPlans(
                 client,
                 body.items
                   .filter(
@@ -2299,6 +2362,7 @@ export default async function orderRoutes(app: FastifyInstance) {
                     plan: planFromItem(item),
                     allowBackorder: item.line_status === "paid_not_taken",
                   })),
+                await loadPlannedBudget(client, id),
               );
             }
 
@@ -2480,13 +2544,20 @@ export default async function orderRoutes(app: FastifyInstance) {
               regenerated_invoice_id: regeneratedInvoiceId,
               regenerated_documents: mustReconcileStock,
             };
-            if (oversell_items.length > 0 || expiryWarnings.length > 0) {
+            if (
+              oversell_items.length > 0 ||
+              expiryWarnings.length > 0 ||
+              batchPlanNotes.length > 0
+            ) {
               putResponse.warnings = {
                 ...(oversell_items.length > 0
                   ? { oversell: oversell_items }
                   : {}),
                 ...(expiryWarnings.length > 0
                   ? { expiry: expiryWarnings }
+                  : {}),
+                ...(batchPlanNotes.length > 0
+                  ? { batch_plan: batchPlanNotes }
                   : {}),
               };
             }
