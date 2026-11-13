@@ -3,6 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Select } from "@/components/ui/select";
 import { displayBatchNumber, formatDate, isoDateToday } from "@/lib/utils";
+import {
+  savedPartMissingFrom,
+  type SavedBatchPart,
+} from "@/lib/savedBatchPlan";
 
 /**
  * GQF избор на партида за ред от поръчка. Greek Quality Food продава
@@ -121,6 +125,18 @@ function batchLabel(batch: AvailableBatch): string {
   return `Лот #${batch.id} · без срок · ${qty}`;
 }
 
+/** Надпис за записана партида, която вече няма наличност. */
+function exhaustedLabel(part: SavedBatchPart): string {
+  const label = batchLabel({
+    id: part.batch_id,
+    product_id: 0,
+    batch_number: part.batch_number,
+    expiry_date: part.expiry_date,
+    available: 0,
+  });
+  return `${label} · изчерпана`;
+}
+
 /**
  * Стойност на селекта за ред от редактирана поръчка, който пази досегашното
  * си разпределение по партиди (order_item_batches). Не е id на партида.
@@ -210,6 +226,12 @@ interface BatchSelectProps {
   keptAllocations?: KeptBatchAllocation[];
   /** Избраното разпределение по 2+ партиди (ако има). */
   plan?: PlannedBatch[];
+  /**
+   * Редакция на неизпълнена поръчка: записаният избор на реда. Ако избраната
+   * партида вече е изчерпана, тя пак се показва — иначе менюто изглеждаше
+   * на „Автоматично“, а редът пазеше партидата (№453).
+   */
+  savedPlan?: SavedBatchPart[];
   /** „Разпредели по партиди…“ — родителят отваря прозореца. */
   onSplitRequest?: () => void;
 }
@@ -231,12 +253,19 @@ export function BatchSelect({
   disabled,
   keptAllocations,
   plan,
+  savedPlan,
   onSplitRequest,
 }: BatchSelectProps) {
   const hasKept = !!keptAllocations && keptAllocations.length > 0;
   const hasPlan = !!plan && plan.length > 1;
   const { batches, fefoBatch, isLoading, isError } =
     useAvailableBatches(productId);
+  // Записаната партида на реда, която вече я няма сред наличните.
+  const exhaustedSaved = savedPartMissingFrom(
+    value,
+    savedPlan,
+    batches.map((batch) => Number(batch.id)),
+  );
 
   // „Автоматично“: показваме срока на партидата, която FEFO би взел, без
   // да я фиксираме. Синхронизация на производна стойност към реда — не е
@@ -274,7 +303,7 @@ export function BatchSelect({
     return <span className="text-xs text-red-500">грешка при зареждане</span>;
   }
 
-  if (batches.length === 0 && !hasKept && !hasPlan) {
+  if (batches.length === 0 && !hasKept && !hasPlan && !exhaustedSaved) {
     // No stock → leave batch_id empty; backend decides (back-order for
     // paid lines, or a clean 400). Do NOT hard-block here.
     return <span className="text-xs text-gray-400">няма налична партида</span>;
@@ -293,7 +322,9 @@ export function BatchSelect({
       ? keptAllocationsLabel(keptAllocations)
       : selectedBatch
         ? batchLabel(selectedBatch)
-        : autoLabel;
+        : exhaustedSaved
+          ? exhaustedLabel(exhaustedSaved)
+          : autoLabel;
 
   return (
     <Select
@@ -331,6 +362,11 @@ export function BatchSelect({
         </option>
       )}
       <option value="">{autoLabel}</option>
+      {exhaustedSaved && (
+        <option value={String(exhaustedSaved.batch_id)}>
+          {exhaustedLabel(exhaustedSaved)}
+        </option>
+      )}
       {batches.map((batch) => {
         const expired = isBatchExpired(batch.expiry_date);
         return (
